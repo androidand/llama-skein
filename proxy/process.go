@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -122,6 +124,22 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 			// prevent nginx from buffering streaming responses (e.g., SSE)
 			if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 				resp.Header.Set("X-Accel-Buffering", "no")
+			}
+			// Remap llama.cpp context-overflow errors to HTTP 413 so callers
+			// (skein, opencode) can detect overflow without body string matching.
+			if resp.StatusCode == http.StatusBadRequest {
+				body, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(body)) // always restore
+				if err == nil {
+					var errBody struct {
+						Error struct{ Type string `json:"type"` } `json:"error"`
+					}
+					if json.Unmarshal(body, &errBody) == nil &&
+						errBody.Error.Type == "exceed_context_size_error" {
+						resp.StatusCode = http.StatusRequestEntityTooLarge // 413
+					}
+				}
 			}
 			return nil
 		}
