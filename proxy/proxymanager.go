@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,12 +21,23 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/perf"
+	"github.com/mostlygeek/llama-swap/internal/thermal"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 const (
 	PROFILE_SPLIT_CHAR = ":"
+)
+
+var (
+	llama_cpp_build    string
+	llama_cpp_git      string
+	llama_cpp_date     string
+	build_features     []string
+	rocm_version       string
+	is_metal           bool
+	platform           string
 )
 
 type proxyCtxKey string
@@ -93,6 +105,11 @@ type ProxyManager struct {
 	buildDate string
 	commit    string
 	version   string
+	// llama.cpp build metadata (injected via ldflags)
+	llamaCppBuild  string
+	llamaCppGit    string
+	llamaCppDate   string
+	buildFeatures  string
 
 	// peer proxy see: #296, #433
 	peerProxy *PeerProxy
@@ -104,6 +121,9 @@ type ProxyManager struct {
 
 	// mDNS — set via SetListenAddr before calling RegisterMDNS
 	listenAddr string
+
+	// silentMode controls GPU power capping to reduce fan noise.
+	silentMode *thermal.Manager
 }
 
 // SetConfigFile stores the path to the on-disk config YAML so that the
@@ -205,6 +225,8 @@ func New(proxyConfig config.Config) *ProxyManager {
 		peerProxy = nil
 	}
 
+	silentMgr := thermal.NewManager()
+
 	pm := &ProxyManager{
 		config:    proxyConfig,
 		ginEngine: gin.New(),
@@ -226,7 +248,24 @@ func New(proxyConfig config.Config) *ProxyManager {
 		commit:    "abcd1234",
 		version:   "0",
 
-		peerProxy: peerProxy,
+		peerProxy:  peerProxy,
+		silentMode: silentMgr,
+	}
+
+	// Start scheduled silent mode if configured.
+	if sched := proxyConfig.SilentMode.Schedule; sched != "" {
+		pct := proxyConfig.SilentMode.PowerLimitPct
+		if pct == 0 {
+			pct = thermal.DefaultSilentProfile.PowerLimitPct
+		}
+		tmp := proxyConfig.SilentMode.TempTargetCelsius
+		if tmp == 0 {
+			tmp = thermal.DefaultSilentProfile.TempTargetCelsius
+		}
+		silentMgr.StartSchedule(shutdownCtx, sched, thermal.Profile{
+			PowerLimitPct:     pct,
+			TempTargetCelsius: tmp,
+		})
 	}
 
 	// create either matrix or process groups (mutually exclusive)
@@ -471,14 +510,26 @@ func (pm *ProxyManager) setupGinEngine() {
 	})
 
 	pm.ginEngine.GET("/favicon.ico", func(c *gin.Context) {
-		if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
-			c.Data(http.StatusOK, "image/x-icon", data)
-		} else {
-			c.String(http.StatusInternalServerError, err.Error())
-		}
-	})
+			if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
+				c.Data(http.StatusOK, "image/x-icon", data)
+			} else {
+				c.String(http.StatusInternalServerError, err.Error())
+			}
+		})
 
-	reactFS, err := GetReactFS()
+		pm.ginEngine.GET("/api/version", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"llama_cpp_build":    llama_cpp_build,
+				"llama_cpp_git":      llama_cpp_git,
+				"llama_cpp_date":     llama_cpp_date,
+				"build_features":     build_features,
+				"rocm_version":       rocm_version,
+				"metal":              is_metal,
+				"platform":           platform,
+			})
+		})
+
+		reactFS, err := GetReactFS()
 	if err != nil {
 		pm.proxyLogger.Errorf("Failed to load React filesystem: %v", err)
 	} else {
@@ -1331,6 +1382,48 @@ func (pm *ProxyManager) SetVersion(buildDate string, commit string, version stri
 	pm.buildDate = buildDate
 	pm.commit = commit
 	pm.version = version
+}
+
+// SetLlamaCppBuildInfo sets the llama.cpp build metadata injected via ldflags.
+func SetLlamaCppBuildInfo(build, git, date, features string) {
+	llama_cpp_build = build
+	llama_cpp_git = git
+	llama_cpp_date = date
+	build_features = strings.Split(features, ",")
+	rocm_version = getROCMVersion()
+	is_metal = detectMetal()
+	platform = getPlatform()
+}
+
+func getROCMVersion() string {
+	cmd := exec.Command("rocm-smi", "--showversion")
+	output, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func detectMetal() bool {
+	cmd := exec.Command("sysctl", "-n", "hw.optional.ADV_64BIT_ATOMICS")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) == "1"
+}
+
+func getPlatform() string {
+	if detectMetal() {
+		return "darwin/arm64"
+	}
+	cmd := exec.Command("uname", "-m")
+	output, err := cmd.Output()
+	if err != nil {
+		return "linux/amd64"
+	}
+	arch := strings.TrimSpace(string(output))
+	return fmt.Sprintf("linux/%s", arch)
 }
 
 func (pm *ProxyManager) SetPerfMonitor(m *perf.Monitor) {
