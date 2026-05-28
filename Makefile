@@ -1,5 +1,5 @@
 # Define variables for the application
-APP_NAME = llama-swap
+APP_NAME = llama-skein
 BUILD_DIR = build
 
 # Get the current Git hash
@@ -141,6 +141,7 @@ LLAMA_CPP_URL  ?= https://github.com/ggerganov/llama.cpp.git
 # Proxmox: RX 7800 XT (gfx1030, RDNA 3, Zen 4)
 # Note: Research shows RX 7800 XT (gfx1030, RDNA 3) benefits most from HIP tuning.
 # This recipe targets rdna3 (RX 7000 series) as the reference build; adjust for your GPU.
+build-rocm-proxmox:
 	@echo "Building llama.cpp for proxmox (RX 7800 XT, gfx1030, RDNA 3)..."
 	@mkdir -p $(LLAMA_CPP_DIR)
 	@if [ ! -d "$(LLAMA_CPP_DIR)/.git" ]; then \
