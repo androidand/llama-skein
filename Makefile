@@ -199,7 +199,28 @@ build-rocm-rocky-mtp:
 	@echo "Output: $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server"
 	@echo "Install: cp $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server ~/.local/lib/llama-cpp/llama-server"
 
+# --- Proxmox silent mode (personal, direct SSH) ---
+# Requires: ssh key access to root@192.168.1.42
+# GPU: AMD Radeon AI PRO R9700 — default TDP 300W, min 210W, silent = 210W (70%)
+PROXMOX_SSH         ?= root@192.168.1.42
+PROXMOX_POWER1_CAP  ?= /sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/0000:02:00.0/0000:03:00.0/hwmon/hwmon5/power1_cap
+SILENT_WATTS        ?= 210
+
+silent-on:
+	@echo "Proxmox GPU: capping to $(SILENT_WATTS)W..."
+	@ssh $(PROXMOX_SSH) "echo $$(( $(SILENT_WATTS) * 1000000 )) > $(PROXMOX_POWER1_CAP)"
+	@ssh $(PROXMOX_SSH) "echo -n 'Power cap now: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP)"
+
+silent-off:
+	@echo "Proxmox GPU: restoring default power cap..."
+	@ssh $(PROXMOX_SSH) "cat $(PROXMOX_POWER1_CAP)_default > $(PROXMOX_POWER1_CAP)"
+	@ssh $(PROXMOX_SSH) "echo -n 'Power cap now: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP)"
+
+silent-status:
+	@ssh $(PROXMOX_SSH) "echo -n 'Cap: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP) && echo -n 'Default: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP)_default && echo -n 'Temp: ' && awk '{print \$$1/1000 \" C\"}' $$(dirname $(PROXMOX_POWER1_CAP))/temp1_input"
+
 # Phony targets
 .PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
 .PHONE: linux linux-arm64 linux-amd64
 .PHONY: build-rocm-proxmox build-rocm-rocky build-rocm-rocky-mtp
+.PHONY: silent-on silent-off silent-status
