@@ -138,19 +138,18 @@ test-ui:
 LLAMA_CPP_DIR  ?= $(BUILD_DIR)/llama-cpp
 LLAMA_CPP_URL  ?= https://github.com/ggerganov/llama.cpp.git
 
-# Proxmox: RX 7800 XT (gfx1030, RDNA 3, Zen 4)
-# Note: Research shows RX 7800 XT (gfx1030, RDNA 3) benefits most from HIP tuning.
-# This recipe targets rdna3 (RX 7000 series) as the reference build; adjust for your GPU.
+# Proxmox: AMD Radeon AI PRO R9700 (gfx1201, RDNA 4, ~32GB VRAM, Zen 4)
+# Note: RDNA 4 (gfx1201) — do NOT use GGML_HIP_ROCWMMA_FATTN (RDNA 3 only).
+# Flash attention on RDNA 4 is handled natively via GGML_HIP_FATTN.
 build-rocm-proxmox:
-	@echo "Building llama.cpp for proxmox (RX 7800 XT, gfx1030, RDNA 3)..."
+	@echo "Building llama.cpp for proxmox (AMD Radeon AI PRO R9700, gfx1201, RDNA 4)..."
 	@mkdir -p $(LLAMA_CPP_DIR)
 	@if [ ! -d "$(LLAMA_CPP_DIR)/.git" ]; then \
 		git clone --depth 1 $(LLAMA_CPP_URL) $(LLAMA_CPP_DIR); \
 	fi
 	@cd $(LLAMA_CPP_DIR) && cmake -S . -B build \
 		-DGGML_HIP=ON \
-		-DAMDGPU_TARGETS="amdgcn:rnacdna" \
-		-DGGML_HIP_ROCWMMA_FATTN=ON \
+		-DAMDGPU_TARGETS="gfx1201" \
 		-DCMAKE_C_FLAGS="-march=znver4" \
 		-DCMAKE_BUILD_TYPE=Release
 	@cd $(LLAMA_CPP_DIR) && cmake --build build --config Release -- -j $$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8)
