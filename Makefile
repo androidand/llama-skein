@@ -136,7 +136,8 @@ test-ui:
 # Build recipes validated in: docs/benchmarks/proxmox-rocm.md (+13.7% gain achieved)
 
 LLAMA_CPP_DIR  ?= $(BUILD_DIR)/llama-cpp
-LLAMA_CPP_URL  ?= https://github.com/ggerganov/llama.cpp.git
+LLAMA_CPP_URL     ?= https://github.com/ggerganov/llama.cpp.git
+LLAMA_CPP_MTP_URL ?= https://github.com/am17an/llama.cpp.git
 
 # Proxmox: AMD Radeon AI PRO R9700 (gfx1201, RDNA 4, ~32GB VRAM, Zen 4)
 # Note: RDNA 4 (gfx1201) — do NOT use GGML_HIP_ROCWMMA_FATTN (RDNA 3 only).
@@ -176,7 +177,29 @@ build-rocm-rocky:
 	@echo "Verify: $(LLAMA_CPP_DIR)/build/bin/llama-server --version"
 	@echo "Install: cp $(LLAMA_CPP_DIR)/build/bin/llama-server ~/.local/bin/llama-server"
 
+# Rocky MTP: Radeon RX 7900 XTX (gfx1100, RDNA 3, ~24GB VRAM, Zen 3)
+# Uses am17an/llama.cpp fork for multi-token prediction.
+# Flags: HIP graphs + flash attention + ROCWMMA (all valid for RDNA 3).
+# No GGML_HIP_MMQ_MFMA — that is RDNA 4 only.
+build-rocm-rocky-mtp:
+	@echo "Building MTP llama.cpp for rocky (RX 7900 XTX, gfx1100, RDNA 3)..."
+	@mkdir -p $(BUILD_DIR)/llama-cpp-mtp
+	@if [ ! -d "$(BUILD_DIR)/llama-cpp-mtp/.git" ]; then \
+		git clone --depth 1 $(LLAMA_CPP_MTP_URL) $(BUILD_DIR)/llama-cpp-mtp; \
+	fi
+	@cd $(BUILD_DIR)/llama-cpp-mtp && cmake -S . -B build \
+		-DGGML_HIP=ON \
+		-DAMDGPU_TARGETS="gfx1100" \
+		-DGGML_HIP_GRAPHS=ON \
+		-DGGML_CUDA_FA=ON \
+		-DGGML_HIP_ROCWMMA_FATTN=ON \
+		-DCMAKE_C_FLAGS="-march=znver3" \
+		-DCMAKE_BUILD_TYPE=Release
+	@cd $(BUILD_DIR)/llama-cpp-mtp && cmake --build build --config Release -- -j $$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8)
+	@echo "Output: $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server"
+	@echo "Install: cp $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server ~/.local/lib/llama-cpp/llama-server"
+
 # Phony targets
 .PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
 .PHONE: linux linux-arm64 linux-amd64
-.PHONY: build-rocm-proxmox build-rocm-rocky
+.PHONY: build-rocm-proxmox build-rocm-rocky build-rocm-rocky-mtp
