@@ -199,30 +199,7 @@ build-rocm-rocky-mtp:
 	@echo "Output: $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server"
 	@echo "Install: cp $(BUILD_DIR)/llama-cpp-mtp/build/bin/llama-server ~/.local/lib/llama-cpp/llama-server"
 
-# --- Proxmox silent mode (personal, direct SSH) ---
-# Requires: ssh key access to root@192.168.1.42
-# GPU: AMD Radeon AI PRO R9700 — default TDP 300W, min 210W, silent = 210W + power_saving DPM profile
-# DPM profile 2 (POWER_SAVING) downclock aggressively at low load; 210W cap is driver minimum.
-PROXMOX_SSH         ?= root@192.168.1.42
-PROXMOX_DRM         ?= /sys/class/drm/card0/device
-PROXMOX_POWER1_CAP  ?= /sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/0000:02:00.0/0000:03:00.0/hwmon/hwmon5/power1_cap
-SILENT_WATTS        ?= 210
-
-silent-on:
-	@echo "Proxmox GPU: capping to $(SILENT_WATTS)W + POWER_SAVING profile..."
-	@ssh $(PROXMOX_SSH) "echo $$(( $(SILENT_WATTS) * 1000000 )) > $(PROXMOX_POWER1_CAP) && echo 2 > $(PROXMOX_DRM)/pp_power_profile_mode"
-	@ssh $(PROXMOX_SSH) "echo -n 'Power cap: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP) && echo -n 'DPM profile: ' && awk '/\*/{print \$$1, \$$2}' $(PROXMOX_DRM)/pp_power_profile_mode"
-
-silent-off:
-	@echo "Proxmox GPU: restoring defaults..."
-	@ssh $(PROXMOX_SSH) "cat $(PROXMOX_POWER1_CAP)_default > $(PROXMOX_POWER1_CAP) && echo 0 > $(PROXMOX_DRM)/pp_power_profile_mode"
-	@ssh $(PROXMOX_SSH) "echo -n 'Power cap: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP) && echo -n 'DPM profile: ' && awk '/\*/{print \$$1, \$$2}' $(PROXMOX_DRM)/pp_power_profile_mode"
-
-silent-status:
-	@ssh $(PROXMOX_SSH) "echo -n 'Cap: ' && awk '{print \$$1/1000000 \" W\"}' $(PROXMOX_POWER1_CAP) && echo -n 'Avg: ' && awk '{print \$$1/1000000 \" W\"}' $$(dirname $(PROXMOX_POWER1_CAP))/power1_average && echo -n 'Temp: ' && awk '{print \$$1/1000 \" C\"}' $$(dirname $(PROXMOX_POWER1_CAP))/temp1_input && echo -n 'Fan: ' && cat $$(dirname $(PROXMOX_POWER1_CAP))/fan1_input && echo ' RPM' && echo -n 'DPM: ' && awk '/\*/{print \$$1, \$$2}' $(PROXMOX_DRM)/pp_power_profile_mode"
-
 # Phony targets
 .PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
 .PHONE: linux linux-arm64 linux-amd64
 .PHONY: build-rocm-proxmox build-rocm-rocky build-rocm-rocky-mtp
-.PHONY: silent-on silent-off silent-status
