@@ -166,6 +166,24 @@ type Config struct {
 	// directory where model files are stored; used by the pull and storage APIs.
 	// If unset, llama-swap tries to infer it from the first model with a --model flag.
 	ModelsDir string `yaml:"modelsDir"`
+
+	// silent mode — reduce GPU power to lower fan noise on blower coolers.
+	SilentMode SilentModeConfig `yaml:"silentMode"`
+}
+
+// SilentModeConfig controls automatic silent mode scheduling.
+type SilentModeConfig struct {
+	// Schedule activates silent mode on a time window, e.g. "22:00-08:00".
+	// Leave empty to use manual-only control via the API.
+	Schedule string `yaml:"schedule"`
+
+	// PowerLimitPct is the percentage of default TDP to cap at (1–100).
+	// Defaults to 65 if unset.
+	PowerLimitPct int `yaml:"powerLimitPct"`
+
+	// TempTargetCelsius sets the GPU temperature target while in silent mode.
+	// Defaults to 82°C if unset. Set to 0 to skip.
+	TempTargetCelsius int `yaml:"tempTargetCelsius"`
 }
 
 func (c *Config) RealModelName(search string) (string, bool) {
