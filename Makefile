@@ -157,20 +157,19 @@ build-rocm-proxmox:
 	@echo "Verify: $(LLAMA_CPP_DIR)/build/bin/llama-server --version"
 	@echo "Install: cp $(LLAMA_CPP_DIR)/build/bin/llama-server /usr/local/bin/llama-server"
 
-# Rocky: RX 6700 XT (gfx1030, RDNA 1, Zen 2)
-# Note: Research shows RX 6700 XT (gfx1030, RDNA 1) benefits less from HIP tuning.
-# This recipe targets gfx803 (RDNA 1) as the reference build; adjust for your GPU.
+# Rocky: Radeon RX 7900 XTX (gfx1100, RDNA 3, ~24GB VRAM, Zen 3)
+# Note: RDNA 3 (gfx1100) supports ROCWMMA flash attention — keep GGML_HIP_ROCWMMA_FATTN.
 build-rocm-rocky:
-	@echo "Building llama.cpp for rocky (RX 6700 XT, gfx1030, RDNA 1)..."
+	@echo "Building llama.cpp for rocky (Radeon RX 7900 XTX, gfx1100, RDNA 3)..."
 	@mkdir -p $(LLAMA_CPP_DIR)
 	@if [ ! -d "$(LLAMA_CPP_DIR)/.git" ]; then \
 		git clone --depth 1 $(LLAMA_CPP_URL) $(LLAMA_CPP_DIR); \
 	fi
 	@cd $(LLAMA_CPP_DIR) && cmake -S . -B build \
 		-DGGML_HIP=ON \
-		-DAMDGPU_TARGETS="amdgcn:gfx803" \
+		-DAMDGPU_TARGETS="gfx1100" \
 		-DGGML_HIP_ROCWMMA_FATTN=ON \
-		-DCMAKE_C_FLAGS="-march=znver2" \
+		-DCMAKE_C_FLAGS="-march=znver3" \
 		-DCMAKE_BUILD_TYPE=Release
 	@cd $(LLAMA_CPP_DIR) && cmake --build build --config Release -- -j $$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8)
 	@echo "Output: $(LLAMA_CPP_DIR)/build/bin/llama-server"
