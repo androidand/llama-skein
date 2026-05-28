@@ -517,18 +517,6 @@ func (pm *ProxyManager) setupGinEngine() {
 			}
 		})
 
-		pm.ginEngine.GET("/api/version", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{
-				"llama_cpp_build":    llama_cpp_build,
-				"llama_cpp_git":      llama_cpp_git,
-				"llama_cpp_date":     llama_cpp_date,
-				"build_features":     build_features,
-				"rocm_version":       rocm_version,
-				"metal":              is_metal,
-				"platform":           platform,
-			})
-		})
-
 		reactFS, err := GetReactFS()
 	if err != nil {
 		pm.proxyLogger.Errorf("Failed to load React filesystem: %v", err)
