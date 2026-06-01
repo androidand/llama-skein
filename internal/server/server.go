@@ -15,6 +15,7 @@ import (
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/internal/thermal"
 )
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
@@ -27,10 +28,11 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf     *perf.Monitor
-	inflight *inflightCounter
-	metrics  *metricsMonitor
-	build    BuildInfo
+	perf       *perf.Monitor
+	inflight   *inflightCounter
+	metrics    *metricsMonitor
+	silentMode *thermal.Manager
+	build      BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -133,6 +135,8 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		return nil, fmt.Errorf("creating peer router: %w", err)
 	}
 
+	silentMgr := thermal.NewManager()
+
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:         cfg,
@@ -142,12 +146,29 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		perf:        perfMon,
 		inflight:    &inflightCounter{},
 		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		silentMode:  silentMgr,
 		build:       build,
 		local:       local,
 		peer:        peer,
 		shutdownCtx: shutdownCtx,
 		shutdownFn:  shutdownFn,
 	}
+
+	if sched := cfg.SilentMode.Schedule; sched != "" {
+		pct := cfg.SilentMode.PowerLimitPct
+		if pct == 0 {
+			pct = thermal.DefaultSilentProfile.PowerLimitPct
+		}
+		tmp := cfg.SilentMode.TempTargetCelsius
+		if tmp == 0 {
+			tmp = thermal.DefaultSilentProfile.TempTargetCelsius
+		}
+		silentMgr.StartSchedule(shutdownCtx, sched, thermal.Profile{
+			PowerLimitPct:     pct,
+			TempTargetCelsius: tmp,
+		})
+	}
+
 	s.routes()
 	s.startPreload()
 	return s, nil
@@ -269,6 +290,9 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/resources", apiChain.ThenFunc(s.handleAPIResources))
 	mux.Handle("POST /api/upgrade", apiChain.ThenFunc(s.handleAPIUpgrade))
 	mux.Handle("GET /api/skein/capabilities", apiChain.ThenFunc(s.handleAPISkeinCapabilities))
+	mux.Handle("GET /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentGet))
+	mux.Handle("POST /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentEnable))
+	mux.Handle("DELETE /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentDisable))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
