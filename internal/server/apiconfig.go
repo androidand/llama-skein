@@ -1,0 +1,433 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/router"
+	"gopkg.in/yaml.v3"
+)
+
+type configModelRequest struct {
+	ID          string   `json:"id"`
+	Cmd         string   `json:"cmd"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Aliases     []string `json:"aliases"`
+	TTL         *int     `json:"ttl"`
+}
+
+type configModelPatchRequest struct {
+	Cmd                   *string        `json:"cmd"`
+	Name                  *string        `json:"name"`
+	Description           *string        `json:"description"`
+	Aliases               *[]string      `json:"aliases"`
+	TTL                   *int           `json:"ttl"`
+	ConcurrencyLimit      *int           `json:"concurrencyLimit"`
+	ConcurrencyLimitSnake *int           `json:"concurrency_limit"`
+	CtxSize               *int           `json:"ctx_size"`
+	CtxSizeDash           *int           `json:"ctx-size"`
+	NGPULayers            *int           `json:"n_gpu_layers"`
+	NGPUDash              *int           `json:"n-gpu-layers"`
+	CacheTypeK            *string        `json:"cache_type_k"`
+	CacheTypeKDash        *string        `json:"cache-type-k"`
+	CacheTypeV            *string        `json:"cache_type_v"`
+	CacheTypeVDash        *string        `json:"cache-type-v"`
+	Flags                 map[string]any `json:"flags"`
+}
+
+type configGroupPatchRequest struct {
+	AutoUnload *bool `json:"autoUnload"`
+	Exclusive  *bool `json:"exclusive"`
+	Swap       *bool `json:"swap"`
+}
+
+// handleAPIConfigInfo implements GET /api/config/info.
+func (s *Server) handleAPIConfigInfo(w http.ResponseWriter, r *http.Request) {
+	type modelInfo struct {
+		ID         string `json:"id"`
+		FilePath   string `json:"file_path,omitempty"`
+		FileExists bool   `json:"file_exists"`
+	}
+
+	models := make([]modelInfo, 0, len(s.cfg.Models))
+	for id, mc := range s.cfg.Models {
+		mi := modelInfo{ID: id}
+		if p := parseModelPath(mc.Cmd); p != "" {
+			mi.FilePath = p
+			_, err := os.Stat(p)
+			mi.FileExists = err == nil
+		}
+		models = append(models, mi)
+	}
+
+	writeJSON(w, map[string]any{
+		"config_file": s.configFile,
+		"models_dir":  s.modelsDir(),
+		"model_count": len(s.cfg.Models),
+		"models":      models,
+	})
+}
+
+// handleAPIConfigAddModel implements POST /api/config/models.
+func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request) {
+	var req configModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.ID == "" || req.Cmd == "" {
+		router.SendResponse(w, r, http.StatusBadRequest, "id and cmd are required")
+		return
+	}
+	if !isValidModelID(req.ID) {
+		router.SendResponse(w, r, http.StatusBadRequest,
+			"model ID contains invalid characters; use A-Za-z0-9 . _ : / -")
+		return
+	}
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity,
+			"config file path not set; restart llama-swap with --config flag")
+		return
+	}
+
+	mc := config.ModelConfig{
+		Cmd:         req.Cmd,
+		Name:        req.Name,
+		Description: req.Description,
+		Aliases:     req.Aliases,
+		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
+	}
+	if req.TTL != nil {
+		mc.UnloadAfter = *req.TTL
+	}
+
+	if err := s.writeModelToConfig(req.ID, &mc); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSON(w, map[string]any{"id": req.ID, "status": "added"})
+}
+
+// handleAPIConfigGetModel implements GET /api/config/models/{id}.
+func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	realID, found := s.cfg.RealModelName(id)
+	if !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found in config")
+		return
+	}
+	mc := s.cfg.Models[realID]
+
+	flags := map[string]string{}
+	if parts, err := config.SanitizeCommand(mc.Cmd); err == nil {
+		for i := 1; i < len(parts); i++ {
+			if !strings.HasPrefix(parts[i], "--") {
+				continue
+			}
+			if i+1 < len(parts) && !strings.HasPrefix(parts[i+1], "--") {
+				flags[parts[i]] = parts[i+1]
+				i++
+			} else {
+				flags[parts[i]] = "true"
+			}
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"id":               realID,
+		"cmd":              mc.Cmd,
+		"name":             mc.Name,
+		"description":      mc.Description,
+		"aliases":          mc.Aliases,
+		"ttl":              mc.UnloadAfter,
+		"concurrencyLimit": mc.ConcurrencyLimit,
+		"ctx_size":         flags["--ctx-size"],
+		"n_gpu_layers":     flags["--n-gpu-layers"],
+		"cache_type_k":     flags["--cache-type-k"],
+		"cache_type_v":     flags["--cache-type-v"],
+		"flags":            flags,
+	})
+}
+
+// handleAPIConfigPatchModel implements PATCH /api/config/models/{id}.
+func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	realID, found := s.cfg.RealModelName(id)
+	if !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found in config")
+		return
+	}
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
+		return
+	}
+
+	var req configModelPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.patchModelInConfig(realID, req); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSON(w, map[string]any{"id": realID, "status": "updated"})
+}
+
+// handleAPIConfigRemoveModel implements DELETE /api/config/models/{id}.
+func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	realID, found := s.cfg.RealModelName(id)
+	if !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found in config")
+		return
+	}
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
+		return
+	}
+	if err := s.removeModelFromConfig(realID); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSON(w, map[string]any{"id": realID, "status": "removed"})
+}
+
+// handleAPIConfigPatchGroup implements PATCH /api/config/groups/{id}.
+func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, found := s.cfg.Groups[id]; !found {
+		router.SendResponse(w, r, http.StatusNotFound, "group not found in config")
+		return
+	}
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
+		return
+	}
+
+	var req configGroupPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.patchGroupInConfig(id, req); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSON(w, map[string]any{"id": id, "status": "updated"})
+}
+
+// handleAPIConfigReload implements POST /api/config/reload.
+func (s *Server) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
+	if s.reloadFn == nil {
+		router.SendResponse(w, r, http.StatusServiceUnavailable,
+			"reload not available; restart llama-swap manually")
+		return
+	}
+	writeJSON(w, map[string]any{"status": "reloading"})
+	go s.reloadFn()
+}
+
+// triggerReload calls reloadFn in a goroutine if set.
+func (s *Server) triggerReload() {
+	if s.reloadFn != nil {
+		go s.reloadFn()
+	}
+}
+
+// writeModelToConfig reads the config YAML, sets models[id]=mc, and writes back.
+func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	root, err := readYAMLRoot(s.configFile)
+	if err != nil {
+		return err
+	}
+
+	modelsNode := yamlMapGet(root, "models")
+	if modelsNode == nil {
+		modelsNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		yamlMapSet(root, "models", modelsNode)
+	}
+
+	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	yamlMapSet(entry, "cmd", yamlScalar(mc.Cmd))
+	if mc.Proxy != "" {
+		yamlMapSet(entry, "proxy", yamlScalar(mc.Proxy))
+	}
+	if mc.Name != "" {
+		yamlMapSet(entry, "name", yamlScalar(mc.Name))
+	}
+	if mc.Description != "" {
+		yamlMapSet(entry, "description", yamlScalar(mc.Description))
+	}
+	if len(mc.Aliases) > 0 {
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, a := range mc.Aliases {
+			seq.Content = append(seq.Content, yamlScalar(a))
+		}
+		yamlMapSet(entry, "aliases", seq)
+	}
+	if mc.UnloadAfter != config.MODEL_CONFIG_DEFAULT_TTL {
+		yamlMapSet(entry, "ttl", yamlInt(mc.UnloadAfter))
+	}
+	if mc.ConcurrencyLimit != 0 {
+		yamlMapSet(entry, "concurrencyLimit", yamlInt(mc.ConcurrencyLimit))
+	}
+	yamlMapSet(modelsNode, id, entry)
+
+	return writeYAMLRoot(s.configFile, root, 0o644)
+}
+
+// patchModelInConfig applies a partial model update, preserving other fields.
+func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	root, err := readYAMLRoot(s.configFile)
+	if err != nil {
+		return err
+	}
+	modelsNode := yamlMapGet(root, "models")
+	if modelsNode == nil {
+		return fmt.Errorf("models section missing")
+	}
+	entryNode := yamlMapGet(modelsNode, id)
+	if entryNode == nil || entryNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("model %q not found", id)
+	}
+
+	if req.Cmd != nil {
+		yamlMapSet(entryNode, "cmd", yamlScalar(*req.Cmd))
+	}
+	if req.Name != nil {
+		yamlMapSet(entryNode, "name", yamlScalar(*req.Name))
+	}
+	if req.Description != nil {
+		yamlMapSet(entryNode, "description", yamlScalar(*req.Description))
+	}
+	if req.Aliases != nil {
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, a := range *req.Aliases {
+			seq.Content = append(seq.Content, yamlScalar(a))
+		}
+		yamlMapSet(entryNode, "aliases", seq)
+	}
+	if req.TTL != nil {
+		yamlMapSet(entryNode, "ttl", yamlInt(*req.TTL))
+	}
+	if req.ConcurrencyLimit != nil {
+		if *req.ConcurrencyLimit < 0 {
+			return fmt.Errorf("concurrencyLimit must be >= 0")
+		}
+		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimit))
+	}
+	if req.ConcurrencyLimitSnake != nil {
+		if *req.ConcurrencyLimitSnake < 0 {
+			return fmt.Errorf("concurrency_limit must be >= 0")
+		}
+		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimitSnake))
+	}
+
+	flags := make(map[string]string, len(req.Flags)+6)
+	for k, v := range req.Flags {
+		flags[normalizeCmdFlag(k)] = flagValueString(v)
+	}
+	if req.CtxSize != nil {
+		flags["--ctx-size"] = fmt.Sprint(*req.CtxSize)
+	}
+	if req.CtxSizeDash != nil {
+		flags["--ctx-size"] = fmt.Sprint(*req.CtxSizeDash)
+	}
+	if req.NGPULayers != nil {
+		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPULayers)
+	}
+	if req.NGPUDash != nil {
+		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPUDash)
+	}
+	if req.CacheTypeK != nil {
+		flags["--cache-type-k"] = *req.CacheTypeK
+	}
+	if req.CacheTypeKDash != nil {
+		flags["--cache-type-k"] = *req.CacheTypeKDash
+	}
+	if req.CacheTypeV != nil {
+		flags["--cache-type-v"] = *req.CacheTypeV
+	}
+	if req.CacheTypeVDash != nil {
+		flags["--cache-type-v"] = *req.CacheTypeVDash
+	}
+	if len(flags) > 0 {
+		cmd := ""
+		if n := yamlMapGet(entryNode, "cmd"); n != nil {
+			cmd = n.Value
+		}
+		patched, err := patchCommandFlags(cmd, flags)
+		if err != nil {
+			return err
+		}
+		yamlMapSet(entryNode, "cmd", yamlScalar(patched))
+	}
+
+	return writeYAMLRoot(s.configFile, root, 0o644)
+}
+
+// patchGroupInConfig applies a partial group update, preserving other fields.
+func (s *Server) patchGroupInConfig(id string, req configGroupPatchRequest) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	root, err := readYAMLRoot(s.configFile)
+	if err != nil {
+		return err
+	}
+	groupsNode := yamlMapGet(root, "groups")
+	if groupsNode == nil {
+		return fmt.Errorf("groups section missing")
+	}
+	entryNode := yamlMapGet(groupsNode, id)
+	if entryNode == nil || entryNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("group %q not found", id)
+	}
+
+	if req.AutoUnload != nil {
+		yamlMapSet(entryNode, "autoUnload", yamlBool(*req.AutoUnload))
+	}
+	if req.Exclusive != nil {
+		yamlMapSet(entryNode, "exclusive", yamlBool(*req.Exclusive))
+	}
+	if req.Swap != nil {
+		yamlMapSet(entryNode, "swap", yamlBool(*req.Swap))
+	}
+
+	return writeYAMLRoot(s.configFile, root, 0o644)
+}
+
+// removeModelFromConfig deletes models[id] from the config YAML.
+func (s *Server) removeModelFromConfig(id string) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	root, err := readYAMLRoot(s.configFile)
+	if err != nil {
+		return err
+	}
+	if modelsNode := yamlMapGet(root, "models"); modelsNode != nil {
+		yamlMapDelete(modelsNode, id)
+	}
+	return writeYAMLRoot(s.configFile, root, 0o644)
+}

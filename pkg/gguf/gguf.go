@@ -20,6 +20,7 @@ const (
 )
 
 const maxMetadataKeyBytes = 64 * 1024
+const maxMetadataArrayCount = 100000
 
 // GGUFType identifies the type of a metadata value.
 type GGUFType uint32
@@ -480,7 +481,62 @@ func readValue(r io.Reader, typ GGUFType, version uint32) (any, error) {
 		return math.Float64frombits(binary.LittleEndian.Uint64(buf)), nil
 
 	case GGUFTypeArray:
-		return nil, fmt.Errorf("unsupported bare array type (missing element type)")
+		// Bare array: count (uint64) + element_type (int32) + elements
+		count, err := readU64(r)
+		if err != nil {
+			return nil, fmt.Errorf("read array count: %w", err)
+		}
+		elemTypeBuf := make([]byte, 4)
+		if _, err := io.ReadFull(r, elemTypeBuf); err != nil {
+			return nil, fmt.Errorf("read array element type: %w", err)
+		}
+		elemType := GGUFType(binary.LittleEndian.Uint32(elemTypeBuf))
+		switch elemType {
+		case GGUFTypeString:
+			arr := make([]string, count)
+			for i := uint64(0); i < count; i++ {
+				arr[i], err = readString(r, version)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return arr, nil
+		case GGUFTypeF32:
+			arr := make([]float64, count)
+			for i := uint64(0); i < count; i++ {
+				buf := make([]byte, 4)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, err
+				}
+				arr[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(buf)))
+			}
+			return arr, nil
+		case GGUFTypeF64:
+			arr := make([]float64, count)
+			for i := uint64(0); i < count; i++ {
+				buf := make([]byte, 8)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, err
+				}
+				arr[i] = math.Float64frombits(binary.LittleEndian.Uint64(buf))
+			}
+			return arr, nil
+		default:
+			arr := make([]int64, count)
+			for i := uint64(0); i < count; i++ {
+				val, err := readValue(r, elemType, version)
+				if err != nil {
+					return nil, err
+				}
+				switch v := val.(type) {
+				case int64:
+					arr[i] = v
+				default:
+					return nil, fmt.Errorf("unexpected element type %T in array", val)
+				}
+			}
+			return arr, nil
+		}
 
 	default:
 		// Array types: 9 + element_type * 0x10000

@@ -41,7 +41,20 @@ type Server struct {
 	shutdownCtx  context.Context
 	shutdownFn   context.CancelFunc
 	shuttingDown atomic.Bool
+
+	// fork-specific: config file management and mDNS
+	configFile string
+	configMu   sync.Mutex
+	reloadFn   func()
 }
+
+// SetConfigFile stores the on-disk config path so the management API can write
+// model entries back to it.
+func (s *Server) SetConfigFile(path string) { s.configFile = path }
+
+// SetReloadFn injects the reload callback so POST /api/config/reload can
+// trigger it.
+func (s *Server) SetReloadFn(fn func()) { s.reloadFn = fn }
 
 // modelPostJSONRoutes are endpoints with a model id in the JSON request body.
 var modelPostJSONRoutes = []string{
@@ -90,9 +103,13 @@ var modelGetRoutes = []string{
 
 // BuildInfo carries version metadata surfaced by GET /api/version.
 type BuildInfo struct {
-	Version string
-	Commit  string
-	Date    string
+	Version       string
+	Commit        string
+	Date          string
+	LlamaCppBuild string
+	LlamaCppGit   string
+	LlamaCppDate  string
+	BuildFeatures string
 }
 
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
@@ -232,6 +249,26 @@ func (s *Server) routes() {
 	// API group (API-key protected) consumed by the UI.
 	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
+	mux.Handle("POST /api/models/load/{model...}", apiChain.ThenFunc(s.handleAPILoadModel))
+	mux.Handle("POST /api/models/pull", apiChain.ThenFunc(s.handleAPIPullModel))
+	mux.Handle("POST /api/models/context-recommendation/{model...}", apiChain.ThenFunc(s.handleAPIContextRecommendation))
+	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
+	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
+	mux.Handle("GET /api/ps", apiChain.ThenFunc(s.handleAPIPS))
+	mux.Handle("GET /api/storage", apiChain.ThenFunc(s.handleAPIStorage))
+	mux.Handle("GET /api/config/info", apiChain.ThenFunc(s.handleAPIConfigInfo))
+	mux.Handle("POST /api/config/models", apiChain.ThenFunc(s.handleAPIConfigAddModel))
+	mux.Handle("GET /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigGetModel))
+	mux.Handle("PATCH /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchModel))
+	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
+	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
+	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
+	mux.Handle("GET /api/tags", apiChain.ThenFunc(s.handleAPIOllamaTags))
+	mux.Handle("POST /api/show", apiChain.ThenFunc(s.handleAPIOllamaShow))
+	mux.Handle("DELETE /api/delete", apiChain.ThenFunc(s.handleAPIOllamaDelete))
+	mux.Handle("GET /api/resources", apiChain.ThenFunc(s.handleAPIResources))
+	mux.Handle("POST /api/upgrade", apiChain.ThenFunc(s.handleAPIUpgrade))
+	mux.Handle("GET /api/skein/capabilities", apiChain.ThenFunc(s.handleAPISkeinCapabilities))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))

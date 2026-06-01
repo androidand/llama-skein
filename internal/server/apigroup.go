@@ -139,14 +139,39 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAPIVersion serves the build metadata.
+// handleAPIVersion serves the build metadata, including llama.cpp info when available.
 func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	resp := map[string]any{
 		"version":    s.build.Version,
 		"commit":     s.build.Commit,
 		"build_date": s.build.Date,
-	})
+		"runtime": map[string]string{
+			"go_os":   goOS(),
+			"go_arch": goArch(),
+		},
+	}
+	if s.build.LlamaCppBuild != "" && s.build.LlamaCppBuild != "unknown" {
+		var features []string
+		for _, f := range splitFeatures(s.build.BuildFeatures) {
+			if f != "" {
+				features = append(features, f)
+			}
+		}
+		resp["llama_cpp_build"] = s.build.LlamaCppBuild
+		resp["llama_cpp_git"] = s.build.LlamaCppGit
+		resp["llama_cpp_date"] = s.build.LlamaCppDate
+		resp["build_features"] = features
+		resp["platform"] = goOS() + "/" + goArch()
+		resp["metal"] = strings.Contains(strings.ToLower(s.build.BuildFeatures), "metal") ||
+			(goOS() == "darwin" && goArch() == "arm64")
+		if strings.Contains(strings.ToLower(s.build.BuildFeatures), "rocm") {
+			if v := detectRocmVersion(); v != "" {
+				resp["rocm_version"] = v
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleAPICapture returns the stored request/response capture for a metric ID.
