@@ -11,6 +11,7 @@ type skeinCapabilities struct {
 
 var currentSkeinFeatures = []string{
 	"capabilities",
+	"silent-mode",
 }
 
 // handleAPISkeinCapabilities implements GET /api/skein/capabilities.
