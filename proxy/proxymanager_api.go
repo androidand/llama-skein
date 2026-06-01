@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/perf"
+	"github.com/mostlygeek/llama-swap/pkg/gguf"
 )
 
 type Model struct {
@@ -34,6 +38,7 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.POST("/models/unload/*model", pm.apiUnloadSingleModelHandler)
 		apiGroup.POST("/models/load/*model", pm.apiLoadSingleModelHandler)
 		apiGroup.GET("/models/*model", pm.apiGetModelHandler)
+		apiGroup.POST("/models/:model/context-recommendation", pm.apiContextRecommendation)
 		apiGroup.DELETE("/models/*model", pm.apiDeleteModel)
 		apiGroup.POST("/models/pull", pm.apiPullModel)
 		apiGroup.GET("/ps", pm.apiPSHandler)
@@ -55,6 +60,8 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.DELETE("/delete", pm.apiOllamaDelete)
 		// Unified resource snapshot (disk + memory + GPU)
 		apiGroup.GET("/resources", pm.apiGetResources)
+		// llama.cpp self-upgrade (Skein)
+		apiGroup.POST("/upgrade", pm.apiUpgrade)
 	}
 }
 
@@ -413,10 +420,86 @@ func (pm *ProxyManager) apiGetModelHandler(c *gin.Context) {
 		record["description"] = desc
 	}
 	addModelRuntimeHints(record, modelConfig)
+	addGGUFMetadata(record, modelConfig)
 	if len(modelConfig.Metadata) > 0 {
-		record["meta"] = gin.H{"llamaswap": modelConfig.Metadata}
+		if metaMap, ok := record["meta"].(gin.H); ok {
+			metaMap["llamaswap"] = modelConfig.Metadata
+		} else {
+			record["meta"] = gin.H{"llamaswap": modelConfig.Metadata}
+		}
 	}
 	c.JSON(http.StatusOK, record)
+}
+
+// apiContextRecommendation implements POST /api/models/:model/context-recommendation.
+// Returns the recommended context window based on GGUF metadata + available memory.
+func (pm *ProxyManager) apiContextRecommendation(c *gin.Context) {
+	requestedModel := c.Param("model")
+	realModelName, found := pm.config.RealModelName(requestedModel)
+	if !found {
+		pm.sendErrorResponse(c, http.StatusNotFound, "Model not found")
+		return
+	}
+
+	modelConfig := pm.config.Models[realModelName]
+	ggufPath := extractGGUFPath(modelConfig.Cmd)
+	if ggufPath == "" {
+		c.JSON(http.StatusOK, gin.H{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
+		return
+	}
+
+	g, err := gguf.ParseFile(ggufPath)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
+		return
+	}
+
+	// Get available memory from perf monitor.
+	var freeBytes int64
+	if pm.perfMonitor != nil {
+		sysStats, gpuStats := pm.perfMonitor.Current()
+		if len(sysStats) > 0 {
+			s := sysStats[len(sysStats)-1]
+			// On other platforms, check GPU VRAM first.
+			if len(gpuStats) > 0 {
+				g := gpuStats[0]
+				freeBytes = int64(g.MemTotalMB-g.MemUsedMB) << 20
+			} else {
+				freeBytes = int64(s.MemFreeMB) << 20
+			}
+		}
+	}
+
+	if freeBytes <= 0 {
+		c.JSON(http.StatusOK, gin.H{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
+		return
+	}
+
+	minCtx := g.MinCtxSize()
+	maxCtx := g.MaxCtxSize(freeBytes)
+	if maxCtx <= 0 {
+		maxCtx = minCtx
+	}
+
+	// Clamp to 256k max.
+	if maxCtx > 262144 {
+		maxCtx = 262144
+	}
+
+	// Round down to nearest 1024.
+	maxCtx = (maxCtx / 1024) * 1024
+	if maxCtx < 8192 {
+		maxCtx = 8192
+	}
+
+	modelFileGB := float64(g.WeightBytes()) / (1 << 30)
+
+	c.JSON(http.StatusOK, gin.H{
+		"recommended": maxCtx,
+		"modelFileGB": modelFileGB,
+		"min":         minCtx,
+		"max":         maxCtx,
+	})
 }
 
 // apiPSHandler implements GET /api/ps.
@@ -447,11 +530,55 @@ func (pm *ProxyManager) apiPSHandler(c *gin.Context) {
 }
 
 func (pm *ProxyManager) apiGetVersion(c *gin.Context) {
-	c.JSON(http.StatusOK, map[string]string{
+	runtimeInfo := pm.detectRuntimeInfo()
+	resp := gin.H{
 		"version":    pm.version,
 		"commit":     pm.commit,
 		"build_date": pm.buildDate,
-	})
+		"runtime":    runtimeInfo,
+	}
+	if pm.llamaCppBuild != "" && pm.llamaCppBuild != "unknown" {
+		var features []string
+		if pm.buildFeatures != "" {
+			for _, f := range strings.Split(pm.buildFeatures, ",") {
+				f = strings.TrimSpace(f)
+				if f != "" {
+					features = append(features, f)
+				}
+			}
+		}
+		resp["llama_cpp_build"] = pm.llamaCppBuild
+		resp["llama_cpp_git"] = pm.llamaCppGit
+		resp["llama_cpp_date"] = pm.llamaCppDate
+		resp["build_features"] = features
+		resp["platform"] = runtime.GOOS + "/" + runtime.GOARCH
+		resp["metal"] = strings.Contains(strings.ToLower(pm.buildFeatures), "metal") ||
+			(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64")
+		if strings.Contains(strings.ToLower(pm.buildFeatures), "rocm") {
+			if v := detectRocmVersion(); v != "" {
+				resp["rocm_version"] = v
+			}
+		}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func detectRocmVersion() string {
+	if data, err := os.ReadFile("/opt/rocm/version.txt"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	cmd := exec.Command("rocminfo", "--version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(out))
+	for _, field := range strings.Fields(s) {
+		if strings.HasPrefix(field, "v") {
+			return field
+		}
+	}
+	return ""
 }
 
 func (pm *ProxyManager) apiGetCapture(c *gin.Context) {
@@ -474,4 +601,11 @@ func (pm *ProxyManager) apiGetCapture(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "application/json", jsonBytes)
+}
+
+func (pm *ProxyManager) detectRuntimeInfo() map[string]string {
+	return map[string]string{
+		"go_os":   runtime.GOOS,
+		"go_arch": runtime.GOARCH,
+	}
 }

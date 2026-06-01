@@ -22,6 +22,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/perf"
 	"github.com/mostlygeek/llama-swap/internal/thermal"
+	"github.com/mostlygeek/llama-swap/pkg/gguf"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -124,6 +125,9 @@ type ProxyManager struct {
 
 	// silentMode controls GPU power capping to reduce fan noise.
 	silentMode *thermal.Manager
+
+	// cache for parsed GGUF headers keyed by model ID
+	ggufCache sync.Map // string -> *gguf.GGUF
 }
 
 // SetConfigFile stores the path to the on-disk config YAML so that the
@@ -715,11 +719,16 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 			record["description"] = desc
 		}
 		addModelRuntimeHints(record, modelConfig)
+		addGGUFMetadata(record, modelConfig)
 
 		// Add metadata if present
 		if len(modelConfig.Metadata) > 0 {
-			record["meta"] = gin.H{
-				"llamaswap": modelConfig.Metadata,
+			if metaMap, ok := record["meta"].(gin.H); ok {
+				metaMap["llamaswap"] = modelConfig.Metadata
+			} else {
+				record["meta"] = gin.H{
+					"llamaswap": modelConfig.Metadata,
+				}
 			}
 		}
 		return record
@@ -789,6 +798,100 @@ func addModelRuntimeHints(record gin.H, modelConfig config.ModelConfig) {
 	if maxTokens, ok := commandFlagInt(args, "--n-predict", "-n"); ok {
 		record["max_output_tokens"] = maxTokens
 	}
+}
+
+func addGGUFMetadata(record gin.H, modelConfig config.ModelConfig) {
+	ggufPath := extractGGUFPath(modelConfig.Cmd)
+	if ggufPath == "" {
+		return
+	}
+	g, err := gguf.ParseFile(ggufPath)
+	if err != nil {
+		return
+	}
+
+	meta := gin.H{
+		"architecture": g.Architecture,
+	}
+	if g.Name != "" {
+		meta["gguf_name"] = g.Name
+	}
+	if g.ParamCount > 0 {
+		meta["parameter_count"] = g.ParamCount
+	}
+	if g.ContextLength > 0 {
+		meta["context_length"] = g.ContextLength
+	}
+	if g.EmbeddingLength > 0 {
+		meta["embedding_length"] = g.EmbeddingLength
+	}
+	if g.LayerCount > 0 {
+		meta["layer_count"] = g.LayerCount
+	}
+	if g.HeadCount > 0 {
+		meta["head_count"] = g.HeadCount
+	}
+	if g.HeadCountKV > 0 {
+		meta["head_count_kv"] = g.HeadCountKV
+	}
+	if g.FeedForwardLength > 0 {
+		meta["feed_forward_length"] = g.FeedForwardLength
+	}
+	if g.IsMoE() {
+		meta["moe"] = true
+		meta["expert_count"] = g.ExpertCount
+		if g.ExpertUsedCount > 0 {
+			meta["expert_used_count"] = g.ExpertUsedCount
+		}
+		if g.ExpertFeedForwardLength > 0 {
+			meta["expert_feed_forward_length"] = g.ExpertFeedForwardLength
+		}
+		if g.ExpertSharedFeedForwardLength > 0 {
+			meta["expert_shared_feed_forward_length"] = g.ExpertSharedFeedForwardLength
+		}
+	}
+	if g.RopeScaling.Type != "" {
+		meta["rope_scaling"] = gin.H{
+			"type":              g.RopeScaling.Type,
+			"factor":            g.RopeScaling.Factor,
+			"original_length":   g.RopeScaling.OriginalLength,
+			"finetuned":         g.RopeScaling.Finetuned,
+		}
+	}
+	if g.RopeFreqBase > 0 {
+		meta["rope_freq_base"] = g.RopeFreqBase
+	}
+
+	if existing, ok := record["meta"]; ok {
+		if metaMap, ok := existing.(gin.H); ok {
+			if llamaswap, ok := metaMap["llamaswap"]; ok {
+				llamaswap.(gin.H)["gguf"] = meta
+			}
+		}
+	} else {
+		record["meta"] = gin.H{
+			"llamaswap": gin.H{"gguf": meta},
+		}
+	}
+}
+
+func extractGGUFPath(cmd string) string {
+	args, err := config.SanitizeCommand(cmd)
+	if err != nil {
+		return ""
+	}
+	for i, arg := range args {
+		if arg == "--model" || arg == "-m" && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(arg, "--model=") {
+			return strings.TrimPrefix(arg, "--model=")
+		}
+		if strings.HasPrefix(arg, "-m=") {
+			return strings.TrimPrefix(arg, "-m=")
+		}
+	}
+	return ""
 }
 
 func commandFlagInt(args []string, names ...string) (int, bool) {

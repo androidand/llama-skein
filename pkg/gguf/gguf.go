@@ -19,40 +19,45 @@ const (
 	Version3 uint32 = 3
 )
 
+const maxMetadataKeyBytes = 64 * 1024
+
 // GGUFType identifies the type of a metadata value.
 type GGUFType uint32
 
 const (
-	GGUFTypeString GGUFType = iota
-	GGUFTypeI8
-	GGUFTypeI16
-	GGUFTypeI32
-	GGUFTypeI64
-	GGUFTypeU8
-	GGUFTypeU16
-	GGUFTypeU32
-	GGUFTypeU64
-	GGUFTypeF32
-	GGUFTypeF64
-	GGUFTypeBool
-	GGUFTypeStringArray
-	GGUFTypeI8Array
-	GGUFTypeI16Array
-	GGUFTypeI32Array
-	GGUFTypeI64Array
-	GGUFTypeU8Array
-	GGUFTypeU16Array
-	GGUFTypeU32Array
-	GGUFTypeU64Array
-	GGUFTypeF32Array
-	GGUFTypeF64Array
+	GGUFTypeU8     GGUFType = 0
+	GGUFTypeI8     GGUFType = 1
+	GGUFTypeU16    GGUFType = 2
+	GGUFTypeI16    GGUFType = 3
+	GGUFTypeU32    GGUFType = 4
+	GGUFTypeI32    GGUFType = 5
+	GGUFTypeF32    GGUFType = 6
+	GGUFTypeBool   GGUFType = 7
+	GGUFTypeString GGUFType = 8
+	GGUFTypeArray  GGUFType = 9
+	GGUFTypeU64    GGUFType = 10
+	GGUFTypeI64    GGUFType = 11
+	GGUFTypeF64    GGUFType = 12
+
+	// Array types: 9 + element_type * 0x10000
+	GGUFTypeU8Array   GGUFType = 9 + 0*0x10000   // 0x00000009
+	GGUFTypeI8Array   GGUFType = 9 + 1*0x10000   // 0x00010009
+	GGUFTypeU16Array  GGUFType = 9 + 2*0x10000   // 0x00020009
+	GGUFTypeI16Array  GGUFType = 9 + 3*0x10000   // 0x00030009
+	GGUFTypeU32Array  GGUFType = 9 + 4*0x10000   // 0x00040009
+	GGUFTypeI32Array  GGUFType = 9 + 5*0x10000   // 0x00050009
+	GGUFTypeF32Array  GGUFType = 9 + 6*0x10000   // 0x00060009
+	GGUFTypeStringArray GGUFType = 9 + 8*0x10000 // 0x00080009
+	GGUFTypeU64Array  GGUFType = 9 + 10*0x10000  // 0x000A0009
+	GGUFTypeI64Array  GGUFType = 9 + 11*0x10000  // 0x000B0009
+	GGUFTypeF64Array  GGUFType = 9 + 12*0x10000  // 0x000C0009
 )
 
 // GGUF holds the parsed metadata from a GGUF file.
 type GGUF struct {
-	Version  uint32
+	Version     uint32
 	TensorCount uint64
-	KVCount  uint64
+	KVCount     uint64
 
 	// Raw metadata as key-value pairs.
 	Metadata map[string]any
@@ -64,20 +69,20 @@ type GGUF struct {
 	QuantVersion int64
 
 	// Architecture-specific fields.
-	ContextLength    int64
-	EmbeddingLength  int64
-	LayerCount       int64
-	HeadCount        int64
-	HeadCountKV      int64
-	HeadCountKVGroup int64
+	ContextLength     int64
+	EmbeddingLength   int64
+	LayerCount        int64
+	HeadCount         int64
+	HeadCountKV       int64
+	HeadCountKVGroup  int64
 	FeedForwardLength int64
-	RopeFreqBase     float64
-	RopeScaling      RopeScaling
+	RopeFreqBase      float64
+	RopeScaling       RopeScaling
 
 	// MoE fields (0 means not MoE).
-	ExpertCount     int64
-	ExpertUsedCount int64
-	ExpertFeedForwardLength int64
+	ExpertCount                   int64
+	ExpertUsedCount               int64
+	ExpertFeedForwardLength       int64
 	ExpertSharedFeedForwardLength int64
 
 	// File size on disk (set by caller, not from GGUF header).
@@ -109,7 +114,7 @@ func (g *GGUF) WeightBytes() int64 {
 	}
 	// Fallback: estimate based on quantization.
 	bits := g.bitsPerWeight()
-	return (g.ParamCount * int64(bits) + 7) / 8
+	return (g.ParamCount*int64(bits) + 7) / 8
 }
 
 // bitsPerWeight returns the estimated bits per weight based on quantization level.
@@ -273,7 +278,7 @@ func Parse(r io.Reader) (*GGUF, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read key %d: %w", i, err)
 		}
-		val, err := readValue(r, valType)
+		val, err := readValue(r, valType, version)
 		if err != nil {
 			return nil, fmt.Errorf("read value %s: %w", key, err)
 		}
@@ -281,10 +286,10 @@ func Parse(r io.Reader) (*GGUF, error) {
 	}
 
 	g := &GGUF{
-		Version:    version,
+		Version:     version,
 		TensorCount: tensorCount,
-		KVCount:    kvCount,
-		Metadata:   metadata,
+		KVCount:     kvCount,
+		Metadata:    metadata,
 	}
 
 	// Parse convenience fields
@@ -352,24 +357,24 @@ func ParseFile(path string) (*GGUF, error) {
 	return g, nil
 }
 
-// readKey reads a length-prefixed string key and the value type.
-// In GGUF v2, key length is 1 byte if < 255, else 255 + 8 bytes.
-// In GGUF v3, key length is always 8 bytes.
+// readKey reads a GGUF metadata key and the following value type.
+// GGUF v2: key length is 1 byte (255 means next 8 bytes are the length).
+// GGUF v3: key length is always 8 bytes.
 func readKey(r io.Reader, version uint32) (string, GGUFType, error) {
 	var keyLen uint64
 	if version == Version2 {
-		lenByte := make([]byte, 1)
-		if _, err := io.ReadFull(r, lenByte); err != nil {
-			return "", 0, fmt.Errorf("read key length byte: %w", err)
+		b := make([]byte, 1)
+		if _, err := io.ReadFull(r, b); err != nil {
+			return "", 0, fmt.Errorf("read key length: %w", err)
 		}
-		if lenByte[0] == 255 {
+		if b[0] == 255 {
 			buf := make([]byte, 8)
 			if _, err := io.ReadFull(r, buf); err != nil {
 				return "", 0, fmt.Errorf("read key length: %w", err)
 			}
 			keyLen = binary.LittleEndian.Uint64(buf)
 		} else {
-			keyLen = uint64(lenByte[0])
+			keyLen = uint64(b[0])
 		}
 	} else {
 		buf := make([]byte, 8)
@@ -377,6 +382,9 @@ func readKey(r io.Reader, version uint32) (string, GGUFType, error) {
 			return "", 0, fmt.Errorf("read key length: %w", err)
 		}
 		keyLen = binary.LittleEndian.Uint64(buf)
+	}
+	if keyLen > maxMetadataKeyBytes {
+		return "", 0, fmt.Errorf("metadata key length %d exceeds limit %d", keyLen, maxMetadataKeyBytes)
 	}
 
 	keyBuf := make([]byte, keyLen)
@@ -393,10 +401,10 @@ func readKey(r io.Reader, version uint32) (string, GGUFType, error) {
 }
 
 // readValue reads a value of the given GGUFType.
-func readValue(r io.Reader, typ GGUFType) (any, error) {
+func readValue(r io.Reader, typ GGUFType, version uint32) (any, error) {
 	switch typ {
 	case GGUFTypeString:
-		return readString(r)
+		return readString(r, version)
 
 	case GGUFTypeBool:
 		buf := make([]byte, 1)
@@ -404,6 +412,13 @@ func readValue(r io.Reader, typ GGUFType) (any, error) {
 			return nil, err
 		}
 		return buf[0] != 0, nil
+
+	case GGUFTypeU8:
+		buf := make([]byte, 1)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, err
+		}
+		return int64(buf[0]), nil
 
 	case GGUFTypeI8:
 		buf := make([]byte, 1)
@@ -428,13 +443,6 @@ func readValue(r io.Reader, typ GGUFType) (any, error) {
 
 	case GGUFTypeI64:
 		return readI64(r)
-
-	case GGUFTypeU8:
-		buf := make([]byte, 1)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, err
-		}
-		return int64(buf[0]), nil
 
 	case GGUFTypeU16:
 		v, err := readU16(r)
@@ -471,180 +479,92 @@ func readValue(r io.Reader, typ GGUFType) (any, error) {
 		}
 		return math.Float64frombits(binary.LittleEndian.Uint64(buf)), nil
 
-	case GGUFTypeStringArray:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]string, count)
-		for i := uint64(0); i < count; i++ {
-			arr[i], err = readString(r)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return arr, nil
-
-	case GGUFTypeI8Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			buf := make([]byte, 1)
-			if _, err := io.ReadFull(r, buf); err != nil {
-				return nil, err
-			}
-			arr[i] = int64(int8(buf[0]))
-		}
-		return arr, nil
-
-	case GGUFTypeI16Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			v, err := readU16(r)
-			if err != nil {
-				return nil, err
-			}
-			arr[i] = int64(int16(v))
-		}
-		return arr, nil
-
-	case GGUFTypeI32Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			v, err := readU32(r)
-			if err != nil {
-				return nil, err
-			}
-			arr[i] = int64(int32(v))
-		}
-		return arr, nil
-
-	case GGUFTypeI64Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			arr[i], err = readI64(r)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return arr, nil
-
-	case GGUFTypeU8Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			buf := make([]byte, 1)
-			if _, err := io.ReadFull(r, buf); err != nil {
-				return nil, err
-			}
-			arr[i] = int64(buf[0])
-		}
-		return arr, nil
-
-	case GGUFTypeU16Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			v, err := readU16(r)
-			if err != nil {
-				return nil, err
-			}
-			arr[i] = int64(v)
-		}
-		return arr, nil
-
-	case GGUFTypeU32Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			v, err := readU32(r)
-			if err != nil {
-				return nil, err
-			}
-			arr[i] = int64(v)
-		}
-		return arr, nil
-
-	case GGUFTypeU64Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]int64, count)
-		for i := uint64(0); i < count; i++ {
-			v, err := readU64(r)
-			if err != nil {
-				return nil, err
-			}
-			arr[i] = int64(v)
-		}
-		return arr, nil
-
-	case GGUFTypeF32Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]float64, count)
-		for i := uint64(0); i < count; i++ {
-			buf := make([]byte, 4)
-			if _, err := io.ReadFull(r, buf); err != nil {
-				return nil, err
-			}
-			arr[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(buf)))
-		}
-		return arr, nil
-
-	case GGUFTypeF64Array:
-		count, err := readU64(r)
-		if err != nil {
-			return nil, err
-		}
-		arr := make([]float64, count)
-		for i := uint64(0); i < count; i++ {
-			buf := make([]byte, 8)
-			if _, err := io.ReadFull(r, buf); err != nil {
-				return nil, err
-			}
-			arr[i] = math.Float64frombits(binary.LittleEndian.Uint64(buf))
-		}
-		return arr, nil
+	case GGUFTypeArray:
+		return nil, fmt.Errorf("unsupported bare array type (missing element type)")
 
 	default:
+		// Array types: 9 + element_type * 0x10000
+		if typ >= 0x10000 {
+			elemType := GGUFType(typ >> 16)
+			count, err := readU64(r)
+			if err != nil {
+				return nil, fmt.Errorf("read array count: %w", err)
+			}
+			switch elemType {
+			case GGUFTypeString:
+				arr := make([]string, count)
+				for i := uint64(0); i < count; i++ {
+					arr[i], err = readString(r, version)
+					if err != nil {
+						return nil, err
+					}
+				}
+				return arr, nil
+			case GGUFTypeF32:
+				arr := make([]float64, count)
+				for i := uint64(0); i < count; i++ {
+					buf := make([]byte, 4)
+					if _, err := io.ReadFull(r, buf); err != nil {
+						return nil, err
+					}
+					arr[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(buf)))
+				}
+				return arr, nil
+			case GGUFTypeF64:
+				arr := make([]float64, count)
+				for i := uint64(0); i < count; i++ {
+					buf := make([]byte, 8)
+					if _, err := io.ReadFull(r, buf); err != nil {
+						return nil, err
+					}
+					arr[i] = math.Float64frombits(binary.LittleEndian.Uint64(buf))
+				}
+				return arr, nil
+			default:
+				// Integer array types (U8, I8, U16, I16, U32, I32, U64, I64)
+				arr := make([]int64, count)
+				for i := uint64(0); i < count; i++ {
+					val, err := readValue(r, elemType, version)
+					if err != nil {
+						return nil, err
+					}
+					switch v := val.(type) {
+					case int64:
+						arr[i] = v
+					default:
+						return nil, fmt.Errorf("unexpected element type %T in array", val)
+					}
+				}
+				return arr, nil
+			}
+		}
 		return nil, fmt.Errorf("unsupported GGUF type: %d", typ)
 	}
 }
 
-func readString(r io.Reader) (string, error) {
-	lenBuf := make([]byte, 8)
-	if _, err := io.ReadFull(r, lenBuf); err != nil {
-		return "", err
+func readString(r io.Reader, version uint32) (string, error) {
+	var strLen uint64
+	if version == Version2 {
+		b := make([]byte, 1)
+		if _, err := io.ReadFull(r, b); err != nil {
+			return "", err
+		}
+		if b[0] == 255 {
+			lenBuf := make([]byte, 8)
+			if _, err := io.ReadFull(r, lenBuf); err != nil {
+				return "", err
+			}
+			strLen = binary.LittleEndian.Uint64(lenBuf)
+		} else {
+			strLen = uint64(b[0])
+		}
+	} else {
+		lenBuf := make([]byte, 8)
+		if _, err := io.ReadFull(r, lenBuf); err != nil {
+			return "", err
+		}
+		strLen = binary.LittleEndian.Uint64(lenBuf)
 	}
-	strLen := binary.LittleEndian.Uint64(lenBuf)
 
 	buf := make([]byte, strLen)
 	if _, err := io.ReadFull(r, buf); err != nil {

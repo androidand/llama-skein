@@ -286,6 +286,7 @@ func parseROCmSmiJSON(out []byte) []GpuStat {
 			gpuUtil = memUtilPct // fallback: approximate GPU util from VRAM utilization
 		}
 		stats = append(stats, GpuStat{
+			Timestamp:  time.Now(),
 			ID:         cd.idx,
 			Name:       fmt.Sprintf("AMD GPU [%d]", cd.idx),
 			TempC:      int(cd.temp),
@@ -369,8 +370,9 @@ func parseROCmSmiCSV(out []byte) []GpuStat {
 
 		memTotalMB := int(bytes / 1024 / 1024)
 		if len(stats) <= gpuIdx {
-			stats = append(stats, GpuStat{ID: gpuIdx, MemTotalMB: memTotalMB})
+			stats = append(stats, GpuStat{Timestamp: time.Now(), ID: gpuIdx, MemTotalMB: memTotalMB})
 		} else {
+			stats[gpuIdx].Timestamp = time.Now()
 			stats[gpuIdx].MemUsedMB = int(bytes / 1024 / 1024)
 		}
 	}

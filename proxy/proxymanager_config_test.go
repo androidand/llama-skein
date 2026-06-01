@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mostlygeek/llama-swap/proxy/config"
+	"github.com/mostlygeek/llama-swap/internal/config"
 )
 
 func TestPatchCommandFlags(t *testing.T) {
@@ -64,10 +64,13 @@ models:
 	addApiHandlers(pm)
 
 	body, _ := json.Marshal(map[string]any{
-		"ctx_size":     32768,
-		"n_gpu_layers": 99,
-		"ttl":          -1,
-		"name":         "Coder",
+		"ctx_size":         32768,
+		"n_gpu_layers":     99,
+		"cache_type_k":     "q8_0",
+		"cache_type_v":     "q8_0",
+		"concurrencyLimit": 1,
+		"ttl":              -1,
+		"name":             "Coder",
 		"flags": map[string]any{
 			"threads": 8,
 		},
@@ -94,13 +97,54 @@ models:
 	for _, want := range []string{
 		"--ctx-size 32768",
 		"--n-gpu-layers 99",
+		"--cache-type-k q8_0",
+		"--cache-type-v q8_0",
 		"--threads 8",
+		"concurrencyLimit: 1",
 		"ttl: -1",
 		"name: Coder",
 		"modelsDir: /models",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("config missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestProxyManager_ApiConfigGetModelIncludesOperationalKnobs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pm := &ProxyManager{
+		config: config.Config{Models: map[string]config.ModelConfig{
+			"coder": {
+				Cmd:              "llama-server --port ${PORT} --model /models/coder.gguf --ctx-size 131072 --cache-type-k q8_0 --cache-type-v q8_0 --n-gpu-layers 99",
+				ConcurrencyLimit: 1,
+				UnloadAfter:      -1,
+			},
+		}},
+		ginEngine: gin.New(),
+	}
+	addApiHandlers(pm)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/models/coder", nil)
+	rec := httptest.NewRecorder()
+	pm.ginEngine.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"ctx_size":         "131072",
+		"cache_type_k":     "q8_0",
+		"cache_type_v":     "q8_0",
+		"n_gpu_layers":     "99",
+		"concurrencyLimit": float64(1),
+	} {
+		if got[key] != want {
+			t.Fatalf("%s = %#v, want %#v; body=%s", key, got[key], want, rec.Body.String())
 		}
 	}
 }
