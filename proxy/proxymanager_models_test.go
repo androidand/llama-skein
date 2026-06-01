@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/androidand/llama-skein/internal/config"
 )
 
 // TestProxyManager_parseModelPath verifies extraction of the model file path from a cmd string.

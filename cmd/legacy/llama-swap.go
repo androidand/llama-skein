@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/perf"
-	"github.com/mostlygeek/llama-swap/internal/watcher"
-	"github.com/mostlygeek/llama-swap/proxy"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/watcher"
+	"github.com/androidand/llama-skein/proxy"
 )
 
 var (

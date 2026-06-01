@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/router"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/internal/shared"
 )
 
 // modelRecord is one entry in the OpenAI-compatible /v1/models listing.

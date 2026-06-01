@@ -3,7 +3,7 @@ package router
 import (
 	"slices"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/androidand/llama-skein/internal/config"
 )
 
 // matrixSolver contains pure swap-decision logic with no Process dependencies.

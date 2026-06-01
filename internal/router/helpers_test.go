@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/process"
 )
 
 // fakeProcess is an in-memory implementation of process.Process used to drive

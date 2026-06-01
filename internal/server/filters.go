@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/router"
+	"github.com/androidand/llama-skein/internal/chain"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/router"
 	"github.com/tidwall/sjson"
 )
 

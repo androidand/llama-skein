@@ -3,9 +3,9 @@ package router
 import (
 	"fmt"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/process"
 )
 
 type Group struct {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mostlygeek/llama-swap/internal/perf"
+	"github.com/androidand/llama-skein/internal/perf"
 )
 
 // --- Ollama-compatible types ---

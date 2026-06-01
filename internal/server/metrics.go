@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/cache"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/ring"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/androidand/llama-skein/internal/cache"
+	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/ring"
+	"github.com/androidand/llama-skein/internal/shared"
 	"github.com/tidwall/gjson"
 )
 
