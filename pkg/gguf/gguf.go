@@ -486,6 +486,9 @@ func readValue(r io.Reader, typ GGUFType, version uint32) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read array count: %w", err)
 		}
+		if count > maxMetadataArrayCount {
+			return nil, fmt.Errorf("array count %d exceeds limit %d", count, maxMetadataArrayCount)
+		}
 		elemTypeBuf := make([]byte, 4)
 		if _, err := io.ReadFull(r, elemTypeBuf); err != nil {
 			return nil, fmt.Errorf("read array element type: %w", err)

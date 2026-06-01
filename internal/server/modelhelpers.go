@@ -1,10 +1,12 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/process"
@@ -257,4 +259,67 @@ func (s *Server) buildCmd(modelPath, extraFlags string) string {
 		}
 	}
 	return "llama-server --port ${PORT} --model " + modelPath + " --n-gpu-layers 99"
+}
+
+// ModelDetails holds inferred model family/quantization/size derived from
+// the model ID and filename when GGUF metadata is unavailable.
+type ModelDetails struct {
+	Format            string `json:"format"`
+	Family            string `json:"family"`
+	ParameterSize     string `json:"parameter_size,omitempty"`
+	QuantizationLevel string `json:"quantization,omitempty"`
+}
+
+// inferModelDetails derives model metadata from the model ID and filename.
+// Used as a fallback when the GGUF file cannot be parsed.
+func inferModelDetails(id, filename string) ModelDetails {
+	lower := strings.ToLower(id + " " + filename)
+	d := ModelDetails{Format: "gguf", Family: "unknown"}
+
+	for _, q := range []string{
+		"iq4_nl", "iq3_m", "iq2_m",
+		"q4_k_m", "q4_k_s", "q5_k_m", "q5_k_s", "q6_k", "q8_0", "q4_0", "q2_k",
+	} {
+		if strings.Contains(lower, q) {
+			d.QuantizationLevel = strings.ToUpper(q)
+			break
+		}
+	}
+
+	for _, size := range []string{
+		"110b", "90b", "72b", "70b", "35b", "32b", "30b", "27b", "24b", "14b", "13b",
+		"9b", "8b", "7b", "3b", "1.5b", "1b", "0.5b",
+	} {
+		if strings.Contains(lower, size) {
+			d.ParameterSize = strings.ToUpper(size)
+			break
+		}
+	}
+
+	for _, f := range []struct{ key, name string }{
+		{"codellama", "codellama"}, {"deepseek", "deepseek"}, {"starcoder", "starcoder"},
+		{"mixtral", "mixtral"}, {"mistral", "mistral"}, {"llama", "llama"},
+		{"qwen", "qwen"}, {"phi", "phi"}, {"gemma", "gemma"}, {"falcon", "falcon"},
+		{"solar", "solar"}, {"yi", "yi"}, {"smollm", "llama"},
+	} {
+		if strings.Contains(lower, f.key) {
+			d.Family = f.name
+			break
+		}
+	}
+	return d
+}
+
+// addFileMeta adds file_size and file_modified_at to a model record.
+func addFileMeta(record map[string]any, mc config.ModelConfig) {
+	p := parseModelPath(mc.Cmd)
+	if p == "" {
+		return
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return
+	}
+	record["file_size"] = fi.Size()
+	record["file_modified_at"] = fi.ModTime().UTC().Format(time.RFC3339)
 }

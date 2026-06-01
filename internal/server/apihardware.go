@@ -1,0 +1,212 @@
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"runtime"
+	"sort"
+	"time"
+
+	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/internal/thermal"
+)
+
+// handleAPIHardware implements GET /api/hardware.
+// Returns a point-in-time snapshot: storage, memory, CPU, and GPU stats.
+func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{}
+
+	if dir := s.modelsDir(); dir != "" {
+		if stats, ok := diskStorageStats(dir); ok {
+			stats["models_dir"] = dir
+			resp["storage"] = stats
+		}
+	}
+
+	if s.perf != nil {
+		sysStats, gpuStats := s.perf.Current()
+		if len(sysStats) > 0 {
+			sys := sysStats[len(sysStats)-1]
+			memType := "system"
+			if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+				memType = "unified"
+			}
+			resp["memory"] = map[string]any{
+				"total_mb":   sys.MemTotalMB,
+				"used_mb":    sys.MemUsedMB,
+				"free_mb":    sys.MemFreeMB,
+				"swap_total": sys.SwapTotalMB,
+				"swap_used":  sys.SwapUsedMB,
+				"type":       memType,
+				"load_avg1":  sys.LoadAvg1,
+				"load_avg5":  sys.LoadAvg5,
+				"load_avg15": sys.LoadAvg15,
+			}
+
+			var cpuAvg float64
+			for _, u := range sys.CpuUtilPerCore {
+				cpuAvg += u
+			}
+			if n := len(sys.CpuUtilPerCore); n > 0 {
+				cpuAvg /= float64(n)
+			}
+			resp["cpu"] = map[string]any{
+				"cores":         len(sys.CpuUtilPerCore),
+				"util_avg_pct":  cpuAvg,
+				"util_per_core": sys.CpuUtilPerCore,
+				"load_avg1":     sys.LoadAvg1,
+				"load_avg5":     sys.LoadAvg5,
+				"load_avg15":    sys.LoadAvg15,
+			}
+		}
+
+		latest := make(map[int]perf.GpuStat)
+		for _, g := range gpuStats {
+			if prev, ok := latest[g.ID]; !ok || g.Timestamp.After(prev.Timestamp) {
+				latest[g.ID] = g
+			}
+		}
+		if len(latest) == 0 && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+			if len(sysStats) > 0 {
+				sys := sysStats[len(sysStats)-1]
+				latest[0] = perf.GpuStat{
+					ID:         0,
+					Name:       "Apple Silicon (unified)",
+					MemTotalMB: sys.MemTotalMB,
+					MemUsedMB:  sys.MemUsedMB,
+				}
+			}
+		}
+
+		ids := make([]int, 0, len(latest))
+		for id := range latest {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		gpuList := make([]map[string]any, 0, len(ids))
+		var vramTotalMB, vramUsedMB int
+		for _, id := range ids {
+			g := latest[id]
+			gpuList = append(gpuList, map[string]any{
+				"id":              g.ID,
+				"name":            g.Name,
+				"vram_total_mb":   g.MemTotalMB,
+				"vram_used_mb":    g.MemUsedMB,
+				"vram_free_mb":    g.MemTotalMB - g.MemUsedMB,
+				"utilization_pct": g.GpuUtilPct,
+				"temp_c":          g.TempC,
+				"power_draw_w":    g.PowerDrawW,
+			})
+			vramTotalMB += g.MemTotalMB
+			vramUsedMB += g.MemUsedMB
+		}
+		resp["gpus"] = gpuList
+		resp["vram"] = map[string]any{
+			"total_mb": vramTotalMB,
+			"used_mb":  vramUsedMB,
+			"free_mb":  vramTotalMB - vramUsedMB,
+		}
+	}
+
+	writeJSON(w, resp)
+}
+
+// handleAPIHardwareStorage implements GET /api/hardware/storage.
+// Returns disk usage for the models directory.
+func (s *Server) handleAPIHardwareStorage(w http.ResponseWriter, r *http.Request) {
+	dir := s.modelsDir()
+	if dir == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity,
+			"models directory unknown; set modelsDir in config or use --models-dir flag")
+		return
+	}
+	storageStats(w, r, dir)
+}
+
+// handleAPIHardwarePerformance implements GET /api/hardware/performance.
+// Returns buffered GPU/system time-series, optionally filtered by ?after=<RFC3339>.
+func (s *Server) handleAPIHardwarePerformance(w http.ResponseWriter, r *http.Request) {
+	if s.perf == nil {
+		router.SendResponse(w, r, http.StatusServiceUnavailable, "performance monitor not available")
+		return
+	}
+
+	sysStats, gpuStats := s.perf.Current()
+
+	if afterStr := r.URL.Query().Get("after"); afterStr != "" {
+		after, err := time.Parse(time.RFC3339, afterStr)
+		if err != nil {
+			router.SendResponse(w, r, http.StatusBadRequest, "invalid 'after' timestamp, use RFC3339 format")
+			return
+		}
+		filtered := sysStats[:0]
+		for _, st := range sysStats {
+			if st.Timestamp.After(after) {
+				filtered = append(filtered, st)
+			}
+		}
+		sysStats = filtered
+
+		filteredGpu := gpuStats[:0]
+		for _, g := range gpuStats {
+			if g.Timestamp.After(after) {
+				filteredGpu = append(filteredGpu, g)
+			}
+		}
+		gpuStats = filteredGpu
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"sys_stats": sysStats,
+		"gpu_stats": gpuStats,
+	})
+}
+
+// handleAPIHardwarePower implements GET /api/hardware/power.
+// Always returns 200; callers check the "available" field to discover HW support.
+func (s *Server) handleAPIHardwarePower(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.silentMode.GetState())
+}
+
+// handleAPIHardwarePowerSet implements PUT /api/hardware/power.
+// Body is optional: { "power_limit_pct": 65, "temp_target_celsius": 82 }
+// Returns 503 when GPU power control is unavailable, 500 on unexpected HW error.
+func (s *Server) handleAPIHardwarePowerSet(w http.ResponseWriter, r *http.Request) {
+	state := s.silentMode.GetState()
+	if !state.Available {
+		hardwareError(w, http.StatusServiceUnavailable, state.UnavailableReason)
+		return
+	}
+	profile := thermal.DefaultSilentProfile
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&profile)
+	}
+	if err := s.silentMode.Apply(profile); err != nil {
+		hardwareError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, s.silentMode.GetState())
+}
+
+// handleAPIHardwarePowerRestore implements DELETE /api/hardware/power.
+// Returns 503 when GPU power control is unavailable, 500 on unexpected HW error.
+func (s *Server) handleAPIHardwarePowerRestore(w http.ResponseWriter, r *http.Request) {
+	state := s.silentMode.GetState()
+	if !state.Available {
+		hardwareError(w, http.StatusServiceUnavailable, state.UnavailableReason)
+		return
+	}
+	if err := s.silentMode.Restore(); err != nil {
+		hardwareError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, s.silentMode.GetState())
+}
+
+func hardwareError(w http.ResponseWriter, status int, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"error": reason})
+}

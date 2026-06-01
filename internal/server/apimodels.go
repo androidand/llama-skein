@@ -11,9 +11,98 @@ import (
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
 
-// handleAPILoadModel warms a model by routing a minimal inference request
-// through the local router, causing the process to start and load weights.
-// POST /api/models/load/{model...}
+// handleAPIListModels implements GET /api/models.
+// Returns all configured models with runtime state, file metadata, and inferred
+// details. Filter to loaded models only with ?state=running.
+func (s *Server) handleAPIListModels(w http.ResponseWriter, r *http.Request) {
+	onlyRunning := r.URL.Query().Get("state") == "running"
+	ids := make([]string, 0, len(s.cfg.Models))
+	for id := range s.cfg.Models {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	entries := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		mc := s.cfg.Models[id]
+		state, loaded := s.modelState(id)
+		if onlyRunning && !loaded {
+			continue
+		}
+		entry := map[string]any{
+			"id":       id,
+			"object":   "model",
+			"state":    state,
+			"loaded":   loaded,
+			"unlisted": mc.Unlisted,
+		}
+		if name := strings.TrimSpace(mc.Name); name != "" {
+			entry["name"] = name
+		}
+		if desc := strings.TrimSpace(mc.Description); desc != "" {
+			entry["description"] = desc
+		}
+		if len(mc.Aliases) > 0 {
+			entry["aliases"] = mc.Aliases
+		}
+		addFileMeta(entry, mc)
+		filename := ""
+		if p := parseModelPath(mc.Cmd); p != "" {
+			filename = p[strings.LastIndexAny(p, "/\\")+1:]
+		}
+		entry["details"] = inferModelDetails(id, filename)
+		entries = append(entries, entry)
+	}
+
+	writeJSON(w, map[string]any{"models": entries})
+}
+
+// handleAPIGetModel implements GET /api/models/{model}.
+// Returns config, runtime state, file metadata, GGUF metadata, and inferred details.
+func (s *Server) handleAPIGetModel(w http.ResponseWriter, r *http.Request) {
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	realName, found := s.cfg.RealModelName(requested)
+	if !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	mc := s.cfg.Models[realName]
+	state, loaded := s.modelState(realName)
+
+	record := map[string]any{
+		"id":     realName,
+		"object": "model",
+		"state":  state,
+		"loaded": loaded,
+	}
+	if name := strings.TrimSpace(mc.Name); name != "" {
+		record["name"] = name
+	}
+	if desc := strings.TrimSpace(mc.Description); desc != "" {
+		record["description"] = desc
+	}
+	addFileMeta(record, mc)
+	filename := ""
+	if p := parseModelPath(mc.Cmd); p != "" {
+		filename = p[strings.LastIndexAny(p, "/\\")+1:]
+	}
+	record["details"] = inferModelDetails(realName, filename)
+	addModelRuntimeHints(record, mc)
+	addGGUFMetadata(record, mc)
+	if len(mc.Metadata) > 0 {
+		if metaMap, ok := record["meta"].(map[string]any); ok {
+			metaMap["llamaswap"] = mc.Metadata
+		} else {
+			record["meta"] = map[string]any{"llamaswap": mc.Metadata}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(record)
+}
+
+// handleAPILoadModel implements POST /api/models/load/{model}.
+// Warms a model by routing a minimal inference request through the local router.
 func (s *Server) handleAPILoadModel(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
 	realName, found := s.cfg.RealModelName(requested)
@@ -47,74 +136,8 @@ func (s *Server) handleAPILoadModel(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-// handleAPIGetModel returns the config and current runtime state for a single
-// model. GET /api/models/{model...}
-func (s *Server) handleAPIGetModel(w http.ResponseWriter, r *http.Request) {
-	requested := strings.TrimPrefix(r.PathValue("model"), "/")
-	realName, found := s.cfg.RealModelName(requested)
-	if !found {
-		router.SendResponse(w, r, http.StatusNotFound, "model not found")
-		return
-	}
-	mc := s.cfg.Models[realName]
-	state, loaded := s.modelState(realName)
-
-	record := map[string]any{
-		"id":     realName,
-		"object": "model",
-		"state":  state,
-		"loaded": loaded,
-	}
-	if name := strings.TrimSpace(mc.Name); name != "" {
-		record["name"] = name
-	}
-	if desc := strings.TrimSpace(mc.Description); desc != "" {
-		record["description"] = desc
-	}
-	addModelRuntimeHints(record, mc)
-	addGGUFMetadata(record, mc)
-	if len(mc.Metadata) > 0 {
-		if metaMap, ok := record["meta"].(map[string]any); ok {
-			metaMap["llamaswap"] = mc.Metadata
-		} else {
-			record["meta"] = map[string]any{"llamaswap": mc.Metadata}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(record)
-}
-
-// handleAPIPS returns only the models that are currently loaded (state==ready).
-// GET /api/ps
-func (s *Server) handleAPIPS(w http.ResponseWriter, r *http.Request) {
-	running := make([]map[string]any, 0)
-	for id, mc := range s.cfg.Models {
-		state, loaded := s.modelState(id)
-		if !loaded {
-			continue
-		}
-		name := strings.TrimSpace(mc.Name)
-		if name == "" {
-			name = id
-		}
-		running = append(running, map[string]any{
-			"name":  name,
-			"model": id,
-			"state": state,
-		})
-	}
-	sort.Slice(running, func(i, j int) bool {
-		return running[i]["model"].(string) < running[j]["model"].(string)
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"models": running})
-}
-
-// handleAPIDeleteModel unloads a model (if running) then deletes its weight
-// file from disk. Config entry is preserved.
-// DELETE /api/models/{model...}
+// handleAPIDeleteModel implements DELETE /api/models/{model}.
+// Unloads the model (if running) then deletes its weight file from disk.
 func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
 	realName, found := s.cfg.RealModelName(requested)
@@ -153,9 +176,8 @@ func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAPIContextRecommendation returns the recommended context window for
-// a model based on its GGUF metadata and available memory.
-// POST /api/models/context-recommendation/{model...}
+// handleAPIContextRecommendation implements GET /api/models/context/{model}.
+// Returns recommended context window based on GGUF metadata and available memory.
 func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
 	realName, found := s.cfg.RealModelName(requested)
@@ -210,7 +232,6 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 	}
 
 	modelFileGB := float64(g.WeightBytes()) / (1 << 30)
-
 	writeJSON(w, map[string]any{
 		"recommended": maxCtx,
 		"modelFileGB": modelFileGB,
@@ -219,19 +240,7 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 	})
 }
 
-// handleAPIStorage returns disk space for the models directory.
-// GET /api/storage
-func (s *Server) handleAPIStorage(w http.ResponseWriter, r *http.Request) {
-	dir := s.modelsDir()
-	if dir == "" {
-		router.SendResponse(w, r, http.StatusUnprocessableEntity,
-			"models directory unknown; set modelsDir in config or use --models-dir flag")
-		return
-	}
-	storageStats(w, r, dir)
-}
-
-// writeJSON is a tiny helper to encode JSON and set the content-type header.
+// writeJSON encodes v as JSON with the correct content-type header.
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
