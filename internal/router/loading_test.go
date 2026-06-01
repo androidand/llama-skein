@@ -19,7 +19,7 @@ func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 
 	if ct := lw.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type: want text/event-stream, got %q", ct)
@@ -50,7 +50,7 @@ func TestLoadingWriter_WriteHeaderOnce(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.WriteHeader(http.StatusCreated)
 
 	if w.Code != http.StatusOK {
@@ -63,7 +63,7 @@ func TestLoadingWriter_WritePassthrough(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.Write([]byte("hello"))
 	lw.Flush()
 
@@ -78,7 +78,7 @@ func TestLoadingWriter_StartStopsOnCancel(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.tickDuration = 10 * time.Millisecond
 	lw.loopStarted = make(chan struct{})
 
@@ -103,7 +103,7 @@ func TestLoadingWriter_StartShowsSetUpdate(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.tickDuration = 10 * time.Millisecond
 	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
@@ -132,7 +132,7 @@ func TestLoadingWriter_SendDataFormat(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.sendData("hello world")
 
 	body := w.Body.String()
@@ -149,7 +149,7 @@ func TestLoadingWriter_SendLine(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.charPerSecond = 0
 
 	// Capture only the content from this sendLine call
@@ -169,7 +169,7 @@ func TestLoadingWriter_FlushesPeriodicallyDuringStatusUpdates(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	lw.tickDuration = 10 * time.Millisecond
 	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
@@ -198,7 +198,7 @@ func TestLoadingWriter_ReqStored(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
 	if lw.req != req {
 		t.Fatal("req not stored")
 	}

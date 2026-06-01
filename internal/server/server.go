@@ -16,6 +16,7 @@ import (
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/thermal"
+	"github.com/androidand/llama-skein/pkg/api"
 )
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
@@ -287,20 +288,20 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
 
 	// Hardware — resources, storage, performance, GPU power.
-	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
-	mux.Handle("GET /api/hardware/storage", apiChain.ThenFunc(s.handleAPIHardwareStorage))
-	mux.Handle("GET /api/hardware/performance", apiChain.ThenFunc(s.handleAPIHardwarePerformance))
-	mux.Handle("GET /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePower))
-	mux.Handle("PUT /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePowerSet))
-	mux.Handle("DELETE /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
+	mux.Handle("GET "+api.RouteHardware, apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET "+api.RouteHardwareStorage, apiChain.ThenFunc(s.handleAPIHardwareStorage))
+	mux.Handle("GET "+api.RouteHardwarePerformance, apiChain.ThenFunc(s.handleAPIHardwarePerformance))
+	mux.Handle("GET "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePower))
+	mux.Handle("PUT "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerSet))
+	mux.Handle("DELETE "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
 
 	// System — version, capabilities, events, metrics, upgrade.
-	mux.Handle("GET /api/system/version", apiChain.ThenFunc(s.handleAPISystemVersion))
-	mux.Handle("GET /api/system/capabilities", apiChain.ThenFunc(s.handleAPISystemCapabilities))
-	mux.Handle("GET /api/system/events", apiChain.ThenFunc(s.handleAPISystemEvents))
-	mux.Handle("GET /api/system/metrics", apiChain.ThenFunc(s.handleAPISystemMetrics))
-	mux.Handle("GET /api/system/captures/{id}", apiChain.ThenFunc(s.handleAPISystemCaptures))
-	mux.Handle("POST /api/system/upgrade", apiChain.ThenFunc(s.handleAPISystemUpgrade))
+	mux.Handle("GET "+api.RouteSystemVersion, apiChain.ThenFunc(s.handleAPISystemVersion))
+	mux.Handle("GET "+api.RouteSystemCapabilities, apiChain.ThenFunc(s.handleAPISystemCapabilities))
+	mux.Handle("GET "+api.RouteSystemEvents, apiChain.ThenFunc(s.handleAPISystemEvents))
+	mux.Handle("GET "+api.RouteSystemMetrics, apiChain.ThenFunc(s.handleAPISystemMetrics))
+	mux.Handle("GET "+api.RouteSystemCaptures, apiChain.ThenFunc(s.handleAPISystemCaptures))
+	mux.Handle("POST "+api.RouteSystemUpgrade, apiChain.ThenFunc(s.handleAPISystemUpgrade))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

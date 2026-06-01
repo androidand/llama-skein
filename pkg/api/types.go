@@ -16,25 +16,25 @@ type Model struct {
 	Aliases     []string `json:"aliases,omitempty"`
 }
 
-// ResourceSnapshot is the response envelope for GET /api/resources.
+// ResourceSnapshot is the response envelope for GET /api/hardware.
 type ResourceSnapshot struct {
-	GPUs     []GPUSnapshot `json:"gpus,omitempty"`
-	VRAM     VRAMInfo      `json:"vram,omitempty"`
-	CPU      CPUInfo       `json:"cpu,omitempty"`
-	Memory   MemoryInfo    `json:"memory,omitempty"`
-	Storage  StorageInfo   `json:"storage,omitempty"`
+	GPUs    []GPUSnapshot `json:"gpus,omitempty"`
+	VRAM    VRAMInfo      `json:"vram,omitempty"`
+	CPU     CPUInfo       `json:"cpu,omitempty"`
+	Memory  MemoryInfo    `json:"memory,omitempty"`
+	Storage StorageInfo   `json:"storage,omitempty"`
 }
 
 // GPUSnapshot represents a single GPU's latest state.
 type GPUSnapshot struct {
-	ID            int     `json:"id"`
-	Name          string  `json:"name"`
-	VRAMTotalMB   int     `json:"vram_total_mb"`
-	VRAMUsedMB    int     `json:"vram_used_mb"`
-	VRAMFreeMB    int     `json:"vram_free_mb"`
+	ID             int     `json:"id"`
+	Name           string  `json:"name"`
+	VRAMTotalMB    int     `json:"vram_total_mb"`
+	VRAMUsedMB     int     `json:"vram_used_mb"`
+	VRAMFreeMB     int     `json:"vram_free_mb"`
 	UtilizationPct float64 `json:"utilization_pct"`
-	TempC         int     `json:"temp_c"`
-	PowerDrawW    float64 `json:"power_draw_w"`
+	TempC          int     `json:"temp_c"`
+	PowerDrawW     float64 `json:"power_draw_w"`
 }
 
 // VRAMInfo aggregates VRAM across all GPUs.
@@ -46,12 +46,12 @@ type VRAMInfo struct {
 
 // CPUInfo represents the latest CPU snapshot.
 type CPUInfo struct {
-	Cores        int       `json:"cores"`
-	UtilAvgPct   float64   `json:"util_avg_pct"`
-	UtilPerCore  []float64 `json:"util_per_core"`
-	LoadAvg1     float64   `json:"load_avg_1"`
-	LoadAvg5     float64   `json:"load_avg_5"`
-	LoadAvg15    float64   `json:"load_avg_15"`
+	Cores       int       `json:"cores"`
+	UtilAvgPct  float64   `json:"util_avg_pct"`
+	UtilPerCore []float64 `json:"util_per_core"`
+	LoadAvg1    float64   `json:"load_avg1"`
+	LoadAvg5    float64   `json:"load_avg5"`
+	LoadAvg15   float64   `json:"load_avg15"`
 }
 
 // MemoryInfo represents system memory state.
@@ -62,29 +62,29 @@ type MemoryInfo struct {
 	SwapTotal int     `json:"swap_total"`
 	SwapUsed  int     `json:"swap_used"`
 	Type      string  `json:"type"`
-	LoadAvg1  float64 `json:"load_avg_1"`
-	LoadAvg5  float64 `json:"load_avg_5"`
-	LoadAvg15 float64 `json:"load_avg_15"`
+	LoadAvg1  float64 `json:"load_avg1"`
+	LoadAvg5  float64 `json:"load_avg5"`
+	LoadAvg15 float64 `json:"load_avg15"`
 }
 
 // StorageInfo represents disk storage for models directory.
 type StorageInfo struct {
-	TotalBytes uint64 `json:"total_bytes"`
-	UsedBytes  uint64 `json:"used_bytes"`
-	FreeBytes  uint64 `json:"free_bytes"`
-	ModelsDir  string `json:"models_dir"`
+	TotalBytes     uint64 `json:"total_bytes"`
+	UsedBytes      uint64 `json:"used_bytes"`
+	AvailableBytes uint64 `json:"available_bytes"`
+	ModelsDir      string `json:"models_dir"`
 }
 
-// VersionInfo represents GET /api/version response.
+// VersionInfo represents GET /api/system/version response.
 type VersionInfo struct {
-	Version        string             `json:"version"`
-	Commit         string             `json:"commit"`
-	BuildDate      string             `json:"build_date"`
-	LlamaCppBuild  string             `json:"llama_cpp_build"`
-	LlamaCppGit    string             `json:"llama_cpp_git"`
-	LlamaCppDate   string             `json:"llama_cpp_date"`
-	BuildFeatures  []string           `json:"build_features"`
-	Runtime        ginH               `json:"runtime"`
+	Version       string   `json:"version"`
+	Commit        string   `json:"commit"`
+	BuildDate     string   `json:"build_date"`
+	LlamaCppBuild string   `json:"llama_cpp_build"`
+	LlamaCppGit   string   `json:"llama_cpp_git"`
+	LlamaCppDate  string   `json:"llama_cpp_date"`
+	BuildFeatures []string `json:"build_features"`
+	Runtime       ginH     `json:"runtime"`
 }
 
 // ginH is a minimal map type to avoid importing gin.
@@ -108,20 +108,20 @@ type PullProgress struct {
 
 // ModelLoadError represents a model loading failure.
 type ModelLoadError struct {
-	Code          string    `json:"code"`
-	Message       string    `json:"message"`
-	UpstreamError string    `json:"upstream_error"`
-	ExitHint      string    `json:"exit_hint"`
-	When          string    `json:"at"`
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	UpstreamError string `json:"upstream_error"`
+	ExitHint      string `json:"exit_hint"`
+	When          string `json:"at"`
 }
 
 // ActivityLogEntry represents a metrics/activity log entry.
 type ActivityLogEntry struct {
-	Timestamp   time.Time `json:"timestamp"`
-	Model       string    `json:"model"`
-	DurationMs  float64   `json:"duration_ms"`
-	Tokens      int       `json:"tokens"`
-	TokensPerSec float64  `json:"tokens_per_second"`
+	Timestamp    time.Time `json:"timestamp"`
+	Model        string    `json:"model"`
+	DurationMs   float64   `json:"duration_ms"`
+	Tokens       int       `json:"tokens"`
+	TokensPerSec float64   `json:"tokens_per_second"`
 }
 
 // MetricsSnapshot is the response for GET /api/metrics.
@@ -137,25 +137,25 @@ type ConfigInfo struct {
 
 // ModelConfigResponse represents GET /api/config/models/:id.
 type ModelConfigResponse struct {
-	ModelID     string           `json:"id"`
-	Config      ModelConfig      `json:"config"`
+	ModelID string      `json:"id"`
+	Config  ModelConfig `json:"config"`
 }
 
 // ModelConfig is the public-facing model configuration.
 type ModelConfig struct {
-	Cmd              string           `yaml:"cmd" json:"cmd"`
-	CmdStop          string           `yaml:"cmdStop" json:"cmdStop"`
-	Proxy            string           `yaml:"proxy" json:"proxy"`
-	Aliases          []string         `yaml:"aliases" json:"aliases"`
-	Env              []string         `yaml:"env" json:"env"`
-	CheckEndpoint    string           `yaml:"checkEndpoint" json:"checkEndpoint"`
-	UnloadAfter      int              `yaml:"ttl" json:"ttl"`
-	Unlisted         bool             `yaml:"unlisted" json:"unlisted"`
-	UseModelName     string           `yaml:"useModelName" json:"useModelName"`
-	Name             string           `yaml:"name" json:"name"`
-	Description      string           `yaml:"description" json:"description"`
-	ConcurrencyLimit int              `yaml:"concurrencyLimit" json:"concurrencyLimit"`
-	Metadata         map[string]any   `yaml:"metadata" json:"metadata"`
+	Cmd              string         `yaml:"cmd" json:"cmd"`
+	CmdStop          string         `yaml:"cmdStop" json:"cmdStop"`
+	Proxy            string         `yaml:"proxy" json:"proxy"`
+	Aliases          []string       `yaml:"aliases" json:"aliases"`
+	Env              []string       `yaml:"env" json:"env"`
+	CheckEndpoint    string         `yaml:"checkEndpoint" json:"checkEndpoint"`
+	UnloadAfter      int            `yaml:"ttl" json:"ttl"`
+	Unlisted         bool           `yaml:"unlisted" json:"unlisted"`
+	UseModelName     string         `yaml:"useModelName" json:"useModelName"`
+	Name             string         `yaml:"name" json:"name"`
+	Description      string         `yaml:"description" json:"description"`
+	ConcurrencyLimit int            `yaml:"concurrencyLimit" json:"concurrencyLimit"`
+	Metadata         map[string]any `yaml:"metadata" json:"metadata"`
 }
 
 // LlamaCppBuildInfo carries llama.cpp build metadata from the fork's ldflags injection.

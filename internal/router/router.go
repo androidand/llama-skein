@@ -25,6 +25,7 @@ type ReqContextData struct {
 	ModelID          string
 	Streaming        bool
 	SendLoadingState bool
+	LoadingTheme     LoadingTheme
 }
 
 var (
@@ -91,6 +92,7 @@ func FetchContext(r *http.Request, cfg config.Config) (ReqContextData, error) {
 		if mc, ok := cfg.Models[realName]; ok {
 			data.SendLoadingState = mc.SendLoadingState != nil && *mc.SendLoadingState
 		}
+		data.LoadingTheme = LoadingTheme(r.Header.Get("X-Loading-Theme"))
 		*r = *r.WithContext(SetContext(r.Context(), data))
 		return data, nil
 	}

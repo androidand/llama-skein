@@ -33,6 +33,7 @@ type loadingWriter struct {
 	ctx        context.Context
 	logger     *logmon.Monitor
 	modelName  string
+	theme      LoadingTheme
 	startTime  time.Time
 
 	pendingMu     sync.Mutex
@@ -56,13 +57,14 @@ type loadingWriter struct {
 	charPerSecond float64
 }
 
-func newLoadingWriter(logger *logmon.Monitor, modelName string, w http.ResponseWriter, req *http.Request) *loadingWriter {
+func newLoadingWriter(logger *logmon.Monitor, modelName string, theme LoadingTheme, w http.ResponseWriter, req *http.Request) *loadingWriter {
 	s := &loadingWriter{
 		writer:        w,
 		req:           req,
 		ctx:           req.Context(),
 		logger:        logger,
 		modelName:     modelName,
+		theme:         theme,
 		startTime:     time.Now(),
 		tickDuration:  750 * time.Millisecond,
 		charPerSecond: 75,
@@ -100,8 +102,9 @@ func (s *loadingWriter) start(ctx context.Context) {
 		s.sendLine(" ")
 	}()
 
-	remarks := make([]string, len(loadingRemarks))
-	copy(remarks, loadingRemarks)
+	src := resolveThemeRemarks(s.theme)
+	remarks := make([]string, len(src))
+	copy(remarks, src)
 	rand.Shuffle(len(remarks), func(i, j int) {
 		remarks[i], remarks[j] = remarks[j], remarks[i]
 	})

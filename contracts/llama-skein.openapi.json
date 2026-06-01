@@ -1,0 +1,332 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "llama-skein control API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/system/version": {
+      "get": {
+        "operationId": "getSystemVersion",
+        "responses": {
+          "200": {
+            "description": "Build and runtime version metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system/capabilities": {
+      "get": {
+        "operationId": "getSystemCapabilities",
+        "responses": {
+          "200": {
+            "description": "Supported control-plane feature flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hardware": {
+      "get": {
+        "operationId": "getHardware",
+        "responses": {
+          "200": {
+            "description": "Point-in-time hardware resource snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible model list enriched with llama-skein metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Capabilities": {
+        "type": "object",
+        "required": ["version", "features"],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VersionInfo": {
+        "type": "object",
+        "required": ["version", "commit", "build_date", "runtime"],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "build_date": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "llama_cpp_build": {
+            "type": "string"
+          },
+          "llama_cpp_git": {
+            "type": "string"
+          },
+          "llama_cpp_date": {
+            "type": "string"
+          },
+          "build_features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "platform": {
+            "type": "string"
+          },
+          "metal": {
+            "type": "boolean"
+          },
+          "rocm_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ResourceSnapshot": {
+        "type": "object",
+        "properties": {
+          "storage": {
+            "$ref": "#/components/schemas/StorageInfo"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryInfo"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/CPUInfo"
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUSnapshot"
+            }
+          },
+          "vram": {
+            "$ref": "#/components/schemas/VRAMInfo"
+          }
+        }
+      },
+      "StorageInfo": {
+        "type": "object",
+        "properties": {
+          "models_dir": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer"
+          },
+          "used_bytes": {
+            "type": "integer"
+          },
+          "available_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "MemoryInfo": {
+        "type": "object",
+        "properties": {
+          "total_mb": {
+            "type": "integer"
+          },
+          "used_mb": {
+            "type": "integer"
+          },
+          "free_mb": {
+            "type": "integer"
+          },
+          "swap_total": {
+            "type": "integer"
+          },
+          "swap_used": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "load_avg1": {
+            "type": "number"
+          },
+          "load_avg5": {
+            "type": "number"
+          },
+          "load_avg15": {
+            "type": "number"
+          }
+        }
+      },
+      "CPUInfo": {
+        "type": "object",
+        "properties": {
+          "cores": {
+            "type": "integer"
+          },
+          "util_avg_pct": {
+            "type": "number"
+          },
+          "util_per_core": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "load_avg1": {
+            "type": "number"
+          },
+          "load_avg5": {
+            "type": "number"
+          },
+          "load_avg15": {
+            "type": "number"
+          }
+        }
+      },
+      "GPUSnapshot": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "vram_total_mb": {
+            "type": "integer"
+          },
+          "vram_used_mb": {
+            "type": "integer"
+          },
+          "vram_free_mb": {
+            "type": "integer"
+          },
+          "utilization_pct": {
+            "type": "number"
+          },
+          "temp_c": {
+            "type": "integer"
+          },
+          "power_draw_w": {
+            "type": "number"
+          }
+        }
+      },
+      "VRAMInfo": {
+        "type": "object",
+        "properties": {
+          "total_mb": {
+            "type": "integer"
+          },
+          "used_mb": {
+            "type": "integer"
+          },
+          "free_mb": {
+            "type": "integer"
+          }
+        }
+      },
+      "ModelList": {
+        "type": "object",
+        "required": ["object", "data"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": ["list"]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Model"
+            }
+          }
+        }
+      },
+      "Model": {
+        "type": "object",
+        "required": ["id", "object"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "owned_by": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "loaded": {
+            "type": "boolean"
+          },
+          "context_length": {
+            "type": "integer"
+          },
+          "max_output_tokens": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

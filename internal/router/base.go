@@ -752,7 +752,7 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if shouldShowLoading {
 		var swapCtx context.Context
 		swapCtx, cancelLoad = context.WithCancel(req.Context())
-		lw = newLoadingWriter(b.logger, data.ModelID, w, req)
+		lw = newLoadingWriter(b.logger, data.ModelID, data.LoadingTheme, w, req)
 		go lw.start(swapCtx)
 		go func() {
 			for {
