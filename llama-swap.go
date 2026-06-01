@@ -15,14 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/perf"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/server"
-	"github.com/mostlygeek/llama-swap/internal/shared"
-	"github.com/mostlygeek/llama-swap/internal/watcher"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/process"
+	"github.com/androidand/llama-skein/internal/server"
+	"github.com/androidand/llama-skein/internal/shared"
+	"github.com/androidand/llama-skein/internal/watcher"
 )
 
 var (

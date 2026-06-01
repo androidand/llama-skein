@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/androidand/llama-skein/internal/config"
 )
 
 func TestPatchCommandFlags(t *testing.T) {

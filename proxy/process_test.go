@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -509,7 +509,7 @@ func TestProcess_EnvironmentSetCorrectly(t *testing.T) {
 // can't copy the body. This can be caused by a client disconnecting before the full
 // response is sent from some reason.
 //
-// bug: https://github.com/mostlygeek/llama-swap/issues/362
+// bug: https://github.com/androidand/llama-skein/issues/362
 // see: https://github.com/golang/go/issues/23643 (where panic was added to httputil.ReverseProxy)
 func TestProcess_ReverseProxyPanicIsHandled(t *testing.T) {
 	// Add defer/recover to catch any panics that aren't handled by ProxyRequest

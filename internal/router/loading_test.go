@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/androidand/llama-skein/internal/logmon"
 )
 
 func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {

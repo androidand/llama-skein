@@ -5,9 +5,9 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/router"
+	"github.com/androidand/llama-skein/internal/chain"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/router"
 )
 
 // defaultConcurrencyLimit caps simultaneous in-flight requests per model when

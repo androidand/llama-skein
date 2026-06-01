@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/androidand/llama-skein/internal/config"
 )
 
 func TestServer_HandleListModels(t *testing.T) {

@@ -3,7 +3,7 @@ package proxy
 import (
 	"net/http"
 
-	"github.com/mostlygeek/llama-swap/internal/thermal"
+	"github.com/androidand/llama-skein/internal/thermal"
 	"github.com/gin-gonic/gin"
 )
 

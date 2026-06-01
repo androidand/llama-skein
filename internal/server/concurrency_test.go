@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/router"
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/router"
 )
 
 func concurrencyTestReq(model string) *http.Request {

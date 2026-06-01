@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/androidand/llama-skein/internal/logmon"
 )
 
 func TestServer_CaptureCompressRoundtrip(t *testing.T) {
