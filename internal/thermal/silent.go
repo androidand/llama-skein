@@ -72,17 +72,19 @@ func (m *Manager) probeAvailability() {
 		}
 	}
 
-	// Fallback: rocm-smi with write capability.
+	// Fallback: rocm-smi — probe write capability, not just presence.
 	if _, err := exec.LookPath("rocm-smi"); err == nil {
-		out, err := exec.Command("rocm-smi", "--showpower").Output()
-		if err == nil && len(out) > 5 {
+		// --setpoweroverdrive 0 is a no-op value; a successful run (exit 0 and
+		// no "Unable to parse" in output) confirms write access works.
+		out, err := exec.Command("rocm-smi", "--setpoweroverdrive", "0").CombinedOutput()
+		if err == nil && !strings.Contains(string(out), "Unable to parse") {
 			m.available = true
 			return
 		}
 	}
 
 	m.available = false
-	m.unavailableReason = "no AMD GPU power control (sysfs hwmon not writable, rocm-smi not found or no GPU)"
+	m.unavailableReason = "no AMD GPU power control (sysfs hwmon not writable, rocm-smi not found or power cap unsupported)"
 }
 
 // Apply enables silent mode. Safe to call when already active — updates profile.
@@ -97,18 +99,24 @@ func (m *Manager) Apply(profile Profile) error {
 	}
 
 	if profile.PowerLimitPct > 0 && profile.PowerLimitPct < 100 {
-		defaultCap, err := readPowerCapMicrowatts("power1_cap_default")
-		if err == nil && defaultCap > 0 {
+		defaultCap, sysfsErr := readPowerCapMicrowatts("power1_cap_default")
+		if sysfsErr == nil && defaultCap > 0 {
+			// sysfs path available — use it.
 			if !m.active {
 				m.origCapMicrowatts = defaultCap
 			}
 			target := int64(float64(defaultCap) * float64(profile.PowerLimitPct) / 100.0)
 			if werr := writePowerCap(target); werr != nil {
-				// sysfs failed — try rocm-smi
+				// sysfs write failed — try rocm-smi.
 				watts := int(float64(defaultCap/1_000_000) * float64(profile.PowerLimitPct) / 100.0)
 				if rocmErr := rocmSetPower(watts); rocmErr != nil {
 					return fmt.Errorf("power cap failed: sysfs=%v rocm-smi=%v", werr, rocmErr)
 				}
+			}
+		} else {
+			// No sysfs — try rocm-smi directly.
+			if rocmErr := rocmSetPower(profile.PowerLimitPct); rocmErr != nil {
+				return fmt.Errorf("power cap failed: sysfs unavailable, rocm-smi=%v", rocmErr)
 			}
 		}
 	}
