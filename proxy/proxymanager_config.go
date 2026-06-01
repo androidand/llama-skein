@@ -29,16 +29,22 @@ type configModelRequest struct {
 
 // configModelPatchRequest is the body for PATCH /api/config/models/:id.
 type configModelPatchRequest struct {
-	Cmd         *string        `json:"cmd"`
-	Name        *string        `json:"name"`
-	Description *string        `json:"description"`
-	Aliases     *[]string      `json:"aliases"`
-	TTL         *int           `json:"ttl"`
-	CtxSize     *int           `json:"ctx_size"`
-	CtxSizeDash *int           `json:"ctx-size"`
-	NGPULayers  *int           `json:"n_gpu_layers"`
-	NGPUDash    *int           `json:"n-gpu-layers"`
-	Flags       map[string]any `json:"flags"`
+	Cmd                   *string        `json:"cmd"`
+	Name                  *string        `json:"name"`
+	Description           *string        `json:"description"`
+	Aliases               *[]string      `json:"aliases"`
+	TTL                   *int           `json:"ttl"`
+	ConcurrencyLimit      *int           `json:"concurrencyLimit"`
+	ConcurrencyLimitSnake *int           `json:"concurrency_limit"`
+	CtxSize               *int           `json:"ctx_size"`
+	CtxSizeDash           *int           `json:"ctx-size"`
+	NGPULayers            *int           `json:"n_gpu_layers"`
+	NGPUDash              *int           `json:"n-gpu-layers"`
+	CacheTypeK            *string        `json:"cache_type_k"`
+	CacheTypeKDash        *string        `json:"cache-type-k"`
+	CacheTypeV            *string        `json:"cache_type_v"`
+	CacheTypeVDash        *string        `json:"cache-type-v"`
+	Flags                 map[string]any `json:"flags"`
 }
 
 // configGroupPatchRequest is the body for PATCH /api/config/groups/:id.
@@ -141,6 +147,49 @@ func (pm *ProxyManager) apiConfigPatchModel(c *gin.Context) {
 	pm.triggerReload()
 	c.JSON(http.StatusOK, gin.H{"id": realID, "status": "updated"})
 }
+
+
+// apiConfigGetModel implements GET /api/config/models/:id.
+func (pm *ProxyManager) apiConfigGetModel(c *gin.Context) {
+	id := c.Param("id")
+	realID, found := pm.config.RealModelName(id)
+	if !found {
+		pm.sendErrorResponse(c, http.StatusNotFound, "model not found in config")
+		return
+	}
+	mc := pm.config.Models[realID]
+
+	flags := map[string]string{}
+	if parts, err := config.SanitizeCommand(mc.Cmd); err == nil {
+		for i := 1; i < len(parts); i++ {
+			if !strings.HasPrefix(parts[i], "--") {
+				continue
+			}
+			if i+1 < len(parts) && !strings.HasPrefix(parts[i+1], "--") {
+				flags[parts[i]] = parts[i+1]
+				i++
+			} else {
+				flags[parts[i]] = "true"
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":               realID,
+		"cmd":              mc.Cmd,
+		"name":             mc.Name,
+		"description":      mc.Description,
+		"aliases":          mc.Aliases,
+		"ttl":              mc.UnloadAfter,
+		"concurrencyLimit": mc.ConcurrencyLimit,
+		"ctx_size":         flags["--ctx-size"],
+		"n_gpu_layers":     flags["--n-gpu-layers"],
+		"cache_type_k":     flags["--cache-type-k"],
+		"cache_type_v":     flags["--cache-type-v"],
+		"flags":            flags,
+	})
+}
+
 
 // apiConfigRemoveModel implements DELETE /api/config/models/:id.
 // Removes the model entry from the config YAML without touching the file on disk.
@@ -246,6 +295,9 @@ func (pm *ProxyManager) writeModelToConfig(id string, mc *config.ModelConfig) er
 	if mc.UnloadAfter != config.MODEL_CONFIG_DEFAULT_TTL {
 		yamlMapSet(entry, "ttl", yamlInt(mc.UnloadAfter))
 	}
+	if mc.ConcurrencyLimit != 0 {
+		yamlMapSet(entry, "concurrencyLimit", yamlInt(mc.ConcurrencyLimit))
+	}
 	yamlMapSet(modelsNode, id, entry)
 
 	return writeYAMLRoot(pm.configFile, root, 0o644)
@@ -289,8 +341,20 @@ func (pm *ProxyManager) patchModelInConfig(id string, req configModelPatchReques
 	if req.TTL != nil {
 		yamlMapSet(entryNode, "ttl", yamlInt(*req.TTL))
 	}
+	if req.ConcurrencyLimit != nil {
+		if *req.ConcurrencyLimit < 0 {
+			return fmt.Errorf("concurrencyLimit must be >= 0")
+		}
+		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimit))
+	}
+	if req.ConcurrencyLimitSnake != nil {
+		if *req.ConcurrencyLimitSnake < 0 {
+			return fmt.Errorf("concurrency_limit must be >= 0")
+		}
+		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimitSnake))
+	}
 
-	flags := make(map[string]string, len(req.Flags)+2)
+	flags := make(map[string]string, len(req.Flags)+6)
 	for k, v := range req.Flags {
 		flags[normalizeCmdFlag(k)] = flagValueString(v)
 	}
@@ -305,6 +369,18 @@ func (pm *ProxyManager) patchModelInConfig(id string, req configModelPatchReques
 	}
 	if req.NGPUDash != nil {
 		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPUDash)
+	}
+	if req.CacheTypeK != nil {
+		flags["--cache-type-k"] = *req.CacheTypeK
+	}
+	if req.CacheTypeKDash != nil {
+		flags["--cache-type-k"] = *req.CacheTypeKDash
+	}
+	if req.CacheTypeV != nil {
+		flags["--cache-type-v"] = *req.CacheTypeV
+	}
+	if req.CacheTypeVDash != nil {
+		flags["--cache-type-v"] = *req.CacheTypeVDash
 	}
 	if len(flags) > 0 {
 		cmd := ""

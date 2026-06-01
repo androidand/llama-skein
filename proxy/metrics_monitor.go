@@ -273,19 +273,25 @@ func (mp *metricsMonitor) wrapHandler(
 	captureFields captureFields,
 	next func(modelID string, w http.ResponseWriter, r *http.Request) error,
 ) error {
-	// Capture request body and headers if captures enabled
+	// Read request body to check for stream_options.include_usage and for captures
 	var reqBody []byte
 	var reqHeaders map[string]string
-	if mp.enableCaptures && (captureFields&captureReqBody) != 0 {
-		if request.Body != nil {
-			var err error
-			reqBody, err = io.ReadAll(request.Body)
-			if err != nil {
-				return fmt.Errorf("failed to read request body for capture: %w", err)
-			}
-			request.Body.Close()
-			request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
+	var includeUsage bool
+	if request.Body != nil {
+		var err error
+		reqBody, err = io.ReadAll(request.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read request body: %w", err)
 		}
+		request.Body.Close()
+
+		// Check for stream_options.include_usage in the request body
+		if gjson.ValidBytes(reqBody) {
+			so := gjson.ParseBytes(reqBody).Get("stream_options.include_usage")
+			includeUsage = so.Bool()
+		}
+
+		request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
 	}
 	if mp.enableCaptures && (captureFields&captureReqHeaders) != 0 {
 		reqHeaders = make(map[string]string)
@@ -297,38 +303,81 @@ func (mp *metricsMonitor) wrapHandler(
 		redactHeaders(reqHeaders)
 	}
 
-	recorder := newBodyCopier(writer)
+	// For SSE streaming with include_usage, buffer the response so we can
+	// inject usage data if the upstream model doesn't provide it
+	isSSE := strings.Contains(request.URL.Path, "chat/completions") && includeUsage
+	var recorder *responseBodyCopier
+	var sseBuffer *sseBufferedWriter
+	if isSSE {
+		sseBuffer = newSSEBufferedWriter(writer)
+	} else {
+		recorder = newBodyCopier(writer)
+	}
 
 	// Filter Accept-Encoding to only include encodings we can decompress for metrics
 	if ae := request.Header.Get("Accept-Encoding"); ae != "" {
 		request.Header.Set("Accept-Encoding", filterAcceptEncoding(ae))
 	}
 
-	if err := next(modelID, recorder, request); err != nil {
+	var handlerWriter http.ResponseWriter
+	if sseBuffer != nil {
+		handlerWriter = sseBuffer
+	} else {
+		handlerWriter = recorder
+	}
+
+	if err := next(modelID, handlerWriter, request); err != nil {
 		return err
 	}
 
 	// after this point we have to assume that data was sent to the client
 	// and we can only log errors but not send them to clients
 
+	// For SSE buffered responses, inject usage if missing and flush to client
+	if sseBuffer != nil {
+		body := sseBuffer.body.Bytes()
+		body = injectUsageIfNeeded(body, mp.logger)
+		if err := sseBuffer.FlushBuffer(); err != nil {
+			mp.logger.Warnf("failed to flush SSE buffered response: %v", err)
+		}
+	}
+
 	// Initialize default metrics - recorded for every request
+	var respContentType string
+	var respStatusCode int
+	var startTime time.Time
+	if sseBuffer != nil {
+		respContentType = sseBuffer.Header().Get("Content-Type")
+		respStatusCode = sseBuffer.statusCode
+		startTime = sseBuffer.StartTime()
+	} else {
+		respContentType = recorder.Header().Get("Content-Type")
+		respStatusCode = recorder.Status()
+		startTime = recorder.StartTime()
+	}
+
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
 		ReqPath:         request.URL.Path,
-		RespContentType: recorder.Header().Get("Content-Type"),
-		RespStatusCode:  recorder.Status(),
-		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
+		RespContentType: respContentType,
+		RespStatusCode:  respStatusCode,
+		DurationMs:      int(time.Since(startTime).Milliseconds()),
 	}
 
-	if recorder.Status() != http.StatusOK {
-		mp.logger.Warnf("non-200 response, recording partial metrics: status=%d, path=%s", recorder.Status(), request.URL.Path)
+	if respStatusCode != http.StatusOK {
+		mp.logger.Warnf("non-200 response, recording partial metrics: status=%d, path=%s", respStatusCode, request.URL.Path)
 		tm.ID = mp.queueMetrics(tm)
 		mp.emitMetric(tm)
 		return nil
 	}
 
-	body := recorder.body.Bytes()
+	var body []byte
+	if sseBuffer != nil {
+		body = sseBuffer.body.Bytes()
+	} else {
+		body = recorder.body.Bytes()
+	}
 	if len(body) == 0 {
 		mp.logger.Warn("metrics: empty body, recording minimal metrics")
 		tm.ID = mp.queueMetrics(tm)
@@ -337,7 +386,13 @@ func (mp *metricsMonitor) wrapHandler(
 	}
 
 	// Decompress if needed
-	if encoding := recorder.Header().Get("Content-Encoding"); encoding != "" {
+	var respHeader http.Header
+	if sseBuffer != nil {
+		respHeader = sseBuffer.Header()
+	} else {
+		respHeader = recorder.Header()
+	}
+	if encoding := respHeader.Get("Content-Encoding"); encoding != "" {
 		var err error
 		body, err = decompressBody(body, encoding)
 		if err != nil {
@@ -347,8 +402,8 @@ func (mp *metricsMonitor) wrapHandler(
 			return nil
 		}
 	}
-	if strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") {
-		if parsed, err := processStreamingResponse(modelID, recorder.StartTime(), body); err != nil {
+	if strings.Contains(respHeader.Get("Content-Type"), "text/event-stream") {
+		if parsed, err := processStreamingResponse(modelID, startTime, body); err != nil {
 			mp.logger.Warnf("error processing streaming response: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 		} else {
 			tm.Tokens = parsed.Tokens
@@ -369,7 +424,7 @@ func (mp *metricsMonitor) wrapHandler(
 			}
 
 			if usage.Exists() || timings.Exists() {
-				if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings); err != nil {
+				if parsedMetrics, err := parseMetrics(modelID, startTime, usage, timings); err != nil {
 					mp.logger.Warnf("error parsing metrics: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 				} else {
 					tm.Tokens = parsedMetrics.Tokens
@@ -388,7 +443,13 @@ func (mp *metricsMonitor) wrapHandler(
 		var respBody []byte
 		if (captureFields & captureRespHeaders) != 0 {
 			respHeaders = make(map[string]string)
-			for key, values := range recorder.Header() {
+			var hdr http.Header
+			if sseBuffer != nil {
+				hdr = sseBuffer.Header()
+			} else {
+				hdr = recorder.Header()
+			}
+			for key, values := range hdr {
 				if len(values) > 0 {
 					respHeaders[key] = values[0]
 				}
@@ -634,6 +695,214 @@ func newBodyCopier(w gin.ResponseWriter) *responseBodyCopier {
 
 func (w *responseBodyCopier) Write(b []byte) (int, error) {
 	return w.tee.Write(b)
+}
+
+// sseBufferedWriter buffers the entire SSE response before writing to the client.
+// Used when stream_options.include_usage is requested but the upstream model
+// may not include usage in the final chunk — we inject it after buffering.
+type sseBufferedWriter struct {
+	gin.ResponseWriter
+	body  *bytes.Buffer
+	start time.Time
+	wroteHeader bool
+	statusCode  int
+}
+
+func newSSEBufferedWriter(w gin.ResponseWriter) *sseBufferedWriter {
+	return &sseBufferedWriter{
+		ResponseWriter: w,
+		body:           &bytes.Buffer{},
+		start:          time.Now(),
+		statusCode:     http.StatusOK,
+	}
+}
+
+func (w *sseBufferedWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(w.statusCode)
+	}
+	return w.body.Write(b)
+}
+
+func (w *sseBufferedWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.wroteHeader = true
+}
+
+func (w *sseBufferedWriter) Header() http.Header {
+	return w.ResponseWriter.Header()
+}
+
+func (w *sseBufferedWriter) StartTime() time.Time {
+	return w.start
+}
+
+// FlushBuffer writes the buffered content to the original client.
+func (w *sseBufferedWriter) FlushBuffer() error {
+	if !w.wroteHeader {
+		w.ResponseWriter.WriteHeader(w.statusCode)
+	}
+	_, err := w.ResponseWriter.Write(w.body.Bytes())
+	return err
+}
+
+// injectUsageIfNeeded parses the buffered SSE response and injects a usage
+// event into the final data chunk if the upstream model did not include one.
+// This handles the case where stream_options.include_usage is requested but
+// the upstream llama-server ignores the flag.
+func injectUsageIfNeeded(body []byte, logger *logmon.Monitor) []byte {
+	// Find the last SSE data line with valid JSON (excluding [DONE])
+	lastDataLineStart := -1
+	var finalChunk []byte
+	pos := len(body)
+	for pos > 0 {
+		lineStart := bytes.LastIndexByte(body[:pos], '\n')
+		if lineStart == -1 {
+			lineStart = 0
+		} else {
+			lineStart++
+		}
+
+		line := bytes.TrimSpace(body[lineStart:pos])
+		pos = lineStart - 1
+
+		if len(line) == 0 {
+			continue
+		}
+
+		prefix := []byte("data:")
+		if !bytes.HasPrefix(line, prefix) {
+			continue
+		}
+
+		data := bytes.TrimSpace(line[len(prefix):])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+
+		if gjson.ValidBytes(data) {
+			lastDataLineStart = lineStart
+			finalChunk = data
+			break
+		}
+	}
+
+	if lastDataLineStart == -1 || len(finalChunk) == 0 {
+		return body
+	}
+
+	parsed := gjson.ParseBytes(finalChunk)
+	usage := parsed.Get("usage")
+	if usage.Exists() {
+		return body // upstream already included usage
+	}
+
+	// Extract token counts from the final chunk or timings
+	// llama.cpp may include timings in the response
+	timings := parsed.Get("timings")
+	if !timings.Exists() {
+		// No usage and no timings — can't inject, return as-is
+		logger.Warn("SSE final chunk has no usage or timings; skipping usage injection")
+		return body
+	}
+
+	// Build usage from timings data
+	inputTokens := int(timings.Get("prompt_n").Int())
+	outputTokens := int(timings.Get("predicted_n").Int())
+	totalTokens := inputTokens + outputTokens
+
+	// If prompt_tokens or completion_tokens exist directly, prefer those
+	if pt := parsed.Get("prompt_tokens"); pt.Exists() {
+		inputTokens = int(pt.Int())
+	}
+	if ct := parsed.Get("completion_tokens"); ct.Exists() {
+		outputTokens = int(ct.Int())
+	}
+	if tt := parsed.Get("total_tokens"); tt.Exists() {
+		totalTokens = int(tt.Int())
+	}
+
+	if inputTokens == 0 && outputTokens == 0 {
+		logger.Warn("SSE timings yielded zero tokens; skipping usage injection")
+		return body
+	}
+
+	// Inject usage into the final JSON chunk
+	var finalObj map[string]interface{}
+	if err := json.Unmarshal(finalChunk, &finalObj); err != nil {
+		logger.Warnf("failed to parse final SSE chunk for usage injection: %v", err)
+		return body
+	}
+
+	finalObj["usage"] = map[string]int{
+		"prompt_tokens":    inputTokens,
+		"completion_tokens": outputTokens,
+		"total_tokens":     totalTokens,
+	}
+
+	modifiedChunk, err := json.Marshal(finalObj)
+	if err != nil {
+		logger.Warnf("failed to marshal final SSE chunk with usage: %v", err)
+		return body
+	}
+
+	// Replace the last data event line in the body
+	// Find the end of the last data event line (next double newline or end of body)
+	dataLine := body[lastDataLineStart:]
+	endOfLine := bytes.Index(dataLine, []byte("\n\n"))
+	if endOfLine == -1 {
+		// No double newline — use the first single newline, or end of body
+		endOfLine = bytes.IndexByte(dataLine, '\n')
+		if endOfLine == -1 {
+			endOfLine = len(dataLine)
+		}
+	}
+
+	beforeData := body[:lastDataLineStart]
+	afterData := body[lastDataLineStart+endOfLine:]
+
+	result := append(beforeData, []byte("data: ")...)
+	result = append(result, modifiedChunk...)
+	result = append(result, '\n', '\n')
+	result = append(result, afterData...)
+
+	return result
+}
+
+// extractFinalSSEChunk finds the last SSE data event in the body that contains
+// valid JSON (excluding [DONE]), and returns the JSON payload.
+func extractFinalSSEChunk(body []byte) []byte {
+	pos := len(body)
+	for pos > 0 {
+		lineStart := bytes.LastIndexByte(body[:pos], '\n')
+		if lineStart == -1 {
+			lineStart = 0
+		} else {
+			lineStart++
+		}
+
+		line := bytes.TrimSpace(body[lineStart:pos])
+		pos = lineStart - 1
+
+		if len(line) == 0 {
+			continue
+		}
+
+		prefix := []byte("data:")
+		if !bytes.HasPrefix(line, prefix) {
+			continue
+		}
+
+		data := bytes.TrimSpace(line[len(prefix):])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+
+		if gjson.ValidBytes(data) {
+			return data
+		}
+	}
+	return nil
 }
 
 func (w *responseBodyCopier) WriteHeader(statusCode int) {

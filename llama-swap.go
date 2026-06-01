@@ -26,9 +26,13 @@ import (
 )
 
 var (
-	version = "0"
-	commit  = "abcd1234"
-	date    = "unknown"
+	version       = "0"
+	commit        = "abcd1234"
+	date          = "unknown"
+	llamaCppBuild = "unknown"
+	llamaCppGit   = "unknown"
+	llamaCppDate  = "unknown"
+	buildFeatures = ""
 )
 
 const shutdownTimeout = 30 * time.Second
