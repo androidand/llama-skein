@@ -34,7 +34,7 @@ func TestServer_APIVersion(t *testing.T) {
 	s.build = BuildInfo{Version: "1.2.3", Commit: "deadbeef", Date: "2026-05-19"}
 
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/version", nil))
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/version", nil))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -52,7 +52,7 @@ func TestServer_APIMetrics_Empty(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics", nil))
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/metrics", nil))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -66,7 +66,7 @@ func TestServer_APIPerformance_Unavailable(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/performance", nil))
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/hardware/performance", nil))
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", w.Code)
@@ -77,7 +77,7 @@ func TestServer_APIEvents_InitialPayload(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/system/events", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	done := make(chan struct{})

@@ -178,7 +178,7 @@ func TestServer_HandleAPICapture(t *testing.T) {
 
 	t.Run("found", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/captures/42", nil))
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/captures/42", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d", w.Code)
 		}
@@ -189,7 +189,7 @@ func TestServer_HandleAPICapture(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/captures/999", nil))
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/captures/999", nil))
 		if w.Code != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", w.Code)
 		}
@@ -197,7 +197,7 @@ func TestServer_HandleAPICapture(t *testing.T) {
 
 	t.Run("invalid id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/captures/abc", nil))
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/captures/abc", nil))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400", w.Code)
 		}

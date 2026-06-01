@@ -124,7 +124,7 @@ func TestServer_RequestLogMiddleware(t *testing.T) {
 		}
 	})
 
-	for _, path := range []string{"/wol-health", "/api/performance", "/metrics"} {
+	for _, path := range []string{"/wol-health", "/api/hardware/performance", "/metrics"} {
 		t.Run("skips "+path, func(t *testing.T) {
 			skipLog := logmon.NewWriter(io.Discard)
 			skipMW := CreateRequestLogMiddleware(skipLog)

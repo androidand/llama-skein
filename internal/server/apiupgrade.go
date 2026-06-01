@@ -26,9 +26,9 @@ type upgradeProgressEvent struct {
 	Msg   string `json:"message,omitempty"`
 }
 
-// handleAPIUpgrade implements POST /api/upgrade.
+// runUpgrade implements POST /api/system/upgrade.
 // Streams NDJSON progress while downloading/building and replacing llama-server.
-func (s *Server) handleAPIUpgrade(w http.ResponseWriter, r *http.Request) {
+func (s *Server) runUpgrade(w http.ResponseWriter, r *http.Request) {
 	var req upgradeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())

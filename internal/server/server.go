@@ -267,16 +267,17 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /upstream", handleUpstreamRedirect)
 	mux.Handle("/upstream/{upstreamPath...}", apiChain.ThenFunc(s.handleUpstream))
 
-	// API group (API-key protected) consumed by the UI.
-	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
-	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
-	mux.Handle("POST /api/models/load/{model...}", apiChain.ThenFunc(s.handleAPILoadModel))
-	mux.Handle("POST /api/models/pull", apiChain.ThenFunc(s.handleAPIPullModel))
-	mux.Handle("POST /api/models/context-recommendation/{model...}", apiChain.ThenFunc(s.handleAPIContextRecommendation))
+	// Models — lifecycle management.
+	mux.Handle("GET /api/models", apiChain.ThenFunc(s.handleAPIListModels))
+	mux.Handle("GET /api/models/context/{model...}", apiChain.ThenFunc(s.handleAPIContextRecommendation))
 	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
 	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
-	mux.Handle("GET /api/ps", apiChain.ThenFunc(s.handleAPIPS))
-	mux.Handle("GET /api/storage", apiChain.ThenFunc(s.handleAPIStorage))
+	mux.Handle("POST /api/models/load/{model...}", apiChain.ThenFunc(s.handleAPILoadModel))
+	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
+	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
+	mux.Handle("POST /api/models/pull", apiChain.ThenFunc(s.handleAPIPullModel))
+
+	// Config — live YAML management.
 	mux.Handle("GET /api/config/info", apiChain.ThenFunc(s.handleAPIConfigInfo))
 	mux.Handle("POST /api/config/models", apiChain.ThenFunc(s.handleAPIConfigAddModel))
 	mux.Handle("GET /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigGetModel))
@@ -284,20 +285,22 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
 	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
-	mux.Handle("GET /api/tags", apiChain.ThenFunc(s.handleAPIOllamaTags))
-	mux.Handle("POST /api/show", apiChain.ThenFunc(s.handleAPIOllamaShow))
-	mux.Handle("DELETE /api/delete", apiChain.ThenFunc(s.handleAPIOllamaDelete))
-	mux.Handle("GET /api/resources", apiChain.ThenFunc(s.handleAPIResources))
-	mux.Handle("POST /api/upgrade", apiChain.ThenFunc(s.handleAPIUpgrade))
-	mux.Handle("GET /api/skein/capabilities", apiChain.ThenFunc(s.handleAPISkeinCapabilities))
-	mux.Handle("GET /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentGet))
-	mux.Handle("POST /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentEnable))
-	mux.Handle("DELETE /api/skein/silent", apiChain.ThenFunc(s.handleAPISkeinSilentDisable))
-	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
-	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
-	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
-	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
-	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
+
+	// Hardware — resources, storage, performance, GPU power.
+	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET /api/hardware/storage", apiChain.ThenFunc(s.handleAPIHardwareStorage))
+	mux.Handle("GET /api/hardware/performance", apiChain.ThenFunc(s.handleAPIHardwarePerformance))
+	mux.Handle("GET /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePower))
+	mux.Handle("PUT /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePowerSet))
+	mux.Handle("DELETE /api/hardware/power", apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
+
+	// System — version, capabilities, events, metrics, upgrade.
+	mux.Handle("GET /api/system/version", apiChain.ThenFunc(s.handleAPISystemVersion))
+	mux.Handle("GET /api/system/capabilities", apiChain.ThenFunc(s.handleAPISystemCapabilities))
+	mux.Handle("GET /api/system/events", apiChain.ThenFunc(s.handleAPISystemEvents))
+	mux.Handle("GET /api/system/metrics", apiChain.ThenFunc(s.handleAPISystemMetrics))
+	mux.Handle("GET /api/system/captures/{id}", apiChain.ThenFunc(s.handleAPISystemCaptures))
+	mux.Handle("POST /api/system/upgrade", apiChain.ThenFunc(s.handleAPISystemUpgrade))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
