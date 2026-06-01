@@ -113,7 +113,7 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 			TLSHandshakeTimeout:   time.Duration(config.Timeouts.TLSHandshake) * time.Second,
 			ResponseHeaderTimeout: time.Duration(config.Timeouts.ResponseHeader) * time.Second,
 			ExpectContinueTimeout: time.Duration(config.Timeouts.ExpectContinue) * time.Second,
-			ForceAttemptHTTP2:     true,
+			ForceAttemptHTTP2:     false,
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   10,
 			IdleConnTimeout:       time.Duration(config.Timeouts.IdleConn) * time.Second,
@@ -659,9 +659,66 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 		p.reverseProxy.ServeHTTP(w, r)
 	}
 
+	// If the client disconnected mid-stream (context cancelled) and this is the
+	// only in-flight request, the inference slot on the upstream llama.cpp process
+	// is now orphaned — it keeps generating into the void and blocks future
+	// requests. Cancel it explicitly via the llama.cpp /slots endpoint.
+	if r.Context().Err() != nil && p.inFlightRequestsCount.Load() <= 1 {
+		go p.cancelBusySlots()
+	}
+
 	totalTime := time.Since(requestBeginTime)
 	p.proxyLogger.Debugf("<%s> request %s - start: %v, total: %v",
 		p.ID, r.RequestURI, startDuration, totalTime)
+}
+
+// cancelBusySlots queries the upstream llama.cpp /slots endpoint and sends a
+// DELETE cancel request for every slot currently in the processing state.
+// Called when the downstream client disconnects mid-generation so orphaned
+// inference does not block subsequent requests.
+func (p *Process) cancelBusySlots() {
+	base := strings.TrimRight(p.config.Proxy, "/")
+	if base == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	resp, err := client.Get(base + "/slots")
+	if err != nil {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: GET /slots: %v", p.ID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var slots []struct {
+		ID    int `json:"id"`
+		State int `json:"state"` // 0=idle 1=processing 2=waiting
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: decode: %v", p.ID, err)
+		return
+	}
+
+	for _, slot := range slots {
+		if slot.State != 1 { // only cancel processing slots
+			continue
+		}
+		cancelURL := fmt.Sprintf("%s/slots/%d", base, slot.ID)
+		body := bytes.NewBufferString(`{"action":"cancel"}`)
+		req, err := http.NewRequest(http.MethodDelete, cancelURL, body)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		cancelResp, err := client.Do(req)
+		if err != nil {
+			p.proxyLogger.Debugf("<%s> cancelBusySlots: DELETE slot %d: %v", p.ID, slot.ID, err)
+			continue
+		}
+		cancelResp.Body.Close()
+		p.proxyLogger.Infof("<%s> cancelBusySlots: cancelled orphaned slot %d (client disconnected)", p.ID, slot.ID)
+	}
 }
 
 // waitForCmd waits for the command to exit and handles exit conditions depending on current state
