@@ -147,13 +147,22 @@ func main() {
 		proxyLog.Info("performance monitoring is disabled")
 	}
 
-	buildInfo := server.BuildInfo{Version: version, Commit: commit, Date: date}
+	buildInfo := server.BuildInfo{
+		Version:       version,
+		Commit:        commit,
+		Date:          date,
+		LlamaCppBuild: llamaCppBuild,
+		LlamaCppGit:   llamaCppGit,
+		LlamaCppDate:  llamaCppDate,
+		BuildFeatures: buildFeatures,
+	}
 
 	initialSrv, err := server.New(cfg, muxLog, proxyLog, upstreamLog, perfMon, buildInfo)
 	if err != nil {
 		slog.Error("failed to create server", "error", err)
 		os.Exit(1)
 	}
+	initialSrv.SetConfigFile(configPath)
 
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
@@ -209,6 +218,7 @@ func main() {
 			proxyLog.Warnf("failed to build new server during reload: %v", err)
 			return
 		}
+		newSrv.SetConfigFile(configPath)
 
 		activeMu.Lock()
 		old := activeSrv
@@ -228,6 +238,10 @@ func main() {
 
 		proxyLog.Info("configuration reloaded")
 	}
+
+	// Wire reload callback and mDNS for the initial server.
+	initialSrv.SetReloadFn(reload)
+	initialSrv.RegisterMDNS(listenAddr)
 
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())
 	defer watcherCancel()
