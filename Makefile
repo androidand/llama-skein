@@ -65,12 +65,12 @@ linux: linux-arm64 linux-amd64
 linux-amd64: ui
 	@echo "Building Linux AMD64 binary..."
 	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
+		GOOS=linux GOARCH=amd64 go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
 
 linux-arm64: ui
 	@echo "Building Linux ARM64 binary..."
 	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
+		GOOS=linux GOARCH=arm64 go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
 
 # Build Windows binary
 windows: ui
