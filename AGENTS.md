@@ -27,6 +27,15 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - Use `make test-all` before completing work. This includes long running concurrency tests.
 - Use `make test-ui` after making changes to the UI in ui-svelte/
 
+## OpenAPI Contract
+
+- The llama-skein control API is design-first. `contracts/llama-skein.openapi.json` is the source of truth.
+- Before changing public API handlers, clients, response fields, request fields, status codes, or error shapes, read `docs/openapi-contract.md`.
+- Regenerate Go with `go generate ./pkg/apicontract` after every spec change.
+- opencode's TypeScript client is generated from this repo's spec with `bun run build:llama-skein-client` from `/Users/andreas/dev/opencode/packages/opencode`.
+- Skein consumes the generated Go package `github.com/androidand/llama-skein/pkg/apicontract`; do not hand-copy schema structs into Skein.
+- Do not hand-write duplicate public API structs when generated `pkg/apicontract` types already exist.
+
 ### Commit message example format:
 
 ```
