@@ -1417,11 +1417,15 @@ models:
 	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
 
 	// Check for attributes
-	response := map[string]string{}
+	response := map[string]any{}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	for key, value := range versionTest {
 		assert.Equal(t, value, response[key], "%s value %s should match response %s", key, value, response[key])
 	}
+	runtimeInfo, ok := response["runtime"].(map[string]any)
+	assert.True(t, ok)
+	assert.NotEmpty(t, runtimeInfo["go_os"])
+	assert.NotEmpty(t, runtimeInfo["go_arch"])
 }
 
 func TestProxyManager_APIKeyAuth(t *testing.T) {

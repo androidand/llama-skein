@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/pkg/gguf"
+	"github.com/gin-gonic/gin"
 )
 
 type Model struct {
@@ -45,6 +45,7 @@ func addApiHandlers(pm *ProxyManager) {
 		apiGroup.GET("/storage", pm.apiGetStorage)
 		apiGroup.GET("/config/info", pm.apiConfigInfo)
 		apiGroup.POST("/config/models", pm.apiConfigAddModel)
+		apiGroup.GET("/config/models/:id", pm.apiConfigGetModel)
 		apiGroup.PATCH("/config/models/:id", pm.apiConfigPatchModel)
 		apiGroup.DELETE("/config/models/:id", pm.apiConfigRemoveModel)
 		apiGroup.PATCH("/config/groups/:id", pm.apiConfigPatchGroup)
