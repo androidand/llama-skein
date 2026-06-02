@@ -19,6 +19,7 @@ type SkeinCapabilities struct {
 var currentSkeinFeatures = []string{
 	"capabilities",
 	"silent-mode",
+	"loading-themes",
 }
 
 // addSkeinHandlers registers all /api/skein/* companion endpoints.

@@ -133,7 +133,9 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 				resp.Body = io.NopCloser(bytes.NewReader(body)) // always restore
 				if err == nil {
 					var errBody struct {
-						Error struct{ Type string `json:"type"` } `json:"error"`
+						Error struct {
+							Type string `json:"type"`
+						} `json:"error"`
 					}
 					if json.Unmarshal(body, &errBody) == nil &&
 						errBody.Error.Type == "exceed_context_size_error" {
@@ -604,7 +606,8 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 		// PR #417 (no support for anthropic v1/messages yet)
 		isChatCompletions := strings.HasPrefix(r.URL.Path, "/v1/chat/completions")
 		if p.config.SendLoadingState != nil && *p.config.SendLoadingState && isStreaming && isChatCompletions {
-			srw = newStatusResponseWriter(p, w)
+			theme := r.Header.Get("X-Loading-Theme")
+			srw = newStatusResponseWriter(p, w, theme)
 			go srw.statusUpdates(swapCtx)
 		} else {
 			p.proxyLogger.Debugf("<%s> SendLoadingState is nil or false, not streaming loading state", p.ID)
@@ -806,6 +809,43 @@ func (p *Process) Logger() *logmon.Monitor {
 	return p.processLogger
 }
 
+var themedRemarks = map[string][]string{
+	"vault-boy": {
+		"Stay S.P.E.C.I.A.L. while the model loads...",
+		"War never changes, but loading times do...",
+		"Consulting the Pip-Boy database...",
+		"Checking your Intelligence stat...",
+		"Radiation levels: acceptable. Loading levels: high...",
+		"Bottlecap economy stable while we wait...",
+		"The Overseer says: please stand by...",
+		"Loading weights from Vault 111...",
+		"Calibrating targeting systems (VATS)...",
+		"Stimpaks administered. Still loading...",
+		"The Brotherhood of Steel approves this wait...",
+		"Nuka-Cola machine: out of order. Model: loading...",
+		"Diamond City radio plays on while we wait...",
+		"Deathclaw spotted. No wait, that's the GPU fan...",
+		"Survival mode: patience required...",
+	},
+	"knight-rider": {
+		"KITT is processing your request, Michael...",
+		"Turbo Boost engaged on the inference engine...",
+		"Molecular bonded shell holding at 97%...",
+		"Scanning for hostiles... found: impatience...",
+		"Super Pursuit Mode: active. Loading: also active...",
+		"KITT: 'I estimate a 94.7% chance of success, Michael'...",
+		"Devon is reviewing the mission parameters...",
+		"Foundation for Law and Government: please hold...",
+		"Voice synthesizer warming up...",
+		"Comlink established with model weights...",
+		"Grappling hook: deployed. ETA: unknown...",
+		"KITT: 'This is most irregular, Michael'...",
+		"Turbo-charging the attention heads...",
+		"Knight Industries Two Thousand: loading...",
+		"Remember, Michael: I am not just a car, I am an AI...",
+	},
+}
+
 var loadingRemarks = []string{
 	"Still faster than your last standup meeting...",
 	"Reticulating splines...",
@@ -875,13 +915,15 @@ type statusResponseWriter struct {
 	process    *Process
 	wg         sync.WaitGroup // Track goroutine completion
 	start      time.Time
+	theme      string
 }
 
-func newStatusResponseWriter(p *Process, w http.ResponseWriter) *statusResponseWriter {
+func newStatusResponseWriter(p *Process, w http.ResponseWriter, theme string) *statusResponseWriter {
 	s := &statusResponseWriter{
 		writer:  w,
 		process: p,
 		start:   time.Now(),
+		theme:   theme,
 	}
 
 	s.Header().Set("Content-Type", "text/event-stream") // SSE
@@ -913,9 +955,9 @@ func (s *statusResponseWriter) statusUpdates(ctx context.Context) {
 		s.sendLine(" ")
 	}()
 
-	// Create a shuffled copy of loadingRemarks
-	remarks := make([]string, len(loadingRemarks))
-	copy(remarks, loadingRemarks)
+	src := loadingRemarkSet(s.theme)
+	remarks := make([]string, len(src))
+	copy(remarks, src)
 	rand.Shuffle(len(remarks), func(i, j int) {
 		remarks[i], remarks[j] = remarks[j], remarks[i]
 	})
@@ -949,6 +991,14 @@ func (s *statusResponseWriter) statusUpdates(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func loadingRemarkSet(theme string) []string {
+	key := strings.ToLower(strings.TrimSpace(theme))
+	if themed, ok := themedRemarks[key]; ok && len(themed) > 0 {
+		return themed
+	}
+	return loadingRemarks
 }
 
 // waitForCompletion waits for the statusUpdates goroutine to finish

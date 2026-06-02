@@ -64,6 +64,12 @@ func TestProcess_AutomaticallyStartsUpstream(t *testing.T) {
 	}
 }
 
+func TestProcess_LoadingRemarkSetSelectsTheme(t *testing.T) {
+	assert.Equal(t, themedRemarks["vault-boy"], loadingRemarkSet(" Vault-Boy "))
+	assert.Equal(t, themedRemarks["knight-rider"], loadingRemarkSet("KNIGHT-RIDER"))
+	assert.Equal(t, loadingRemarks, loadingRemarkSet("unknown"))
+}
+
 // TestProcess_WaitOnMultipleStarts tests that multiple concurrent requests
 // are all handled successfully, even though they all may ask for the process to .start()
 func TestProcess_WaitOnMultipleStarts(t *testing.T) {

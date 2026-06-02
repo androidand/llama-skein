@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/thermal"
 	"github.com/androidand/llama-skein/pkg/gguf"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -32,13 +32,13 @@ const (
 )
 
 var (
-	llama_cpp_build    string
-	llama_cpp_git      string
-	llama_cpp_date     string
-	build_features     []string
-	rocm_version       string
-	is_metal           bool
-	platform           string
+	llama_cpp_build string
+	llama_cpp_git   string
+	llama_cpp_date  string
+	build_features  []string
+	rocm_version    string
+	is_metal        bool
+	platform        string
 )
 
 type proxyCtxKey string
@@ -107,10 +107,10 @@ type ProxyManager struct {
 	commit    string
 	version   string
 	// llama.cpp build metadata (injected via ldflags)
-	llamaCppBuild  string
-	llamaCppGit    string
-	llamaCppDate   string
-	buildFeatures  string
+	llamaCppBuild string
+	llamaCppGit   string
+	llamaCppDate  string
+	buildFeatures string
 
 	// peer proxy see: #296, #433
 	peerProxy *PeerProxy
@@ -514,14 +514,14 @@ func (pm *ProxyManager) setupGinEngine() {
 	})
 
 	pm.ginEngine.GET("/favicon.ico", func(c *gin.Context) {
-			if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
-				c.Data(http.StatusOK, "image/x-icon", data)
-			} else {
-				c.String(http.StatusInternalServerError, err.Error())
-			}
-		})
+		if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
+			c.Data(http.StatusOK, "image/x-icon", data)
+		} else {
+			c.String(http.StatusInternalServerError, err.Error())
+		}
+	})
 
-		reactFS, err := GetReactFS()
+	reactFS, err := GetReactFS()
 	if err != nil {
 		pm.proxyLogger.Errorf("Failed to load React filesystem: %v", err)
 	} else {
@@ -560,6 +560,7 @@ func (pm *ProxyManager) setupGinEngine() {
 	// see: proxymanager_api.go
 	// add API handler functions
 	addApiHandlers(pm)
+	addSkeinHandlers(pm)
 
 	// Disable console color for testing
 	gin.DisableConsoleColor()
@@ -852,10 +853,10 @@ func addGGUFMetadata(record gin.H, modelConfig config.ModelConfig) {
 	}
 	if g.RopeScaling.Type != "" {
 		meta["rope_scaling"] = gin.H{
-			"type":              g.RopeScaling.Type,
-			"factor":            g.RopeScaling.Factor,
-			"original_length":   g.RopeScaling.OriginalLength,
-			"finetuned":         g.RopeScaling.Finetuned,
+			"type":            g.RopeScaling.Type,
+			"factor":          g.RopeScaling.Factor,
+			"original_length": g.RopeScaling.OriginalLength,
+			"finetuned":       g.RopeScaling.Finetuned,
 		}
 	}
 	if g.RopeFreqBase > 0 {
