@@ -7,14 +7,19 @@ import (
 	"testing"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 )
 
 func TestServer_HandleListModels(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 	s.cfg = config.Config{
 		Models: map[string]config.ModelConfig{
-			"visible": {Name: "Visible", Description: "a model"},
-			"hidden":  {Unlisted: true},
+			"visible": {
+				Name:        "Visible",
+				Description: "a model",
+				Cmd:         "/usr/bin/llama-server --ctx-size 131072 --n-predict 8192",
+			},
+			"hidden": {Unlisted: true},
 		},
 		Peers: config.PeerDictionaryConfig{
 			"peer1": {Models: []string{"remote-model"}},
@@ -34,14 +39,22 @@ func TestServer_HandleListModels(t *testing.T) {
 	}
 
 	var resp struct {
-		Data []modelRecord `json:"data"`
+		Data []apicontract.Model `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	ids := map[string]bool{}
 	for _, m := range resp.Data {
-		ids[m.ID] = true
+		ids[m.Id] = true
+		if m.Id == "visible" {
+			if m.ContextLength == nil || *m.ContextLength != 131072 {
+				t.Errorf("context_length = %v, want 131072", m.ContextLength)
+			}
+			if m.MaxOutputTokens == nil || *m.MaxOutputTokens != 8192 {
+				t.Errorf("max_output_tokens = %v, want 8192", m.MaxOutputTokens)
+			}
+		}
 	}
 	if !ids["visible"] || !ids["remote-model"] {
 		t.Errorf("missing expected models: %v", ids)
@@ -64,12 +77,12 @@ func TestServer_HandleListModels_Aliases(t *testing.T) {
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 
 	var resp struct {
-		Data []modelRecord `json:"data"`
+		Data []apicontract.Model `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	ids := map[string]bool{}
 	for _, m := range resp.Data {
-		ids[m.ID] = true
+		ids[m.Id] = true
 	}
 	if !ids["real"] || !ids["nick"] {
 		t.Errorf("expected alias entry; got %v", ids)

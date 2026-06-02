@@ -11,36 +11,39 @@ import (
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 )
-
-// modelRecord is one entry in the OpenAI-compatible /v1/models listing.
-type modelRecord struct {
-	ID          string         `json:"id"`
-	Object      string         `json:"object"`
-	Created     int64          `json:"created"`
-	OwnedBy     string         `json:"owned_by"`
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Meta        map[string]any `json:"meta,omitempty"`
-}
 
 // handleListModels serves the OpenAI-compatible model listing: local models
 // (with optional aliases) plus peer models.
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
-	created := time.Now().Unix()
-	data := make([]modelRecord, 0, len(s.cfg.Models))
+	created := int(time.Now().Unix())
+	data := make([]apicontract.Model, 0, len(s.cfg.Models))
 
-	newRecord := func(id, name, description string, metadata map[string]any) modelRecord {
-		rec := modelRecord{
-			ID:          id,
-			Object:      "model",
-			Created:     created,
-			OwnedBy:     "llama-swap",
-			Name:        strings.TrimSpace(name),
-			Description: strings.TrimSpace(description),
+	newRecord := func(id, name, description string, mc config.ModelConfig, state string, loaded bool) apicontract.Model {
+		rec := apicontract.Model{
+			Id:      id,
+			Object:  "model",
+			Created: &created,
+			OwnedBy: stringPtr("llama-swap"),
 		}
-		if len(metadata) > 0 {
-			rec.Meta = map[string]any{"llamaswap": metadata}
+		if name = strings.TrimSpace(name); name != "" {
+			rec.Name = &name
+		}
+		if description = strings.TrimSpace(description); description != "" {
+			rec.Description = &description
+		}
+		if state != "" {
+			rec.State = &state
+			rec.Loaded = &loaded
+		}
+		hints := map[string]any{}
+		addModelRuntimeHints(hints, mc)
+		if contextLength, ok := hints["context_length"].(int); ok {
+			rec.ContextLength = &contextLength
+		}
+		if maxOutputTokens, ok := hints["max_output_tokens"].(int); ok {
+			rec.MaxOutputTokens = &maxOutputTokens
 		}
 		return rec
 	}
@@ -49,12 +52,13 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if mc.Unlisted {
 			continue
 		}
-		data = append(data, newRecord(id, mc.Name, mc.Description, mc.Metadata))
+		state, loaded := s.modelState(id)
+		data = append(data, newRecord(id, mc.Name, mc.Description, mc, state, loaded))
 
 		if s.cfg.IncludeAliasesInList {
 			for _, alias := range mc.Aliases {
 				if alias := strings.TrimSpace(alias); alias != "" {
-					data = append(data, newRecord(alias, mc.Name, mc.Description, mc.Metadata))
+					data = append(data, newRecord(alias, mc.Name, mc.Description, mc, state, loaded))
 				}
 			}
 		}
@@ -62,11 +66,11 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 	for peerID, peer := range s.cfg.Peers {
 		for _, modelID := range peer.Models {
-			data = append(data, newRecord(modelID, peerID+": "+modelID, "", map[string]any{"peerID": peerID}))
+			data = append(data, newRecord(modelID, peerID+": "+modelID, "", config.ModelConfig{}, "", false))
 		}
 	}
 
-	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
+	sort.Slice(data, func(i, j int) bool { return data[i].Id < data[j].Id })
 
 	// Echo the Origin so browser clients can read the listing.
 	if origin := r.Header.Get("Origin"); origin != "" {
@@ -74,10 +78,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"object": "list",
-		"data":   data,
+	json.NewEncoder(w).Encode(apicontract.ModelList{
+		Object: apicontract.List,
+		Data:   data,
 	})
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 // runningModel is one entry in the /running listing.
