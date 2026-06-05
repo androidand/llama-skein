@@ -25,7 +25,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Id:      id,
 			Object:  "model",
 			Created: &created,
-			OwnedBy: stringPtr("llama-swap"),
+			OwnedBy: stringPtr("llama-skein"),
 		}
 		if name = strings.TrimSpace(name); name != "" {
 			rec.Name = &name

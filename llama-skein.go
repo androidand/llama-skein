@@ -26,7 +26,6 @@ import (
 )
 
 var (
-	version       = "0"
 	commit        = "abcd1234"
 	date          = "unknown"
 	llamaCppBuild = "unknown"
@@ -67,7 +66,7 @@ func main() {
 	flag.Parse()
 
 	if *flagVersion {
-		fmt.Printf("version: %s (%s), built at %s\n", version, commit, date)
+		fmt.Printf("llama-skein v%s (upstream llama-swap v%s, commit %s), built at %s\n", SkeinVersion, UpstreamVersion, commit, date)
 		os.Exit(0)
 	}
 
@@ -148,13 +147,15 @@ func main() {
 	}
 
 	buildInfo := server.BuildInfo{
-		Version:       version,
-		Commit:        commit,
-		Date:          date,
-		LlamaCppBuild: llamaCppBuild,
-		LlamaCppGit:   llamaCppGit,
-		LlamaCppDate:  llamaCppDate,
-		BuildFeatures: buildFeatures,
+		Version:         SkeinVersion,
+		Commit:          commit,
+		Date:            date,
+		UpstreamVersion: UpstreamVersion,
+		SkeinVersion:    SkeinVersion,
+		LlamaCppBuild:   llamaCppBuild,
+		LlamaCppGit:     llamaCppGit,
+		LlamaCppDate:    llamaCppDate,
+		BuildFeatures:   buildFeatures,
 	}
 
 	initialSrv, err := server.New(cfg, muxLog, proxyLog, upstreamLog, perfMon, buildInfo)
@@ -268,10 +269,10 @@ func main() {
 	go func() {
 		var startErr error
 		if useTLS {
-			proxyLog.Infof("llama-swap listening with TLS on https://%s", listenAddr)
+			proxyLog.Infof("llama-skein listening with TLS on https://%s", listenAddr)
 			startErr = httpServer.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
 		} else {
-			proxyLog.Infof("llama-swap listening on http://%s", listenAddr)
+			proxyLog.Infof("llama-skein listening on http://%s", listenAddr)
 			startErr = httpServer.ListenAndServe()
 		}
 		if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {

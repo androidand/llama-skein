@@ -1,3 +1,9 @@
+> **llama-skein** — fork of [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap) for the [Skein](https://github.com/androidand/local-ai) ecosystem.
+> Adds: `/api/resources`, `/api/storage`, model lifecycle API, mDNS registration, ROCm targets, slot-cancel on disconnect, autoUnload.
+> Private deploy docs: `~/dev/docs-skein/` · Ecosystem map: `~/dev/skein/docs/ECOSYSTEM.md`
+
+---
+
 ![llama-swap header image](docs/assets/hero3.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/mostlygeek/llama-swap/go-ci.yml)

@@ -95,7 +95,7 @@ func (pm *ProxyManager) apiConfigAddModel(c *gin.Context) {
 		return
 	}
 	if pm.configFile == "" {
-		pm.sendErrorResponse(c, http.StatusUnprocessableEntity, "config file path not set; restart llama-swap with --config flag")
+		pm.sendErrorResponse(c, http.StatusUnprocessableEntity, "config file path not set; restart llama-skein with --config flag")
 		return
 	}
 
@@ -243,7 +243,7 @@ func (pm *ProxyManager) apiConfigPatchGroup(c *gin.Context) {
 // Re-reads the config file from disk and restarts the proxy manager.
 func (pm *ProxyManager) apiConfigReload(c *gin.Context) {
 	if pm.reloadFn == nil {
-		pm.sendErrorResponse(c, http.StatusServiceUnavailable, "reload not available; restart llama-swap manually")
+		pm.sendErrorResponse(c, http.StatusServiceUnavailable, "reload not available; restart llama-skein manually")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "reloading"})

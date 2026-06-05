@@ -91,7 +91,7 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 	}
 	if s.configFile == "" {
 		router.SendResponse(w, r, http.StatusUnprocessableEntity,
-			"config file path not set; restart llama-swap with --config flag")
+			"config file path not set; restart llama-skein with --config flag")
 		return
 	}
 
@@ -234,7 +234,7 @@ func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
 	if s.reloadFn == nil {
 		router.SendResponse(w, r, http.StatusServiceUnavailable,
-			"reload not available; restart llama-swap manually")
+			"reload not available; restart llama-skein manually")
 		return
 	}
 	writeJSON(w, map[string]any{"status": "reloading"})

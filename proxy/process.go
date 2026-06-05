@@ -889,7 +889,7 @@ func newStatusResponseWriter(p *Process, w http.ResponseWriter) *statusResponseW
 	s.Header().Set("Connection", "keep-alive")          // keep-alive
 	s.WriteHeader(http.StatusOK)                        // send status code 200
 	s.sendLine("━━━━━")
-	s.sendLine(fmt.Sprintf("llama-swap loading model: %s", p.ID))
+	s.sendLine(fmt.Sprintf("llama-skein loading model: %s", p.ID))
 	return s
 }
 
