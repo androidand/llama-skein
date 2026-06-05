@@ -27,8 +27,8 @@ Full workflow — do these in order:
 1. Edit `contracts/llama-skein.openapi.json`
 2. Regenerate Go types/client in this repo: `go generate ./pkg/apicontract && gofmt -w pkg/apicontract/llama_skein.gen.go`
 3. Implement the handler using generated types
-4. Regenerate TypeScript client in opencode: `bun run build:llama-skein-client` from `/Users/andreas/dev/opencode/packages/opencode`
-5. Update skein callers in `/Users/andreas/dev/skein/internal/` to use new types
+4. Regenerate TypeScript client in opencode: `bun run build:llama-skein-client` from `~/dev/opencode/packages/opencode`
+5. Update skein callers in `~/dev/skein/internal/` to use new types
 6. Commit spec + generated code + implementation + callers together
 
 **Never** hand-write structs that duplicate the OpenAPI schema. Never edit `pkg/apicontract/llama_skein.gen.go` directly.
@@ -50,8 +50,8 @@ Push this repo to origin **before** pushing skein when changes span both repos.
 ### 3. Upstream rebase discipline
 
 - Remote `upstream` → `https://github.com/mostlygeek/llama-swap` (fetch only)
-- Our branch: `feat/model-state-and-lifecycle-api`
 - Strategy: `git rebase upstream/main` — never merge
+- Check drift: `make upstream-check`
 
 **Conflict hotspot**: `proxy/process.go` (our slot-cancel + autoUnload vs upstream routing).
 
@@ -63,7 +63,7 @@ git log --oneline upstream/main..HEAD   # our commits ahead
 git log --oneline HEAD..upstream/main   # upstream new commits
 git rebase upstream/main
 go build ./... && make test
-git push --force-with-lease origin feat/model-state-and-lifecycle-api
+git push --force-with-lease origin main
 ```
 
 ## Code generation commands
@@ -76,17 +76,13 @@ gofmt -w pkg/apicontract/llama_skein.gen.go
 # Check generated files are fresh (no uncommitted diff)
 make check-codegen
 
-# From /Users/andreas/dev/opencode/packages/opencode — regenerate TypeScript client
+# From ~/dev/opencode/packages/opencode — regenerate TypeScript client
 bun run build:llama-skein-client
 ```
 
-## Deploying to proxmox LXC 1016 (rocky)
+## Deploying to rocky
 
-Service: `llama-swap.service` on rocky (`192.168.1.126`), managed via proxmox LXC 1016 (`192.168.1.42`).
-
-**Before deploying**: push the branch to origin — the deploy script clones from GitHub.
-
-Full deploy script is in `ECOSYSTEM.md`.
+See ECOSYSTEM.md for the deploy script. Before deploying: push this branch to origin — the deploy script clones from GitHub, not from local disk.
 
 ## git remotes
 
