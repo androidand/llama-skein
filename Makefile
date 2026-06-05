@@ -12,6 +12,24 @@ endif
 # Capture the current build date in RFC3339 format
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Upstream llama-swap version (from version.go, or override via make)
+UPSTREAM_VERSION := $(shell grep '^var UpstreamVersion' version.go | sed 's/.*= "\(.*\)"/\1/')
+
+# llama-skein semantic version: base from version.go, auto-incremented with commits
+SKEIN_VERSION := $(shell base=$$(grep '^var SkeinVersion' version.go | sed 's/.*= "\(.*\)"/\1/'); \
+    last_tag=$$(git tag --list 'skein/v*' --sort=-v:refname | head -n 1); \
+    if [ -n "$$last_tag" ]; then \
+        commits_since=$$(git rev-list $$last_tag..HEAD --count); \
+        if [ "$$commits_since" -gt 0 ]; then \
+            echo "$${base}+$$commits_since"; \
+        else \
+            echo "$$base"; \
+        fi; \
+    else \
+        commits_total=$$(git rev-list --count HEAD); \
+        echo "$${base}+$$commits_total"; \
+    fi)
+
 # llama.cpp build metadata (injected from the target build context)
 # llama_cpp_build: build number from llama.cpp (e.g. b5142)
 # llama_cpp_git: short git hash of llama.cpp HEAD
@@ -32,6 +50,24 @@ clean:
 proxy/ui_dist/placeholder.txt:
 	mkdir -p proxy/ui_dist
 	touch $@
+
+# Show upstream drift: how many commits we're ahead/behind mostlygeek/llama-swap.
+# Run this before starting any new work to decide if a rebase is needed.
+upstream-check:
+	@git fetch upstream --quiet 2>/dev/null || true
+	@ahead=$$(git log --oneline upstream/main..HEAD 2>/dev/null | wc -l | tr -d ' '); \
+	 behind=$$(git log --oneline HEAD..upstream/main 2>/dev/null | wc -l | tr -d ' '); \
+	 echo "llama-skein vs upstream/main: +$$ahead ahead, -$$behind behind"; \
+	 if [ "$$behind" -gt 10 ]; then echo "WARNING: $$behind commits behind — consider rebasing"; fi; \
+	 if [ "$$behind" -gt 0 ]; then echo "Run: git rebase upstream/main"; fi
+
+# Verify generated files match the OpenAPI spec. Fails if codegen is stale.
+# Run after editing contracts/llama-skein.openapi.json or before committing.
+check-codegen: proxy/ui_dist/placeholder.txt
+	go generate ./pkg/apicontract
+	gofmt -w pkg/apicontract/llama_skein.gen.go
+	git diff --exit-code pkg/apicontract/llama_skein.gen.go || \
+		(echo "ERROR: pkg/apicontract/llama_skein.gen.go is stale — run: go generate ./pkg/apicontract" && exit 1)
 
 # use cached test results while developing
 test-dev: proxy/ui_dist/placeholder.txt
@@ -56,27 +92,23 @@ ui: ui/node_modules
 # Build OSX binary
 mac: ui
 	@echo "Building Mac binary..."
-	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64
+	@GOWORK=off go build -ldflags="-X main.commit=${GIT_HASH} -X main.SkeinVersion=${SKEIN_VERSION} -X main.UpstreamVersion=${UPSTREAM_VERSION} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64
 
 # Build Linux binary
 linux: linux-arm64 linux-amd64
 
 linux-amd64: ui
 	@echo "Building Linux AMD64 binary..."
-	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
+	@GOWORK=off GOOS=linux GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.SkeinVersion=${SKEIN_VERSION} -X main.UpstreamVersion=${UPSTREAM_VERSION} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
 
 linux-arm64: ui
 	@echo "Building Linux ARM64 binary..."
-	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
+	@GOWORK=off GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.SkeinVersion=${SKEIN_VERSION} -X main.UpstreamVersion=${UPSTREAM_VERSION} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
 
 # Build Windows binary
 windows: ui
 	@echo "Building Windows binary..."
-	@LDFLAGS="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" \
-		go build -ldflags="$${LDFLAGS}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
+	@GOWORK=off go build -ldflags="-X main.commit=${GIT_HASH} -X main.SkeinVersion=${SKEIN_VERSION} -X main.UpstreamVersion=${UPSTREAM_VERSION} -X main.date=${BUILD_DATE} -X main.llamaCppBuild=${LLAMA_CPP_BUILD} -X main.llamaCppGit=${LLAMA_CPP_GIT} -X main.llamaCppDate=${LLAMA_CPP_DATE} -X main.buildFeatures=${BUILD_FEATURES}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
 
 # for testing proxy.Process
 simple-responder:
@@ -105,6 +137,40 @@ release:
 	new_tag="v$$(( $${highest_tag#v} + 1 ))"; \
 	echo "tagging new version: $$new_tag"; \
 	git tag "$$new_tag";
+
+# Bump the llama-skein semantic version (creates a skein/vX.Y.Z tag)
+# Usage: make bump-skein-version MAJOR=0 MINOR=1 PATCH=0
+# Or:   make bump-skein-version PATCH=1  (increments patch from current)
+bump-skein-version:
+	@last_tag=$$(git tag --list 'skein/v*' --sort=-v:refname | head -n 1 || echo "skein/v0.0.0"); \
+	last_major=$$(echo $$last_tag | cut -d/ -f2 | cut -d. -f1); \
+	last_minor=$$(echo $$last_tag | cut -d/ -f2 | cut -d. -f2); \
+	last_patch=$$(echo $$last_tag | cut -d/ -f2 | cut -d. -f3); \
+	major=$${MAJOR:-$$last_major}; \
+	minor=$${MINOR:-$$last_minor}; \
+	if [ -n "$$PATCH" ]; then patch=$$PATCH; else patch=$$(( last_patch + 1 )); fi; \
+	new_tag="skein/v$$major.$$minor.$$patch"; \
+	echo "Creating tag: $$new_tag"; \
+	git tag "$$new_tag"; \
+	sed -i '' 's/SkeinVersion = .*/SkeinVersion = "$$major.$$minor.$$patch"/' version.go; \
+	echo "Updated version.go to $$major.$$minor.$$patch"
+
+# Rebase onto upstream llama-swap and update the upstream version
+# Usage: make rebase-upstream
+rebase-upstream:
+	@echo "Fetching upstream..."
+	@git fetch upstream
+	@upstream_tag=$$(git tag --points-at upstream/main --sort=-v:refname | head -n 1); \
+	echo "Upstream HEAD is at tag: $$upstream_tag"; \
+	echo "Current upstream version in version.go: $(UPSTREAM_VERSION)"; \
+	if [ -n "$$upstream_tag" ] && [ "$$upstream_tag" != "$(UPSTREAM_VERSION)" ]; then \
+		echo "Updating version.go: $(UPSTREAM_VERSION) -> $$upstream_tag"; \
+		sed -i '' 's/UpstreamVersion = .*/UpstreamVersion = "$$upstream_tag"/' version.go; \
+	else \
+		echo "Upstream version unchanged."; \
+	fi
+	@echo "Rebasing onto upstream/main..."
+	@git rebase upstream/main
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
