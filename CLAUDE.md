@@ -37,7 +37,11 @@ Verify generated files are current: `make check-codegen`
 
 ### 2. Keep this module buildable — skein depends on it
 
-skein imports `github.com/androidand/llama-skein/pkg/apicontract` via a `replace` directive in its `go.mod`. A compile error in this repo breaks `GOWORK=off go build ./...` in skein.
+skein imports `github.com/androidand/llama-skein/pkg/apicontract`. During active development
+`go.work` (at `~/dev/go.work`) resolves it locally; `GOWORK=off` fetches the pinned pseudo-version
+from GitHub. There is no `replace` directive in skein's `go.mod`.
+
+A compile error in this repo still breaks `GOWORK=off go build ./...` in skein.
 
 Before every push:
 ```bash
@@ -46,6 +50,7 @@ go test -short ./...
 ```
 
 Push this repo to origin **before** pushing skein when changes span both repos.
+After pushing, update the pin in skein: `go get github.com/androidand/llama-skein@<commit> && go mod tidy`
 
 ### 3. Upstream rebase discipline
 
