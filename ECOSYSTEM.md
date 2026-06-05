@@ -6,7 +6,7 @@
 ## What this repo is
 
 **llama-skein** is a fork of [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap).
-It is the LLM inference proxy layer in the skein ecosystem, running in LXC 1016 on proxmox.
+It is the LLM inference proxy layer in the skein ecosystem.
 
 Fork extensions over upstream:
 - `GET /api/resources` — unified GPU/CPU/RAM snapshot
@@ -22,7 +22,7 @@ Fork extensions over upstream:
 - `context_length` / `max_output_tokens` in `/v1/models`
 - `autoUnload` config for model groups
 - Slot cancel on client disconnect (prevents zombie GPU allocations)
-- ROCm build targets for proxmox (R9700 gfx1201) and rocky (RX 7900 XTX gfx1100)
+- ROCm build targets for AMD GPUs on inference hosts
 
 ## Upstream sync
 
@@ -47,17 +47,15 @@ git push --force-with-lease origin feat/model-state-and-lifecycle-api
 
 **Conflict hotspot:** `proxy/process.go` — our slot-cancel + autoUnload vs upstream routing changes.
 
-## Deploying to proxmox
+## Deploying
 
-See canonical ECOSYSTEM.md for the full deploy script. Quick version:
+Full deploy instructions (host IPs, container IDs, service paths) are in the private companion repo:
 
-```bash
-ssh proxmox "pct exec 1016 -- bash -c '
-  # ... clone, build, stop service, swap binary, start service
-'"
-# Service: llama-swap.service in LXC 1016 (192.168.1.42)
-# Config:  /var/lib/llama-swap/config/config-native.yaml
 ```
+~/dev/docs-skein/deploy/llama-skein.md
+```
+
+If not present: `git clone git@github.com:androidand/docs-skein.git ~/dev/docs-skein`
 
 ## Related repos
 

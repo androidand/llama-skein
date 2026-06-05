@@ -85,9 +85,17 @@ make check-codegen
 bun run build:llama-skein-client
 ```
 
-## Deploying to rocky
+## Deploying
 
-See ECOSYSTEM.md for the deploy script. Before deploying: push this branch to origin — the deploy script clones from GitHub, not from local disk.
+Full deploy instructions with real host IPs and container IDs are in the **private** companion repo:
+
+```
+~/dev/docs-skein/deploy/llama-skein.md
+```
+
+If not present: `git clone git@github.com:androidand/docs-skein.git ~/dev/docs-skein`
+
+Always push this repo to origin before deploying — the deploy script clones from GitHub, not from local disk.
 
 ## git remotes
 
