@@ -136,7 +136,7 @@ type ConfigModelInfo struct {
 type ConfigModelPatchRequest struct {
 	Aliases *[]string `json:"aliases,omitempty"`
 
-	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 	Backend               *ConfigModelPatchRequestBackend `json:"backend,omitempty"`
 	CacheTypeKDash        *string                         `json:"cache-type-k,omitempty"`
 	CacheTypeVDash        *string                         `json:"cache-type-v,omitempty"`
@@ -155,14 +155,14 @@ type ConfigModelPatchRequest struct {
 	Ttl                   *int                            `json:"ttl,omitempty"`
 }
 
-// ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+// ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 type ConfigModelPatchRequestBackend string
 
 // ConfigModelRequest defines model for ConfigModelRequest.
 type ConfigModelRequest struct {
 	Aliases *[]string `json:"aliases,omitempty"`
 
-	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 	Backend     *ConfigModelRequestBackend `json:"backend,omitempty"`
 	Cmd         string                     `json:"cmd"`
 	Description *string                    `json:"description,omitempty"`
@@ -171,7 +171,7 @@ type ConfigModelRequest struct {
 	Ttl         *int                       `json:"ttl,omitempty"`
 }
 
-// ConfigModelRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+// ConfigModelRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 type ConfigModelRequestBackend string
 
 // ConfigModelResponse defines model for ConfigModelResponse.

@@ -651,7 +651,7 @@
           "backend": {
             "type": "string",
             "enum": ["llamacpp", "mlx", "vllm"],
-            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp."
+            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp."
           },
           "name": {
             "type": "string"
@@ -679,7 +679,7 @@
           "backend": {
             "type": "string",
             "enum": ["llamacpp", "mlx", "vllm"],
-            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp."
+            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp."
           },
           "name": {
             "type": "string"

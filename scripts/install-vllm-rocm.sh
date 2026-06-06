@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Install vLLM for AMD ROCm (NVIDIA CUDA also supported, see comments).
-# Tested on: ROCm 7.2 / gfx1201 (R9700), gfx1100 (RX 7900 XTX)
+# Install vLLM.
+#
+# NVIDIA CUDA: standard PyPI install works out of the box.
+# AMD ROCm:    PyPI vLLM is CUDA-only. ROCm support requires building from
+#              source (VLLM_TARGET_DEVICE=rocm pip install -e .) which takes
+#              several hours and a full ROCm dev environment. On AMD hosts,
+#              llama.cpp (already installed) is the practical default.
+#              This script targets NVIDIA unless you pass --rocm-from-source.
 #
 # After running, add backend: vllm models to your llama-skein config using:
 #   cmd: /opt/vllm-venv/bin/vllm serve <hf-model-id> --host 127.0.0.1 --port ${PORT}
-#   env:
-#     - HIP_VISIBLE_DEVICES=0         # AMD
-#     - HSA_OVERRIDE_GFX_VERSION=11.0.0  # gfx1201 (RDNA4) compat shim; remove if native support works
 set -euo pipefail
 
 VENV="/opt/vllm-venv"
