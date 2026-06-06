@@ -72,6 +72,256 @@
           }
         }
       }
+    },
+    "/api/config/info": {
+      "get": {
+        "operationId": "getConfigInfo",
+        "summary": "Returns the config file path, models directory, and per-model file-existence check.",
+        "responses": {
+          "200": {
+            "description": "Config info response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigInfoResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/models": {
+      "post": {
+        "operationId": "addConfigModel",
+        "summary": "Adds or replaces a model entry in the on-disk config YAML and triggers reload.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigModelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Model added; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request."
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      }
+    },
+    "/api/config/models/{id}": {
+      "get": {
+        "operationId": "getConfigModel",
+        "summary": "Returns the configuration and current runtime state for a specific model.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Model ID as it appears in the models map."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found in config."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchConfigModel",
+        "summary": "Updates selected config fields and common llama-server flags without requiring callers to reconstruct the whole command string.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Model ID as it appears in the models map."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigModelPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Model updated; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request."
+          },
+          "404": {
+            "description": "Model not found in config."
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeConfigModel",
+        "summary": "Removes the model entry from the config YAML without touching the file on disk.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Model ID as it appears in the models map."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Model removed; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found in config."
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      }
+    },
+    "/api/config/groups/{id}": {
+      "patch": {
+        "operationId": "patchConfigGroup",
+        "summary": "Updates selected group config fields (autoUnload, exclusive, swap) without requiring callers to reconstruct the whole group configuration.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Group ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigGroupPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Group updated; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request."
+          },
+          "404": {
+            "description": "Group not found in config."
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      }
+    },
+    "/api/config/reload": {
+      "post": {
+        "operationId": "reloadConfig",
+        "summary": "Re-reads the config file from disk and restarts the proxy manager.",
+        "responses": {
+          "202": {
+            "description": "Reload initiated asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["status"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Reload not available."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -154,6 +404,26 @@
           },
           "vram": {
             "$ref": "#/components/schemas/VRAMInfo"
+          },
+          "loaded_model": {
+            "$ref": "#/components/schemas/LoadedModelInfo"
+          }
+        }
+      },
+      "LoadedModelInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Model ID as defined in config."
+          },
+          "model_mb": {
+            "type": "integer",
+            "description": "Model weight file size in MB (disk proxy for VRAM used by weights)."
+          },
+          "kv_estimate_mb": {
+            "type": "integer",
+            "description": "Estimated KV cache MB: max(0, vram.used_mb - model_mb)."
           }
         }
       },
@@ -324,6 +594,157 @@
           },
           "max_output_tokens": {
             "type": "integer"
+          }
+        }
+      },
+      "ConfigInfoResponse": {
+        "type": "object",
+        "required": ["config_file", "models_dir", "model_count", "models"],
+        "properties": {
+          "config_file": {
+            "type": "string"
+          },
+          "models_dir": {
+            "type": "string"
+          },
+          "model_count": {
+            "type": "integer"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigModelInfo"
+            }
+          }
+        }
+      },
+      "ConfigModelInfo": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "file_exists": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigModelRequest": {
+        "type": "object",
+        "required": ["id", "cmd"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "cmd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ttl": {
+            "type": "integer"
+          }
+        }
+      },
+      "ConfigModelPatchRequest": {
+        "type": "object",
+        "properties": {
+          "cmd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "concurrencyLimit": {
+            "type": "integer",
+            "x-go-name": "ConcurrencyLimitCamel"
+          },
+          "concurrency_limit": {
+            "type": "integer"
+          },
+          "ctx_size": {
+            "type": "integer"
+          },
+          "ctx-size": {
+            "type": "integer",
+            "x-go-name": "CtxSizeDash"
+          },
+          "n_gpu_layers": {
+            "type": "integer"
+          },
+          "n-gpu-layers": {
+            "type": "integer",
+            "x-go-name": "NGPULayersDash"
+          },
+          "cache_type_k": {
+            "type": "string"
+          },
+          "cache-type-k": {
+            "type": "string",
+            "x-go-name": "CacheTypeKDash"
+          },
+          "cache_type_v": {
+            "type": "string"
+          },
+          "cache-type-v": {
+            "type": "string",
+            "x-go-name": "CacheTypeVDash"
+          },
+          "flags": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ConfigGroupPatchRequest": {
+        "type": "object",
+        "properties": {
+          "autoUnload": {
+            "type": "boolean"
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "swap": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigModelResponse": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
           }
         }
       }

@@ -4,6 +4,7 @@
 package apicontract
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/oapi-codegen/runtime"
 )
 
 // Defines values for ModelListObject.
@@ -44,6 +47,64 @@ type Capabilities struct {
 	Version  int      `json:"version"`
 }
 
+// ConfigGroupPatchRequest defines model for ConfigGroupPatchRequest.
+type ConfigGroupPatchRequest struct {
+	AutoUnload *bool `json:"autoUnload,omitempty"`
+	Exclusive  *bool `json:"exclusive,omitempty"`
+	Swap       *bool `json:"swap,omitempty"`
+}
+
+// ConfigInfoResponse defines model for ConfigInfoResponse.
+type ConfigInfoResponse struct {
+	ConfigFile string            `json:"config_file"`
+	ModelCount int               `json:"model_count"`
+	Models     []ConfigModelInfo `json:"models"`
+	ModelsDir  string            `json:"models_dir"`
+}
+
+// ConfigModelInfo defines model for ConfigModelInfo.
+type ConfigModelInfo struct {
+	FileExists *bool   `json:"file_exists,omitempty"`
+	FilePath   *string `json:"file_path,omitempty"`
+	Id         string  `json:"id"`
+}
+
+// ConfigModelPatchRequest defines model for ConfigModelPatchRequest.
+type ConfigModelPatchRequest struct {
+	Aliases               *[]string               `json:"aliases,omitempty"`
+	CacheTypeKDash        *string                 `json:"cache-type-k,omitempty"`
+	CacheTypeVDash        *string                 `json:"cache-type-v,omitempty"`
+	CacheTypeK            *string                 `json:"cache_type_k,omitempty"`
+	CacheTypeV            *string                 `json:"cache_type_v,omitempty"`
+	Cmd                   *string                 `json:"cmd,omitempty"`
+	ConcurrencyLimitCamel *int                    `json:"concurrencyLimit,omitempty"`
+	ConcurrencyLimit      *int                    `json:"concurrency_limit,omitempty"`
+	CtxSizeDash           *int                    `json:"ctx-size,omitempty"`
+	CtxSize               *int                    `json:"ctx_size,omitempty"`
+	Description           *string                 `json:"description,omitempty"`
+	Flags                 *map[string]interface{} `json:"flags,omitempty"`
+	NGPULayersDash        *int                    `json:"n-gpu-layers,omitempty"`
+	NGpuLayers            *int                    `json:"n_gpu_layers,omitempty"`
+	Name                  *string                 `json:"name,omitempty"`
+	Ttl                   *int                    `json:"ttl,omitempty"`
+}
+
+// ConfigModelRequest defines model for ConfigModelRequest.
+type ConfigModelRequest struct {
+	Aliases     *[]string `json:"aliases,omitempty"`
+	Cmd         string    `json:"cmd"`
+	Description *string   `json:"description,omitempty"`
+	Id          string    `json:"id"`
+	Name        *string   `json:"name,omitempty"`
+	Ttl         *int      `json:"ttl,omitempty"`
+}
+
+// ConfigModelResponse defines model for ConfigModelResponse.
+type ConfigModelResponse struct {
+	Id     string `json:"id"`
+	Status string `json:"status"`
+}
+
 // GPUSnapshot defines model for GPUSnapshot.
 type GPUSnapshot struct {
 	Id             *int     `json:"id,omitempty"`
@@ -54,6 +115,18 @@ type GPUSnapshot struct {
 	VramFreeMb     *int     `json:"vram_free_mb,omitempty"`
 	VramTotalMb    *int     `json:"vram_total_mb,omitempty"`
 	VramUsedMb     *int     `json:"vram_used_mb,omitempty"`
+}
+
+// LoadedModelInfo defines model for LoadedModelInfo.
+type LoadedModelInfo struct {
+	// Id Model ID as defined in config.
+	Id *string `json:"id,omitempty"`
+
+	// KvEstimateMb Estimated KV cache MB: max(0, vram.used_mb - model_mb).
+	KvEstimateMb *int `json:"kv_estimate_mb,omitempty"`
+
+	// ModelMb Model weight file size in MB (disk proxy for VRAM used by weights).
+	ModelMb *int `json:"model_mb,omitempty"`
 }
 
 // MemoryInfo defines model for MemoryInfo.
@@ -94,11 +167,12 @@ type ModelListObject string
 
 // ResourceSnapshot defines model for ResourceSnapshot.
 type ResourceSnapshot struct {
-	Cpu     *CPUInfo       `json:"cpu,omitempty"`
-	Gpus    *[]GPUSnapshot `json:"gpus,omitempty"`
-	Memory  *MemoryInfo    `json:"memory,omitempty"`
-	Storage *StorageInfo   `json:"storage,omitempty"`
-	Vram    *VRAMInfo      `json:"vram,omitempty"`
+	Cpu         *CPUInfo         `json:"cpu,omitempty"`
+	Gpus        *[]GPUSnapshot   `json:"gpus,omitempty"`
+	LoadedModel *LoadedModelInfo `json:"loaded_model,omitempty"`
+	Memory      *MemoryInfo      `json:"memory,omitempty"`
+	Storage     *StorageInfo     `json:"storage,omitempty"`
+	Vram        *VRAMInfo        `json:"vram,omitempty"`
 }
 
 // StorageInfo defines model for StorageInfo.
@@ -130,6 +204,15 @@ type VersionInfo struct {
 	Runtime       map[string]interface{} `json:"runtime"`
 	Version       string                 `json:"version"`
 }
+
+// PatchConfigGroupJSONRequestBody defines body for PatchConfigGroup for application/json ContentType.
+type PatchConfigGroupJSONRequestBody = ConfigGroupPatchRequest
+
+// AddConfigModelJSONRequestBody defines body for AddConfigModel for application/json ContentType.
+type AddConfigModelJSONRequestBody = ConfigModelRequest
+
+// PatchConfigModelJSONRequestBody defines body for PatchConfigModel for application/json ContentType.
+type PatchConfigModelJSONRequestBody = ConfigModelPatchRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -204,6 +287,33 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// PatchConfigGroupWithBody request with any body
+	PatchConfigGroupWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PatchConfigGroup(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetConfigInfo request
+	GetConfigInfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AddConfigModelWithBody request with any body
+	AddConfigModelWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AddConfigModel(ctx context.Context, body AddConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RemoveConfigModel request
+	RemoveConfigModel(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetConfigModel request
+	GetConfigModel(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PatchConfigModelWithBody request with any body
+	PatchConfigModelWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PatchConfigModel(ctx context.Context, id string, body PatchConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ReloadConfig request
+	ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetHardware request
 	GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -215,6 +325,126 @@ type ClientInterface interface {
 
 	// ListModels request
 	ListModels(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) PatchConfigGroupWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchConfigGroupRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchConfigGroup(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchConfigGroupRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetConfigInfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetConfigInfoRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddConfigModelWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddConfigModelRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddConfigModel(ctx context.Context, body AddConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddConfigModelRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RemoveConfigModel(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRemoveConfigModelRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetConfigModel(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetConfigModelRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchConfigModelWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchConfigModelRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchConfigModel(ctx context.Context, id string, body PatchConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchConfigModelRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReloadConfigRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -263,6 +493,262 @@ func (c *Client) ListModels(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewPatchConfigGroupRequest calls the generic PatchConfigGroup builder with application/json body
+func NewPatchConfigGroupRequest(server string, id string, body PatchConfigGroupJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchConfigGroupRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewPatchConfigGroupRequestWithBody generates requests for PatchConfigGroup with any type of body
+func NewPatchConfigGroupRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/groups/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetConfigInfoRequest generates requests for GetConfigInfo
+func NewGetConfigInfoRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/info")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAddConfigModelRequest calls the generic AddConfigModel builder with application/json body
+func NewAddConfigModelRequest(server string, body AddConfigModelJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAddConfigModelRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewAddConfigModelRequestWithBody generates requests for AddConfigModel with any type of body
+func NewAddConfigModelRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/models")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRemoveConfigModelRequest generates requests for RemoveConfigModel
+func NewRemoveConfigModelRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/models/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetConfigModelRequest generates requests for GetConfigModel
+func NewGetConfigModelRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/models/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPatchConfigModelRequest calls the generic PatchConfigModel builder with application/json body
+func NewPatchConfigModelRequest(server string, id string, body PatchConfigModelJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchConfigModelRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewPatchConfigModelRequestWithBody generates requests for PatchConfigModel with any type of body
+func NewPatchConfigModelRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/models/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewReloadConfigRequest generates requests for ReloadConfig
+func NewReloadConfigRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/reload")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewGetHardwareRequest generates requests for GetHardware
@@ -416,6 +902,33 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// PatchConfigGroupWithBodyWithResponse request with any body
+	PatchConfigGroupWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error)
+
+	PatchConfigGroupWithResponse(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error)
+
+	// GetConfigInfoWithResponse request
+	GetConfigInfoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigInfoResponse, error)
+
+	// AddConfigModelWithBodyWithResponse request with any body
+	AddConfigModelWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddConfigModelResponse, error)
+
+	AddConfigModelWithResponse(ctx context.Context, body AddConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*AddConfigModelResponse, error)
+
+	// RemoveConfigModelWithResponse request
+	RemoveConfigModelWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RemoveConfigModelResponse, error)
+
+	// GetConfigModelWithResponse request
+	GetConfigModelWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetConfigModelResponse, error)
+
+	// PatchConfigModelWithBodyWithResponse request with any body
+	PatchConfigModelWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigModelResponse, error)
+
+	PatchConfigModelWithResponse(ctx context.Context, id string, body PatchConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchConfigModelResponse, error)
+
+	// ReloadConfigWithResponse request
+	ReloadConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReloadConfigResponse, error)
+
 	// GetHardwareWithResponse request
 	GetHardwareWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHardwareResponse, error)
 
@@ -427,6 +940,218 @@ type ClientWithResponsesInterface interface {
 
 	// ListModelsWithResponse request
 	ListModelsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelsResponse, error)
+}
+
+type PatchConfigGroupResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r PatchConfigGroupResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchConfigGroupResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PatchConfigGroupResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetConfigInfoResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ConfigInfoResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetConfigInfoResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetConfigInfoResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetConfigInfoResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AddConfigModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r AddConfigModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AddConfigModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AddConfigModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RemoveConfigModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RemoveConfigModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RemoveConfigModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RemoveConfigModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetConfigModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetConfigModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetConfigModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetConfigModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PatchConfigModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r PatchConfigModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchConfigModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PatchConfigModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ReloadConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *struct {
+		Status string `json:"status"`
+	}
+}
+
+// Status returns HTTPResponse.Status
+func (r ReloadConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReloadConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ReloadConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type GetHardwareResponse struct {
@@ -549,6 +1274,93 @@ func (r ListModelsResponse) ContentType() string {
 	return ""
 }
 
+// PatchConfigGroupWithBodyWithResponse request with arbitrary body returning *PatchConfigGroupResponse
+func (c *ClientWithResponses) PatchConfigGroupWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error) {
+	rsp, err := c.PatchConfigGroupWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchConfigGroupResponse(rsp)
+}
+
+func (c *ClientWithResponses) PatchConfigGroupWithResponse(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error) {
+	rsp, err := c.PatchConfigGroup(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchConfigGroupResponse(rsp)
+}
+
+// GetConfigInfoWithResponse request returning *GetConfigInfoResponse
+func (c *ClientWithResponses) GetConfigInfoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigInfoResponse, error) {
+	rsp, err := c.GetConfigInfo(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetConfigInfoResponse(rsp)
+}
+
+// AddConfigModelWithBodyWithResponse request with arbitrary body returning *AddConfigModelResponse
+func (c *ClientWithResponses) AddConfigModelWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddConfigModelResponse, error) {
+	rsp, err := c.AddConfigModelWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddConfigModelResponse(rsp)
+}
+
+func (c *ClientWithResponses) AddConfigModelWithResponse(ctx context.Context, body AddConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*AddConfigModelResponse, error) {
+	rsp, err := c.AddConfigModel(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddConfigModelResponse(rsp)
+}
+
+// RemoveConfigModelWithResponse request returning *RemoveConfigModelResponse
+func (c *ClientWithResponses) RemoveConfigModelWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RemoveConfigModelResponse, error) {
+	rsp, err := c.RemoveConfigModel(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRemoveConfigModelResponse(rsp)
+}
+
+// GetConfigModelWithResponse request returning *GetConfigModelResponse
+func (c *ClientWithResponses) GetConfigModelWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetConfigModelResponse, error) {
+	rsp, err := c.GetConfigModel(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetConfigModelResponse(rsp)
+}
+
+// PatchConfigModelWithBodyWithResponse request with arbitrary body returning *PatchConfigModelResponse
+func (c *ClientWithResponses) PatchConfigModelWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigModelResponse, error) {
+	rsp, err := c.PatchConfigModelWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchConfigModelResponse(rsp)
+}
+
+func (c *ClientWithResponses) PatchConfigModelWithResponse(ctx context.Context, id string, body PatchConfigModelJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchConfigModelResponse, error) {
+	rsp, err := c.PatchConfigModel(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchConfigModelResponse(rsp)
+}
+
+// ReloadConfigWithResponse request returning *ReloadConfigResponse
+func (c *ClientWithResponses) ReloadConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReloadConfigResponse, error) {
+	rsp, err := c.ReloadConfig(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReloadConfigResponse(rsp)
+}
+
 // GetHardwareWithResponse request returning *GetHardwareResponse
 func (c *ClientWithResponses) GetHardwareWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHardwareResponse, error) {
 	rsp, err := c.GetHardware(ctx, reqEditors...)
@@ -583,6 +1395,190 @@ func (c *ClientWithResponses) ListModelsWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseListModelsResponse(rsp)
+}
+
+// ParsePatchConfigGroupResponse parses an HTTP response from a PatchConfigGroupWithResponse call
+func ParsePatchConfigGroupResponse(rsp *http.Response) (*PatchConfigGroupResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchConfigGroupResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetConfigInfoResponse parses an HTTP response from a GetConfigInfoWithResponse call
+func ParseGetConfigInfoResponse(rsp *http.Response) (*GetConfigInfoResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetConfigInfoResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConfigInfoResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAddConfigModelResponse parses an HTTP response from a AddConfigModelWithResponse call
+func ParseAddConfigModelResponse(rsp *http.Response) (*AddConfigModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AddConfigModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRemoveConfigModelResponse parses an HTTP response from a RemoveConfigModelWithResponse call
+func ParseRemoveConfigModelResponse(rsp *http.Response) (*RemoveConfigModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RemoveConfigModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetConfigModelResponse parses an HTTP response from a GetConfigModelWithResponse call
+func ParseGetConfigModelResponse(rsp *http.Response) (*GetConfigModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetConfigModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePatchConfigModelResponse parses an HTTP response from a PatchConfigModelWithResponse call
+func ParsePatchConfigModelResponse(rsp *http.Response) (*PatchConfigModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchConfigModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReloadConfigResponse parses an HTTP response from a ReloadConfigWithResponse call
+func ParseReloadConfigResponse(rsp *http.Response) (*ReloadConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReloadConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseGetHardwareResponse parses an HTTP response from a GetHardwareWithResponse call

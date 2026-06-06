@@ -3,14 +3,49 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/thermal"
 )
+
+// modelFilePath extracts the --model <path> argument from a llama-server command string.
+func modelFilePath(cmd string) string {
+	fields := strings.Fields(cmd)
+	for i, f := range fields {
+		if (f == "--model" || f == "-m") && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+// loadedModelInfo returns the first running model's file size (MB) and ID,
+// or zeros if nothing is loaded or the file cannot be stat'd.
+func (s *Server) loadedModelInfo() (id string, modelMB int64) {
+	running := s.local.RunningModels()
+	for mid := range running {
+		mc, ok := s.cfg.Models[mid]
+		if !ok {
+			continue
+		}
+		path := modelFilePath(mc.Cmd)
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		return mid, info.Size() / (1024 * 1024)
+	}
+	return "", 0
+}
 
 // handleAPIHardware implements GET /api/hardware.
 // Returns a point-in-time snapshot: storage, memory, CPU, and GPU stats.
@@ -106,6 +141,26 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 			"total_mb": vramTotalMB,
 			"used_mb":  vramUsedMB,
 			"free_mb":  vramTotalMB - vramUsedMB,
+		}
+	}
+
+	// Add loaded model info: model file size as a proxy for VRAM used by weights.
+	// kv_estimate_mb = max(0, vram_used_mb - model_mb) approximates KV cache + overhead.
+	if modelID, modelMB := s.loadedModelInfo(); modelID != "" {
+		vramUsed := int64(0)
+		if v, ok := resp["vram"].(map[string]any); ok {
+			if u, ok := v["used_mb"].(int); ok {
+				vramUsed = int64(u)
+			}
+		}
+		kvEst := vramUsed - modelMB
+		if kvEst < 0 {
+			kvEst = 0
+		}
+		resp["loaded_model"] = map[string]any{
+			"id":              modelID,
+			"model_mb":        modelMB,
+			"kv_estimate_mb":  kvEst,
 		}
 	}
 
