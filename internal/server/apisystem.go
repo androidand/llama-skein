@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,9 +21,11 @@ const systemCapabilitiesVersion = 1
 // handleAPISystemVersion implements GET /api/system/version.
 func (s *Server) handleAPISystemVersion(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
-		"version":    s.build.Version,
-		"commit":     s.build.Commit,
-		"build_date": s.build.Date,
+		"version":       s.build.SkeinVersion,
+		"commit":        s.build.Commit,
+		"build_date":    s.build.Date,
+		"upstream":      map[string]string{"llama_skein_version": s.build.UpstreamVersion},
+		"skein_version": s.build.SkeinVersion,
 		"runtime": map[string]string{
 			"go_os":   goOS(),
 			"go_arch": goArch(),
@@ -106,6 +110,74 @@ func (s *Server) handleAPISystemCaptures(w http.ResponseWriter, r *http.Request)
 // Delegates to the upgrade logic in apiupgrade.go.
 func (s *Server) handleAPISystemUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.runUpgrade(w, r)
+}
+
+// handleAPISystemProvider implements GET /api/system/provider.
+// Returns provider identity and deployment metadata for agent discovery.
+func (s *Server) handleAPISystemProvider(w http.ResponseWriter, r *http.Request) {
+	hostname, _ := osHostname()
+	ip := detectLocalIP()
+	resp := map[string]any{
+		"provider": map[string]any{
+			"name":       providerName(hostname),
+			"hostname":   hostname,
+			"ip":         ip,
+			"os":         goOS(),
+			"arch":       goArch(),
+			"ssh_method": sshMethod(hostname),
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// osHostname returns the OS hostname.
+func osHostname() (string, error) {
+	return os.Hostname()
+}
+
+// detectLocalIP returns the first non-loopback IPv4 address.
+func detectLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "unknown"
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "unknown"
+}
+
+// providerName derives a short provider name from the hostname.
+func providerName(hostname string) string {
+	switch {
+	case strings.Contains(hostname, "rocky"):
+		return "rocky"
+	case strings.Contains(hostname, "llama-skein"):
+		return "proxmox"
+	case strings.Contains(hostname, "m3"):
+		return "m3"
+	case strings.Contains(hostname, "m5"):
+		return "m5"
+	default:
+		return hostname
+	}
+}
+
+// sshMethod returns the SSH deployment method based on hostname.
+func sshMethod(hostname string) string {
+	switch {
+	case strings.Contains(hostname, "rocky"):
+		return "direct"
+	case strings.Contains(hostname, "llama-skein"):
+		return "lxc_mount"
+	default:
+		return "scp"
+	}
 }
 
 // --- SSE event stream ---

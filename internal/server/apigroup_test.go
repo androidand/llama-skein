@@ -31,7 +31,7 @@ func TestServer_InflightMiddleware(t *testing.T) {
 
 func TestServer_APIVersion(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
-	s.build = BuildInfo{Version: "1.2.3", Commit: "deadbeef", Date: "2026-05-19"}
+	s.build = BuildInfo{Version: "1.2.3", SkeinVersion: "1.2.3", Commit: "deadbeef", Date: "2026-05-19"}
 
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/system/version", nil))

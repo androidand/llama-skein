@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/thermal"
 	"github.com/androidand/llama-skein/pkg/gguf"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -32,13 +32,13 @@ const (
 )
 
 var (
-	llama_cpp_build    string
-	llama_cpp_git      string
-	llama_cpp_date     string
-	build_features     []string
-	rocm_version       string
-	is_metal           bool
-	platform           string
+	llama_cpp_build string
+	llama_cpp_git   string
+	llama_cpp_date  string
+	build_features  []string
+	rocm_version    string
+	is_metal        bool
+	platform        string
 )
 
 type proxyCtxKey string
@@ -107,10 +107,10 @@ type ProxyManager struct {
 	commit    string
 	version   string
 	// llama.cpp build metadata (injected via ldflags)
-	llamaCppBuild  string
-	llamaCppGit    string
-	llamaCppDate   string
-	buildFeatures  string
+	llamaCppBuild string
+	llamaCppGit   string
+	llamaCppDate  string
+	buildFeatures string
 
 	// peer proxy see: #296, #433
 	peerProxy *PeerProxy
@@ -514,14 +514,14 @@ func (pm *ProxyManager) setupGinEngine() {
 	})
 
 	pm.ginEngine.GET("/favicon.ico", func(c *gin.Context) {
-			if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
-				c.Data(http.StatusOK, "image/x-icon", data)
-			} else {
-				c.String(http.StatusInternalServerError, err.Error())
-			}
-		})
+		if data, err := reactStaticFS.ReadFile("ui_dist/favicon.ico"); err == nil {
+			c.Data(http.StatusOK, "image/x-icon", data)
+		} else {
+			c.String(http.StatusInternalServerError, err.Error())
+		}
+	})
 
-		reactFS, err := GetReactFS()
+	reactFS, err := GetReactFS()
 	if err != nil {
 		pm.proxyLogger.Errorf("Failed to load React filesystem: %v", err)
 	} else {
@@ -707,7 +707,7 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 			"id":       modelId,
 			"object":   "model",
 			"created":  createdTime,
-			"owned_by": "llama-swap",
+			"owned_by": "llama-skein",
 			"state":    state,
 			"loaded":   loaded,
 		}
@@ -723,10 +723,10 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 
 		// Add metadata if present
 		if len(modelConfig.Metadata) > 0 {
-			if metaMap, ok := record["meta"].(gin.H); ok {
+			if metaMap, ok := asAnyMap(record["meta"]); ok {
 				metaMap["llamaswap"] = modelConfig.Metadata
 			} else {
-				record["meta"] = gin.H{
+				record["meta"] = map[string]any{
 					"llamaswap": modelConfig.Metadata,
 				}
 			}
@@ -810,7 +810,7 @@ func addGGUFMetadata(record gin.H, modelConfig config.ModelConfig) {
 		return
 	}
 
-	meta := gin.H{
+	meta := map[string]any{
 		"architecture": g.Architecture,
 	}
 	if g.Name != "" {
@@ -851,27 +851,45 @@ func addGGUFMetadata(record gin.H, modelConfig config.ModelConfig) {
 		}
 	}
 	if g.RopeScaling.Type != "" {
-		meta["rope_scaling"] = gin.H{
-			"type":              g.RopeScaling.Type,
-			"factor":            g.RopeScaling.Factor,
-			"original_length":   g.RopeScaling.OriginalLength,
-			"finetuned":         g.RopeScaling.Finetuned,
+		meta["rope_scaling"] = map[string]any{
+			"type":            g.RopeScaling.Type,
+			"factor":          g.RopeScaling.Factor,
+			"original_length": g.RopeScaling.OriginalLength,
+			"finetuned":       g.RopeScaling.Finetuned,
 		}
 	}
 	if g.RopeFreqBase > 0 {
 		meta["rope_freq_base"] = g.RopeFreqBase
 	}
 
+	attachGGUFMetadata(record, meta)
+}
+
+func asAnyMap(value any) (map[string]any, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		return v, true
+	case gin.H:
+		return map[string]any(v), true
+	default:
+		return nil, false
+	}
+}
+
+func attachGGUFMetadata(record map[string]any, meta map[string]any) {
 	if existing, ok := record["meta"]; ok {
-		if metaMap, ok := existing.(gin.H); ok {
-			if llamaswap, ok := metaMap["llamaswap"]; ok {
-				llamaswap.(gin.H)["gguf"] = meta
+		if metaMap, ok := asAnyMap(existing); ok {
+			if llamaswap, ok := asAnyMap(metaMap["llamaswap"]); ok {
+				llamaswap["gguf"] = meta
+				metaMap["llamaswap"] = llamaswap
+				record["meta"] = metaMap
+				return
 			}
 		}
-	} else {
-		record["meta"] = gin.H{
-			"llamaswap": gin.H{"gguf": meta},
-		}
+	}
+
+	record["meta"] = map[string]any{
+		"llamaswap": map[string]any{"gguf": meta},
 	}
 }
 
@@ -1395,7 +1413,7 @@ func (pm *ProxyManager) apiKeyAuth() gin.HandlerFunc {
 		}
 
 		if !valid {
-			c.Header("WWW-Authenticate", `Basic realm="llama-swap"`)
+			c.Header("WWW-Authenticate", `Basic realm="llama-skein"`)
 			pm.sendErrorResponse(c, http.StatusUnauthorized, "unauthorized: invalid or missing API key")
 			c.Abort()
 			return

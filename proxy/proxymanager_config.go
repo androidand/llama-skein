@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -117,7 +117,7 @@ func (pm *ProxyManager) apiConfigAddModel(c *gin.Context) {
 	}
 
 	pm.triggerReload()
-	c.JSON(http.StatusOK, gin.H{"id": req.ID, "status": "added"})
+	c.JSON(http.StatusAccepted, gin.H{"id": req.ID, "status": "added"})
 }
 
 // apiConfigPatchModel implements PATCH /api/config/models/:id.
@@ -145,9 +145,8 @@ func (pm *ProxyManager) apiConfigPatchModel(c *gin.Context) {
 		return
 	}
 	pm.triggerReload()
-	c.JSON(http.StatusOK, gin.H{"id": realID, "status": "updated"})
+	c.JSON(http.StatusAccepted, gin.H{"id": realID, "status": "updated"})
 }
-
 
 // apiConfigGetModel implements GET /api/config/models/:id.
 func (pm *ProxyManager) apiConfigGetModel(c *gin.Context) {
@@ -190,7 +189,6 @@ func (pm *ProxyManager) apiConfigGetModel(c *gin.Context) {
 	})
 }
 
-
 // apiConfigRemoveModel implements DELETE /api/config/models/:id.
 // Removes the model entry from the config YAML without touching the file on disk.
 func (pm *ProxyManager) apiConfigRemoveModel(c *gin.Context) {
@@ -209,7 +207,7 @@ func (pm *ProxyManager) apiConfigRemoveModel(c *gin.Context) {
 		return
 	}
 	pm.triggerReload()
-	c.JSON(http.StatusOK, gin.H{"id": realID, "status": "removed"})
+	c.JSON(http.StatusAccepted, gin.H{"id": realID, "status": "removed"})
 }
 
 // apiConfigPatchGroup implements PATCH /api/config/groups/:id.
@@ -236,7 +234,7 @@ func (pm *ProxyManager) apiConfigPatchGroup(c *gin.Context) {
 		return
 	}
 	pm.triggerReload()
-	c.JSON(http.StatusOK, gin.H{"id": id, "status": "updated"})
+	c.JSON(http.StatusAccepted, gin.H{"id": id, "status": "updated"})
 }
 
 // apiConfigReload implements POST /api/config/reload.
@@ -246,7 +244,7 @@ func (pm *ProxyManager) apiConfigReload(c *gin.Context) {
 		pm.sendErrorResponse(c, http.StatusServiceUnavailable, "reload not available; restart llama-skein manually")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "reloading"})
+	c.JSON(http.StatusAccepted, gin.H{"status": "reloading"})
 	go pm.reloadFn()
 }
 

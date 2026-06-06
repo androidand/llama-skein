@@ -80,7 +80,7 @@ models:
 	rec := httptest.NewRecorder()
 
 	pm.ginEngine.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("PATCH status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	select {

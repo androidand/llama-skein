@@ -112,7 +112,7 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.triggerReload()
-	writeJSON(w, map[string]any{"id": req.ID, "status": "added"})
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": req.ID, "status": "added"})
 }
 
 // handleAPIConfigGetModel implements GET /api/config/models/{id}.
@@ -180,7 +180,7 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.triggerReload()
-	writeJSON(w, map[string]any{"id": realID, "status": "updated"})
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": realID, "status": "updated"})
 }
 
 // handleAPIConfigRemoveModel implements DELETE /api/config/models/{id}.
@@ -201,7 +201,7 @@ func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.triggerReload()
-	writeJSON(w, map[string]any{"id": realID, "status": "removed"})
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": realID, "status": "removed"})
 }
 
 // handleAPIConfigPatchGroup implements PATCH /api/config/groups/{id}.
@@ -227,7 +227,7 @@ func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.triggerReload()
-	writeJSON(w, map[string]any{"id": id, "status": "updated"})
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": id, "status": "updated"})
 }
 
 // handleAPIConfigReload implements POST /api/config/reload.
@@ -237,7 +237,7 @@ func (s *Server) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
 			"reload not available; restart llama-skein manually")
 		return
 	}
-	writeJSON(w, map[string]any{"status": "reloading"})
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"status": "reloading"})
 	go s.reloadFn()
 }
 

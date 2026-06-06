@@ -242,6 +242,12 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 
 // writeJSON encodes v as JSON with the correct content-type header.
 func writeJSON(w http.ResponseWriter, v any) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+// writeJSONStatus encodes v as JSON with the given status code.
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }

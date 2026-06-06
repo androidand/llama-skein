@@ -291,7 +291,7 @@ peers:
 
 		ownedBy, ok := model["owned_by"].(string)
 		assert.True(t, ok, "owned_by should be a string")
-		assert.Equal(t, "llama-swap", ownedBy)
+		assert.Equal(t, "llama-skein", ownedBy)
 
 		// check for optional name and description
 		if modelID == "model1" {
@@ -408,6 +408,40 @@ models:
 	assert.NotNil(t, model2Data)
 	_, exists = model2Data["llamaswap_meta"]
 	assert.False(t, exists, "model2 should not have llamaswap_meta")
+}
+
+func TestProxyManager_attachGGUFMetadata_PreservesExistingMetadata(t *testing.T) {
+	record := map[string]any{
+		"meta": map[string]any{
+			"llamaswap": map[string]any{
+				"port": 1234,
+			},
+		},
+	}
+
+	attachGGUFMetadata(record, map[string]any{
+		"architecture": "llama",
+		"gguf_name":    "test-model",
+	})
+
+	meta, ok := record["meta"].(map[string]any)
+	if !assert.True(t, ok, "meta should be a map") {
+		t.FailNow()
+	}
+
+	llamaswap, ok := meta["llamaswap"].(map[string]any)
+	if !assert.True(t, ok, "llamaswap should be a map") {
+		t.FailNow()
+	}
+
+	assert.Equal(t, 1234, llamaswap["port"])
+
+	ggufMeta, ok := llamaswap["gguf"].(map[string]any)
+	if !assert.True(t, ok, "gguf should be a map") {
+		t.FailNow()
+	}
+	assert.Equal(t, "llama", ggufMeta["architecture"])
+	assert.Equal(t, "test-model", ggufMeta["gguf_name"])
 }
 
 func TestProxyManager_ListModelsHandler_WithRuntimeHints(t *testing.T) {
@@ -1534,7 +1568,7 @@ models:
 
 		proxy.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
-		assert.Equal(t, `Basic realm="llama-swap"`, w.Header().Get("WWW-Authenticate"))
+		assert.Equal(t, `Basic realm="llama-skein"`, w.Header().Get("WWW-Authenticate"))
 	})
 }
 

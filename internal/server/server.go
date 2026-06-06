@@ -106,13 +106,15 @@ var modelGetRoutes = []string{
 
 // BuildInfo carries version metadata surfaced by GET /api/version.
 type BuildInfo struct {
-	Version       string
-	Commit        string
-	Date          string
-	LlamaCppBuild string
-	LlamaCppGit   string
-	LlamaCppDate  string
-	BuildFeatures string
+	Version         string
+	Commit          string
+	Date            string
+	UpstreamVersion string
+	SkeinVersion    string
+	LlamaCppBuild   string
+	LlamaCppGit     string
+	LlamaCppDate    string
+	BuildFeatures   string
 }
 
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
@@ -302,6 +304,7 @@ func (s *Server) routes() {
 	mux.Handle("GET "+api.RouteSystemMetrics, apiChain.ThenFunc(s.handleAPISystemMetrics))
 	mux.Handle("GET "+api.RouteSystemCaptures, apiChain.ThenFunc(s.handleAPISystemCaptures))
 	mux.Handle("POST "+api.RouteSystemUpgrade, apiChain.ThenFunc(s.handleAPISystemUpgrade))
+	mux.Handle("GET "+api.RouteSystemProvider, apiChain.ThenFunc(s.handleAPISystemProvider))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
