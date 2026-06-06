@@ -1,0 +1,11 @@
+{
+  "task": "1. Locate the existing unit tests for `internal/server/api/skein.go` that test silence logic.",
+  "provider": "m3/llamaswap",
+  "role": "coder",
+  "reason": "score=570.0 quality=1.00 reliability=1.00 age=0.00 load=-0.0 attempts=-0.0 eligible=1 considered=1 selected=move-internal-server-api-skein-go-s#0",
+  "skipped_reasons": {
+    "excluded_slug": 1,
+    "non_dispatchable_status:blocked": 2
+  },
+  "at": "2026-06-02T06:17:43.145904Z"
+}

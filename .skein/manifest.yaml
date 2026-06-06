@@ -1,0 +1,51 @@
+entries:
+    - domain: agents
+      name: analyst.md
+      path: .skein/agents/analyst.md
+      template_sha: 0aedca670833b013a3ec646e3cdf3371e73480f95fcc779c6b2091a9abdaf846
+      copied_at: 2026-06-01T23:06:36.216901Z
+    - domain: agents
+      name: architect.md
+      path: .skein/agents/architect.md
+      template_sha: 4fda93869097bdcb4bd37ce50ebc9ab03fc60c02a3570c490e05050cd0585cea
+      copied_at: 2026-06-01T23:06:36.218504Z
+    - domain: agents
+      name: coder.md
+      path: .skein/agents/coder.md
+      template_sha: f085ebab94346635ba39715fe2db9ba9617f18ce8fdd394e2e5db9d0f27dc524
+      copied_at: 2026-06-01T23:06:36.219514Z
+    - domain: agents
+      name: debugger.md
+      path: .skein/agents/debugger.md
+      template_sha: 992074ffc0c78c645f51670b6635c36c65c565b10c2ef5f7e9a32cda065eb23c
+      copied_at: 2026-06-01T23:06:36.220259Z
+    - domain: agents
+      name: idea-reviewer.md
+      path: .skein/agents/idea-reviewer.md
+      template_sha: 0a85df1e840d6fb1ba550237c9eb268885a50d9b782227ff02510389860d58a5
+      copied_at: 2026-06-01T23:06:36.220713Z
+    - domain: agents
+      name: publisher.md
+      path: .skein/agents/publisher.md
+      template_sha: 672c841a9788496c0d5d6329ef4b0e4911d6e4df5afb11628d4a0b614e716bc7
+      copied_at: 2026-06-01T23:06:36.221766Z
+    - domain: agents
+      name: researcher.md
+      path: .skein/agents/researcher.md
+      template_sha: d9b4f6b919bdebc8577d77f9aebee0fb0fd99251bf66b0f5103428c6f95276b9
+      copied_at: 2026-06-01T23:06:36.222426Z
+    - domain: agents
+      name: reviewer.md
+      path: .skein/agents/reviewer.md
+      template_sha: 83ae12c56e13f73a8e8c0989e9fd5ecbef68cce61a03a4b855f17a57278bf7df
+      copied_at: 2026-06-01T23:06:36.223796Z
+    - domain: agents
+      name: scanner.md
+      path: .skein/agents/scanner.md
+      template_sha: dbb3cf6c0387108ba07295781f8f043ac4cfceb05134f3e22819c332c5cf0c22
+      copied_at: 2026-06-01T23:06:36.224768Z
+    - domain: agents
+      name: tester.md
+      path: .skein/agents/tester.md
+      template_sha: ef6c9e109aecf1cd5421ea20f52754364d24ea7e29a7ef410c89b74b02c318c2
+      copied_at: 2026-06-01T23:06:36.229764Z

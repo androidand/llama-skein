@@ -1,0 +1,11 @@
+{
+  "task": "1. Analyze `internal/server/silent` implementation to understand the 503 fallback logic and dependencies.",
+  "provider": "proxmox/llamaswap",
+  "role": "coder",
+  "reason": "score=496.8 quality=0.51 reliability=0.51 age=0.00 load=-0.0 attempts=-0.0 eligible=1 considered=1 selected=add-unit-tests-for-silent-mode-503#0",
+  "skipped_reasons": {
+    "excluded_slug": 1,
+    "non_dispatchable_status:blocked": 3
+  },
+  "at": "2026-06-02T06:19:43.876613Z"
+}

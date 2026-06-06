@@ -1,0 +1,10 @@
+{
+  "slug": "add-unit-tests-for-silent-mode-503",
+  "role": "coder",
+  "provider": "proxmox/llamaswap",
+  "host": "m3.local",
+  "pid": 52162,
+  "leased_at": "2026-06-02T06:19:43.87694Z",
+  "lease_ttl_seconds": 60,
+  "last_heartbeat": "2026-06-02T06:26:03.880687Z"
+}

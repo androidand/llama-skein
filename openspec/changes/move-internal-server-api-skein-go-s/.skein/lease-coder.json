@@ -1,0 +1,10 @@
+{
+  "slug": "move-internal-server-api-skein-go-s",
+  "role": "coder",
+  "provider": "m3/llamaswap",
+  "host": "m3.local",
+  "pid": 52162,
+  "leased_at": "2026-06-02T06:17:43.146995Z",
+  "lease_ttl_seconds": 60,
+  "last_heartbeat": "2026-06-02T06:26:03.153482Z"
+}

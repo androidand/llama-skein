@@ -1,0 +1,7 @@
+{
+  "outcome": "recoverable_failure",
+  "code": "NO_PROGRESS_REPEATED",
+  "action": "retry with fallback chain and split task if repeated",
+  "detail": "coder loop did not finish",
+  "at": "2026-06-02T06:19:35.235325Z"
+}
