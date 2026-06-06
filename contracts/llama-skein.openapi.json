@@ -594,6 +594,11 @@
           },
           "max_output_tokens": {
             "type": "integer"
+          },
+          "backend": {
+            "type": "string",
+            "enum": ["llamacpp", "mlx", "vllm"],
+            "description": "Inference backend type."
           }
         }
       },
@@ -643,6 +648,11 @@
           "cmd": {
             "type": "string"
           },
+          "backend": {
+            "type": "string",
+            "enum": ["llamacpp", "mlx", "vllm"],
+            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp."
+          },
           "name": {
             "type": "string"
           },
@@ -665,6 +675,11 @@
         "properties": {
           "cmd": {
             "type": "string"
+          },
+          "backend": {
+            "type": "string",
+            "enum": ["llamacpp", "mlx", "vllm"],
+            "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp."
           },
           "name": {
             "type": "string"

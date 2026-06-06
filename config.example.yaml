@@ -312,6 +312,54 @@ models:
       tlsHandshake: 10
       idleConn: 90
 
+  # -----------------------------------------------------------------------
+  # Apple Silicon (MLX) example:
+  # Requires: pip install mlx-lm
+  # mlx_lm.server is OpenAI-compatible and runs natively on Apple Silicon
+  # unified memory. Typically 1.5–2× faster than llama.cpp on M-series chips.
+  # -----------------------------------------------------------------------
+  "mlx-qwen3-8b":
+    # backend: selects backend-specific behaviours.
+    # - optional, default: "llamacpp"
+    # - "mlx"     — mlx_lm.server (Apple Silicon only)
+    # - "vllm"    — vllm serve (NVIDIA/CUDA hosts)
+    # - "llamacpp"— llama-server (default, all platforms)
+    backend: mlx
+    cmd: mlx_lm.server --model mlx-community/Qwen3-8B-4bit --port ${PORT} --host 127.0.0.1
+    # mlx_lm.server supports /health natively — no need to override checkEndpoint
+    name: "Qwen3-8B (MLX)"
+    description: "Qwen3-8B running via MLX on Apple Silicon"
+    ttl: 300
+
+  # -----------------------------------------------------------------------
+  # vLLM example (NVIDIA CUDA or AMD ROCm):
+  # vLLM is OpenAI-compatible and offers continuous batching for high
+  # throughput on discrete GPUs.
+  #
+  # Install for NVIDIA (CUDA):
+  #   pip install vllm
+  #
+  # Install for AMD (ROCm) — use the ROCm-specific wheel index, e.g.:
+  #   pip install vllm --extra-index-url https://download.pytorch.org/whl/rocm6.3
+  #   (match the rocmX.Y suffix to the ROCm version installed on your system)
+  # -----------------------------------------------------------------------
+  "vllm-qwen3-8b":
+    backend: vllm
+    cmd: |
+      vllm serve Qwen/Qwen3-8B
+      --port ${PORT}
+      --host 127.0.0.1
+      --max-model-len 32768
+    name: "Qwen3-8B (vLLM)"
+    description: "Qwen3-8B running via vLLM (CUDA or ROCm)"
+    # vLLM can take a while to compile GPU kernels on first launch
+    ttl: 600
+    env:
+      # NVIDIA: set CUDA_VISIBLE_DEVICES
+      - "CUDA_VISIBLE_DEVICES=0"
+      # AMD: set HIP_VISIBLE_DEVICES instead (comment out the line above)
+      # - "HIP_VISIBLE_DEVICES=0"
+
   # Unlisted model example:
   "qwen-unlisted":
     # unlisted: boolean, true or false

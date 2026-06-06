@@ -16,6 +16,69 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ConfigModelPatchRequestBackend.
+const (
+	ConfigModelPatchRequestBackendLlamacpp ConfigModelPatchRequestBackend = "llamacpp"
+	ConfigModelPatchRequestBackendMlx      ConfigModelPatchRequestBackend = "mlx"
+	ConfigModelPatchRequestBackendVllm     ConfigModelPatchRequestBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelPatchRequestBackend enum.
+func (e ConfigModelPatchRequestBackend) Valid() bool {
+	switch e {
+	case ConfigModelPatchRequestBackendLlamacpp:
+		return true
+	case ConfigModelPatchRequestBackendMlx:
+		return true
+	case ConfigModelPatchRequestBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigModelRequestBackend.
+const (
+	ConfigModelRequestBackendLlamacpp ConfigModelRequestBackend = "llamacpp"
+	ConfigModelRequestBackendMlx      ConfigModelRequestBackend = "mlx"
+	ConfigModelRequestBackendVllm     ConfigModelRequestBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelRequestBackend enum.
+func (e ConfigModelRequestBackend) Valid() bool {
+	switch e {
+	case ConfigModelRequestBackendLlamacpp:
+		return true
+	case ConfigModelRequestBackendMlx:
+		return true
+	case ConfigModelRequestBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelBackend.
+const (
+	Llamacpp ModelBackend = "llamacpp"
+	Mlx      ModelBackend = "mlx"
+	Vllm     ModelBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the ModelBackend enum.
+func (e ModelBackend) Valid() bool {
+	switch e {
+	case Llamacpp:
+		return true
+	case Mlx:
+		return true
+	case Vllm:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ModelListObject.
 const (
 	List ModelListObject = "list"
@@ -71,33 +134,45 @@ type ConfigModelInfo struct {
 
 // ConfigModelPatchRequest defines model for ConfigModelPatchRequest.
 type ConfigModelPatchRequest struct {
-	Aliases               *[]string               `json:"aliases,omitempty"`
-	CacheTypeKDash        *string                 `json:"cache-type-k,omitempty"`
-	CacheTypeVDash        *string                 `json:"cache-type-v,omitempty"`
-	CacheTypeK            *string                 `json:"cache_type_k,omitempty"`
-	CacheTypeV            *string                 `json:"cache_type_v,omitempty"`
-	Cmd                   *string                 `json:"cmd,omitempty"`
-	ConcurrencyLimitCamel *int                    `json:"concurrencyLimit,omitempty"`
-	ConcurrencyLimit      *int                    `json:"concurrency_limit,omitempty"`
-	CtxSizeDash           *int                    `json:"ctx-size,omitempty"`
-	CtxSize               *int                    `json:"ctx_size,omitempty"`
-	Description           *string                 `json:"description,omitempty"`
-	Flags                 *map[string]interface{} `json:"flags,omitempty"`
-	NGPULayersDash        *int                    `json:"n-gpu-layers,omitempty"`
-	NGpuLayers            *int                    `json:"n_gpu_layers,omitempty"`
-	Name                  *string                 `json:"name,omitempty"`
-	Ttl                   *int                    `json:"ttl,omitempty"`
+	Aliases *[]string `json:"aliases,omitempty"`
+
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+	Backend               *ConfigModelPatchRequestBackend `json:"backend,omitempty"`
+	CacheTypeKDash        *string                         `json:"cache-type-k,omitempty"`
+	CacheTypeVDash        *string                         `json:"cache-type-v,omitempty"`
+	CacheTypeK            *string                         `json:"cache_type_k,omitempty"`
+	CacheTypeV            *string                         `json:"cache_type_v,omitempty"`
+	Cmd                   *string                         `json:"cmd,omitempty"`
+	ConcurrencyLimitCamel *int                            `json:"concurrencyLimit,omitempty"`
+	ConcurrencyLimit      *int                            `json:"concurrency_limit,omitempty"`
+	CtxSizeDash           *int                            `json:"ctx-size,omitempty"`
+	CtxSize               *int                            `json:"ctx_size,omitempty"`
+	Description           *string                         `json:"description,omitempty"`
+	Flags                 *map[string]interface{}         `json:"flags,omitempty"`
+	NGPULayersDash        *int                            `json:"n-gpu-layers,omitempty"`
+	NGpuLayers            *int                            `json:"n_gpu_layers,omitempty"`
+	Name                  *string                         `json:"name,omitempty"`
+	Ttl                   *int                            `json:"ttl,omitempty"`
 }
+
+// ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+type ConfigModelPatchRequestBackend string
 
 // ConfigModelRequest defines model for ConfigModelRequest.
 type ConfigModelRequest struct {
-	Aliases     *[]string `json:"aliases,omitempty"`
-	Cmd         string    `json:"cmd"`
-	Description *string   `json:"description,omitempty"`
-	Id          string    `json:"id"`
-	Name        *string   `json:"name,omitempty"`
-	Ttl         *int      `json:"ttl,omitempty"`
+	Aliases *[]string `json:"aliases,omitempty"`
+
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+	Backend     *ConfigModelRequestBackend `json:"backend,omitempty"`
+	Cmd         string                     `json:"cmd"`
+	Description *string                    `json:"description,omitempty"`
+	Id          string                     `json:"id"`
+	Name        *string                    `json:"name,omitempty"`
+	Ttl         *int                       `json:"ttl,omitempty"`
 }
+
+// ConfigModelRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA) or AMD (ROCm). Default: llamacpp.
+type ConfigModelRequestBackend string
 
 // ConfigModelResponse defines model for ConfigModelResponse.
 type ConfigModelResponse struct {
@@ -144,17 +219,22 @@ type MemoryInfo struct {
 
 // Model defines model for Model.
 type Model struct {
-	ContextLength   *int    `json:"context_length,omitempty"`
-	Created         *int    `json:"created,omitempty"`
-	Description     *string `json:"description,omitempty"`
-	Id              string  `json:"id"`
-	Loaded          *bool   `json:"loaded,omitempty"`
-	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
-	Name            *string `json:"name,omitempty"`
-	Object          string  `json:"object"`
-	OwnedBy         *string `json:"owned_by,omitempty"`
-	State           *string `json:"state,omitempty"`
+	// Backend Inference backend type.
+	Backend         *ModelBackend `json:"backend,omitempty"`
+	ContextLength   *int          `json:"context_length,omitempty"`
+	Created         *int          `json:"created,omitempty"`
+	Description     *string       `json:"description,omitempty"`
+	Id              string        `json:"id"`
+	Loaded          *bool         `json:"loaded,omitempty"`
+	MaxOutputTokens *int          `json:"max_output_tokens,omitempty"`
+	Name            *string       `json:"name,omitempty"`
+	Object          string        `json:"object"`
+	OwnedBy         *string       `json:"owned_by,omitempty"`
+	State           *string       `json:"state,omitempty"`
 }
+
+// ModelBackend Inference backend type.
+type ModelBackend string
 
 // ModelList defines model for ModelList.
 type ModelList struct {

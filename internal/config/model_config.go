@@ -20,6 +20,15 @@ type TimeoutsConfig struct {
 	IdleConn       int `yaml:"idleConn"`
 }
 
+// BackendLlamaCpp is the default backend, compatible with llama.cpp's llama-server.
+const BackendLlamaCpp = "llamacpp"
+
+// BackendMLX targets mlx_lm.server on Apple Silicon.
+const BackendMLX = "mlx"
+
+// BackendVLLM targets vllm serve on NVIDIA (CUDA) or AMD (ROCm) GPU hosts.
+const BackendVLLM = "vllm"
+
 type ModelConfig struct {
 	Cmd           string   `yaml:"cmd"`
 	CmdStop       string   `yaml:"cmdStop"`
@@ -30,6 +39,9 @@ type ModelConfig struct {
 	UnloadAfter   int      `yaml:"ttl"`
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
+
+	// Backend selects backend-specific behaviours. Empty string is treated as llamacpp.
+	Backend string `yaml:"backend"`
 
 	// #179 for /v1/models
 	Name        string `yaml:"name"`
@@ -101,6 +113,12 @@ func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 func (m *ModelConfig) SanitizedCommand() ([]string, error) {
 	return SanitizeCommand(m.Cmd)
+}
+
+// IsLlamaCpp returns true when the backend is llama.cpp (the default).
+// Use this to gate llama.cpp-specific behaviours such as /slots cancellation.
+func (m *ModelConfig) IsLlamaCpp() bool {
+	return m.Backend == "" || m.Backend == BackendLlamaCpp
 }
 
 // ModelFilters embeds Filters and adds legacy support for strip_params field

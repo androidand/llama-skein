@@ -127,7 +127,7 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 			}
 			// Remap llama.cpp context-overflow errors to HTTP 413 so callers
 			// (skein, opencode) can detect overflow without body string matching.
-			if resp.StatusCode == http.StatusBadRequest {
+			if config.IsLlamaCpp() && resp.StatusCode == http.StatusBadRequest {
 				body, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(body)) // always restore
@@ -660,10 +660,9 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If the client disconnected mid-stream (context cancelled) and this is the
-	// only in-flight request, the inference slot on the upstream llama.cpp process
-	// is now orphaned — it keeps generating into the void and blocks future
-	// requests. Cancel it explicitly via the llama.cpp /slots endpoint.
-	if r.Context().Err() != nil && p.inFlightRequestsCount.Load() <= 1 {
+	// only in-flight request, cancel orphaned inference slots. Only llama.cpp
+	// exposes the /slots endpoint needed for this.
+	if p.config.IsLlamaCpp() && r.Context().Err() != nil && p.inFlightRequestsCount.Load() <= 1 {
 		go p.cancelBusySlots()
 	}
 
