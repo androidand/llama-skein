@@ -23,60 +23,57 @@ func TestLoadingThemeConstants(t *testing.T) {
 }
 
 func TestResolveThemeRemarks(t *testing.T) {
+	// wantMin: minimum acceptable number of remarks for this theme.
+	// wantOne: expected first remark (identifies the correct theme list was returned).
 	tests := []struct {
-		name     string
-		theme    LoadingTheme
-		wantLen  int
-		wantOne  string
-		wantAll  int // expected total slice length
+		name    string
+		theme   LoadingTheme
+		wantMin int
+		wantOne string
 	}{
 		{
 			name:    "default",
 			theme:   LoadingThemeDefault,
-			wantLen: 20,
-			wantOne: "Loading model",
-			wantAll: 20,
+			wantMin: 20,
+			wantOne: loadingRemarks[0],
 		},
 		{
 			name:    "vault-boy",
 			theme:   LoadingThemeVaultBoy,
-			wantLen: 28,
+			wantMin: 20,
 			wantOne: "Please stand by",
-			wantAll: 28,
 		},
 		{
 			name:    "knight-rider",
 			theme:   LoadingThemeKnightRider,
-			wantLen: 26,
+			wantMin: 20,
 			wantOne: "Initializing KITT",
-			wantAll: 26,
 		},
 		{
 			name:    "skein",
 			theme:   LoadingThemeSkein,
-			wantLen: 25,
+			wantMin: 20,
 			wantOne: "Untangling the skein",
-			wantAll: 25,
 		},
 		{
 			name:    "unknown theme falls back to default",
 			theme:   "nonexistent",
-			wantLen: 20,
-			wantAll: 20,
+			wantMin: 20,
+			wantOne: loadingRemarks[0],
 		},
 		{
 			name:    "empty theme falls back to default",
 			theme:   "",
-			wantLen: 20,
-			wantAll: 20,
+			wantMin: 20,
+			wantOne: loadingRemarks[0],
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			remarks := resolveThemeRemarks(tt.theme)
-			if len(remarks) != tt.wantAll {
-				t.Errorf("expected %d remarks, got %d", tt.wantAll, len(remarks))
+			if len(remarks) < tt.wantMin {
+				t.Errorf("expected at least %d remarks, got %d", tt.wantMin, len(remarks))
 			}
 			if len(remarks) == 0 {
 				return

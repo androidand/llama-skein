@@ -2,11 +2,14 @@ package gguf_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
-	"os"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
@@ -186,6 +189,49 @@ func TestParseV3(t *testing.T) {
 	}
 }
 
+func TestParseArrayMetadata(t *testing.T) {
+	// Verify the parser reads array fields with correct byte order:
+	// element_type (uint32) then count (uint64) then elements.
+	var buf bytes.Buffer
+	buf.WriteString("GGUF")
+	binary.Write(&buf, binary.LittleEndian, uint32(3)) // version
+	binary.Write(&buf, binary.LittleEndian, uint64(0)) // tensor count
+	binary.Write(&buf, binary.LittleEndian, uint64(2)) // kv count
+
+	// KV 1: architecture string
+	writeKeyV(&buf, "general.architecture", 3)
+	binary.Write(&buf, binary.LittleEndian, uint32(8)) // STRING
+	binary.Write(&buf, binary.LittleEndian, uint64(5))
+	buf.WriteString("llama")
+
+	// KV 2: F32 array — same layout as e.g. rope.dimension_sections in real models
+	writeKeyV(&buf, "llama.test.float_array", 3)
+	binary.Write(&buf, binary.LittleEndian, uint32(9))                       // ARRAY
+	binary.Write(&buf, binary.LittleEndian, uint32(6))                       // elem type: F32
+	binary.Write(&buf, binary.LittleEndian, uint64(3))                       // count
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(1.5)))  // [0]
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(2.5)))  // [1]
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(3.5)))  // [2]
+
+	g, err := gguf.Parse(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if g.Architecture != "llama" {
+		t.Errorf("Architecture = %q, want llama", g.Architecture)
+	}
+	arr, ok := g.Metadata["llama.test.float_array"].([]float64)
+	if !ok {
+		t.Fatalf("metadata[float_array] type = %T, want []float64", g.Metadata["llama.test.float_array"])
+	}
+	if len(arr) != 3 {
+		t.Errorf("array len = %d, want 3", len(arr))
+	}
+	if arr[0] != float64(float32(1.5)) || arr[1] != float64(float32(2.5)) || arr[2] != float64(float32(3.5)) {
+		t.Errorf("array values = %v, want [1.5 2.5 3.5]", arr)
+	}
+}
+
 func TestNotGGUF(t *testing.T) {
 	_, err := gguf.Parse(bytes.NewReader([]byte("NOTGGUF")))
 	if err == nil {
@@ -193,11 +239,51 @@ func TestNotGGUF(t *testing.T) {
 	}
 }
 
-func TestParseRealFile(t *testing.T) {
-	path := "/Users/andreas/models/gguf/lmstudio-community/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
-	g, err := gguf.ParseFile(path)
+// hfTinyLlamaURL is a small well-known GGUF on HuggingFace used for integration tests.
+// We fetch only the first 256 KB (enough to cover all GGUF metadata) via a range request.
+const hfTinyLlamaURL = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+
+// downloadGGUFHeader fetches the first 256 KB of a GGUF file from HuggingFace using
+// an HTTP range request — enough to contain the full metadata section of any model.
+// The test is skipped (not failed) when the network is unavailable or -short is set.
+func downloadGGUFHeader(t *testing.T, url string) []byte {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping HuggingFace download test with -short")
+	}
+
+	const rangeEnd = 256*1024 - 1
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
-		t.Fatalf("ParseFile: %v", err)
+		t.Skipf("build request: %v", err)
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rangeEnd))
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Skipf("network unavailable, skipping HuggingFace test: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		t.Skipf("HuggingFace returned HTTP %d, skipping", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	return data
+}
+
+func TestParseRealFile(t *testing.T) {
+	data := downloadGGUFHeader(t, hfTinyLlamaURL)
+
+	g, err := gguf.Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
 
 	t.Logf("Version: %d", g.Version)
@@ -211,22 +297,17 @@ func TestParseRealFile(t *testing.T) {
 	t.Logf("HeadCountKV: %d", g.HeadCountKV)
 	t.Logf("FeedForwardLength: %d", g.FeedForwardLength)
 	t.Logf("IsMoE: %v", g.IsMoE())
-	t.Logf("ExpertCount: %d", g.ExpertCount)
-	t.Logf("ExpertUsedCount: %d", g.ExpertUsedCount)
-	t.Logf("ExpertFeedForwardLength: %d", g.ExpertFeedForwardLength)
-	t.Logf("ExpertSharedFeedForwardLength: %d", g.ExpertSharedFeedForwardLength)
-	t.Logf("FileSize: %d", g.FileSize)
 	t.Logf("KVCount: %d", g.KVCount)
 	t.Logf("TensorCount: %d", g.TensorCount)
 
-	if g.Architecture != "qwen35moe" {
-		t.Errorf("Architecture = %q, want %q", g.Architecture, "qwen35moe")
+	if g.Architecture != "llama" {
+		t.Errorf("Architecture = %q, want %q", g.Architecture, "llama")
 	}
-	if g.Version != 3 {
-		t.Errorf("Version = %d, want %d", g.Version, 3)
+	if g.Version != 2 && g.Version != 3 {
+		t.Errorf("Version = %d, want 2 or 3", g.Version)
 	}
-	if !g.IsMoE() {
-		t.Error("IsMoE = false, want true")
+	if g.IsMoE() {
+		t.Error("IsMoE = true, want false for TinyLlama")
 	}
 	if g.ContextLength <= 0 {
 		t.Error("ContextLength <= 0")
@@ -234,182 +315,6 @@ func TestParseRealFile(t *testing.T) {
 	if g.ParamCount <= 0 {
 		t.Error("ParamCount <= 0")
 	}
-}
-
-func TestDebugRealFile(t *testing.T) {
-	path := "/Users/andreas/models/gguf/lmstudio-community/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	buf := make([]byte, 4)
-	io.ReadFull(f, buf)
-	t.Logf("Magic: %s", string(buf))
-
-	version := binary.LittleEndian.Uint32(mustRead(f, 4))
-	t.Logf("Version: %d", version)
-
-	tensorCount := binary.LittleEndian.Uint64(mustRead(f, 8))
-	t.Logf("Tensor count: %d", tensorCount)
-
-	kvCount := binary.LittleEndian.Uint64(mustRead(f, 8))
-	t.Logf("KV count: %d", kvCount)
-
-	for i := uint64(0); i < kvCount; i++ {
-		off, _ := f.Seek(0, 1)
-		keyLen := binary.LittleEndian.Uint64(mustRead(f, 8))
-		keyBuf := mustRead(f, int(keyLen))
-		key := string(keyBuf)
-		typ := binary.LittleEndian.Uint32(mustRead(f, 4))
-		t.Logf("[%d] offset=%d key=%q type=0x%08x", i, off, key, typ)
-
-		// Skip value
-		switch gguf.GGUFType(typ) {
-		case gguf.GGUFTypeString:
-			strLen := binary.LittleEndian.Uint64(mustRead(f, 8))
-			mustRead(f, int(strLen))
-		case gguf.GGUFTypeBool:
-			mustRead(f, 1)
-		case gguf.GGUFTypeU8, gguf.GGUFTypeI8:
-			mustRead(f, 1)
-		case gguf.GGUFTypeU16, gguf.GGUFTypeI16:
-			mustRead(f, 2)
-		case gguf.GGUFTypeU32, gguf.GGUFTypeI32, gguf.GGUFTypeF32:
-			mustRead(f, 4)
-		case gguf.GGUFTypeU64, gguf.GGUFTypeI64, gguf.GGUFTypeF64:
-			mustRead(f, 8)
-		case gguf.GGUFTypeArray:
-			count := binary.LittleEndian.Uint64(mustRead(f, 8))
-			elemType := binary.LittleEndian.Uint32(mustRead(f, 4))
-			t.Logf("    bare array: count=%d, elemType=0x%x", count, elemType)
-			// Only print first few, skip rest
-			if count > 5 {
-				t.Logf("    (too many elements, not dumping)")
-			}
-			for j := uint64(0); j < count; j++ {
-				switch gguf.GGUFType(elemType) {
-				case gguf.GGUFTypeString:
-					sl := binary.LittleEndian.Uint64(mustRead(f, 8))
-					if j < 3 {
-						s := string(mustRead(f, int(sl)))
-						t.Logf("    [%d] %q", j, s)
-					} else {
-						mustRead(f, int(sl))
-					}
-				case gguf.GGUFTypeF32:
-					if j < 3 {
-						v := binary.LittleEndian.Uint32(mustRead(f, 4))
-						t.Logf("    [%d] %f", j, math.Float32frombits(v))
-					} else {
-						mustRead(f, 4)
-					}
-				case gguf.GGUFTypeF64:
-					if j < 3 {
-						v := binary.LittleEndian.Uint64(mustRead(f, 8))
-						t.Logf("    [%d] %f", j, math.Float64frombits(v))
-					} else {
-						mustRead(f, 8)
-					}
-				case gguf.GGUFTypeI32:
-					if j < 3 {
-						v := binary.LittleEndian.Uint32(mustRead(f, 4))
-						t.Logf("    [%d] %d", j, int32(v))
-					} else {
-						mustRead(f, 4)
-					}
-				case gguf.GGUFTypeI64:
-					if j < 3 {
-						v := binary.LittleEndian.Uint64(mustRead(f, 8))
-						t.Logf("    [%d] %d", j, int64(v))
-					} else {
-						mustRead(f, 8)
-					}
-				case gguf.GGUFTypeU64:
-					if j < 3 {
-						v := binary.LittleEndian.Uint64(mustRead(f, 8))
-						t.Logf("    [%d] %d", j, v)
-					} else {
-						mustRead(f, 8)
-					}
-				default:
-					mustRead(f, 1)
-				}
-			}
-		default:
-			// Array types: 9 + element_type * 0x10000
-			if gguf.GGUFType(typ) >= 0x10000 {
-				elemType := gguf.GGUFType(typ >> 16)
-				count := binary.LittleEndian.Uint64(mustRead(f, 8))
-				t.Logf("    typed array: elemType=0x%x, count=%d", elemType, count)
-				for j := uint64(0); j < count; j++ {
-					switch elemType {
-					case gguf.GGUFTypeString:
-						sl := binary.LittleEndian.Uint64(mustRead(f, 8))
-						if j < 3 {
-							s := string(mustRead(f, int(sl)))
-							t.Logf("    [%d] %q", j, s)
-						} else {
-							mustRead(f, int(sl))
-						}
-					case gguf.GGUFTypeF32:
-						if j < 3 {
-							v := binary.LittleEndian.Uint32(mustRead(f, 4))
-							t.Logf("    [%d] %f", j, math.Float32frombits(v))
-						} else {
-							mustRead(f, 4)
-						}
-					case gguf.GGUFTypeF64:
-						if j < 3 {
-							v := binary.LittleEndian.Uint64(mustRead(f, 8))
-							t.Logf("    [%d] %f", j, math.Float64frombits(v))
-						} else {
-							mustRead(f, 8)
-						}
-					case gguf.GGUFTypeI32:
-						if j < 3 {
-							v := binary.LittleEndian.Uint32(mustRead(f, 4))
-							t.Logf("    [%d] %d", j, int32(v))
-						} else {
-							mustRead(f, 4)
-						}
-					case gguf.GGUFTypeI64:
-						if j < 3 {
-							v := binary.LittleEndian.Uint64(mustRead(f, 8))
-							t.Logf("    [%d] %d", j, int64(v))
-						} else {
-							mustRead(f, 8)
-						}
-					case gguf.GGUFTypeU64:
-						if j < 3 {
-							v := binary.LittleEndian.Uint64(mustRead(f, 8))
-							t.Logf("    [%d] %d", j, v)
-						} else {
-							mustRead(f, 8)
-						}
-					default:
-						mustRead(f, 1)
-					}
-				}
-			} else {
-				t.Fatalf("Unknown type 0x%x for key %q", typ, key)
-			}
-		}
-	}
-
-	// After KV, should be at tensor header start
-	off, _ := f.Seek(0, 1)
-	t.Logf("Final offset: %d", off)
-}
-
-func mustRead(r io.Reader, n int) []byte {
-	buf := make([]byte, n)
-	_, err := io.ReadFull(r, buf)
-	if err != nil {
-		panic(err)
-	}
-	return buf
 }
 
 type kvEntry struct {
@@ -454,12 +359,6 @@ func buildGGUFVersion(t *testing.T, version uint32, entries []kvEntry) []byte {
 	return buf.Bytes()
 }
 
-func writeKey(buf *bytes.Buffer, key string) {
-	keyLen := len(key)
-	binary.Write(buf, binary.LittleEndian, uint64(keyLen))
-	buf.WriteString(key)
-}
-
 func writeKeyV(buf *bytes.Buffer, key string, version uint32) {
 	keyLen := len(key)
 	if version == 2 {
@@ -470,10 +369,6 @@ func writeKeyV(buf *bytes.Buffer, key string, version uint32) {
 		binary.Write(buf, binary.LittleEndian, uint64(keyLen))
 	}
 	buf.WriteString(key)
-}
-
-func writeValue(buf *bytes.Buffer, v any) {
-	writeValueV(buf, v, 3)
 }
 
 func writeValueV(buf *bytes.Buffer, v any, version uint32) {

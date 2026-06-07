@@ -481,7 +481,12 @@ func readValue(r io.Reader, typ GGUFType, version uint32) (any, error) {
 		return math.Float64frombits(binary.LittleEndian.Uint64(buf)), nil
 
 	case GGUFTypeArray:
-		// Bare array: count (uint64) + element_type (int32) + elements
+		// GGUF array format: element_type (uint32) then count (uint64) then elements.
+		elemTypeBuf := make([]byte, 4)
+		if _, err := io.ReadFull(r, elemTypeBuf); err != nil {
+			return nil, fmt.Errorf("read array element type: %w", err)
+		}
+		elemType := GGUFType(binary.LittleEndian.Uint32(elemTypeBuf))
 		count, err := readU64(r)
 		if err != nil {
 			return nil, fmt.Errorf("read array count: %w", err)
@@ -489,11 +494,6 @@ func readValue(r io.Reader, typ GGUFType, version uint32) (any, error) {
 		if count > maxMetadataArrayCount {
 			return nil, fmt.Errorf("array count %d exceeds limit %d", count, maxMetadataArrayCount)
 		}
-		elemTypeBuf := make([]byte, 4)
-		if _, err := io.ReadFull(r, elemTypeBuf); err != nil {
-			return nil, fmt.Errorf("read array element type: %w", err)
-		}
-		elemType := GGUFType(binary.LittleEndian.Uint32(elemTypeBuf))
 		switch elemType {
 		case GGUFTypeString:
 			arr := make([]string, count)
