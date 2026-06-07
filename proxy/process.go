@@ -422,7 +422,7 @@ func (p *Process) start() error {
 	// real user request (which would hit opencode's 2-minute timeout).
 	if !p.config.IsLlamaCpp() {
 		p.proxyLogger.Infof("<%s> Warming up model (triggering eager load for %s backend)", p.ID, p.config.Backend)
-		if err := p.warmupModel(); err != nil {
+		if err := p.warmupModel(cmdContext); err != nil {
 			p.proxyLogger.Warnf("<%s> Model warm-up failed: %v — model may still be loading on first request", p.ID, err)
 		} else {
 			p.proxyLogger.Infof("<%s> Model warm-up complete", p.ID)
@@ -574,8 +574,11 @@ func (p *Process) checkHealthEndpoint(healthURL string) error {
 // load weights lazily on the first inference request. Without this, the first
 // real request from the client would block for the full model-load time (often
 // several minutes), exceeding client-side timeouts.
-func (p *Process) warmupModel() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+//
+// parentCtx should be the process command context so that warmup is cancelled
+// when the process is stopped mid-startup.
+func (p *Process) warmupModel(parentCtx context.Context) error {
+	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Minute)
 	defer cancel()
 
 	// MLX and vLLM validate the model name in requests against what they were
@@ -606,10 +609,14 @@ func (p *Process) warmupModel() error {
 	return nil
 }
 
-// backendModelID queries the backend's /v1/models endpoint to get the model ID
-// the server knows about (e.g. the HuggingFace repo path), which may differ
-// from the llama-skein config key. Falls back to p.ID on any error.
+// backendModelID returns the model ID the backend server knows about.
+// Checks UseModelName first (explicit override), then queries /v1/models
+// (e.g. to get the HuggingFace repo path MLX/vLLM was started with).
+// Falls back to p.ID on any error.
 func (p *Process) backendModelID(ctx context.Context) string {
+	if p.config.UseModelName != "" {
+		return p.config.UseModelName
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", p.config.Proxy+"/v1/models", nil)
 	if err != nil {
@@ -626,7 +633,8 @@ func (p *Process) backendModelID(ctx context.Context) string {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(func() []byte { b, _ := io.ReadAll(resp.Body); return b }(), &result); err != nil {
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
 		return p.ID
 	}
 	if len(result.Data) > 0 && result.Data[0].ID != "" {
