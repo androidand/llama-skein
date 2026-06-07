@@ -304,9 +304,9 @@ func Parse(r io.Reader) (*GGUF, error) {
 		arch = "llama" // fallback
 	}
 
-	g.ContextLength, _ = getInt64(metadata, arch+".context.length")
-	g.EmbeddingLength, _ = getInt64(metadata, arch+".embedding.length")
-	g.LayerCount, _ = getInt64(metadata, arch+".attention.layer_count")
+	g.ContextLength, _ = getInt64(metadata, arch+".context_length")
+	g.EmbeddingLength, _ = getInt64(metadata, arch+".embedding_length")
+	g.LayerCount, _ = getInt64(metadata, arch+".block_count")
 	g.HeadCount, _ = getInt64(metadata, arch+".attention.head_count")
 	g.HeadCountKV, _ = getInt64(metadata, arch+".attention.head_count_kv")
 	g.HeadCountKVGroup, _ = getInt64(metadata, arch+".attention.key_head_count_kv_group")

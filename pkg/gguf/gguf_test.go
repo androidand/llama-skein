@@ -19,9 +19,9 @@ func TestParseBasic(t *testing.T) {
 		{"general.architecture", "llama"},
 		{"general.name", "test-model"},
 		{"general.parameter_count", int64(7000000000)},
-		{"llama.context.length", int64(8192)},
-		{"llama.embedding.length", int64(4096)},
-		{"llama.attention.layer_count", int64(32)},
+		{"llama.context_length", int64(8192)},
+		{"llama.embedding_length", int64(4096)},
+		{"llama.block_count", int64(32)},
 		{"llama.attention.head_count", int64(32)},
 		{"llama.attention.head_count_kv", int64(8)},
 		{"llama.feed_forward_length", int64(14336)},
@@ -69,10 +69,10 @@ func TestParseMoE(t *testing.T) {
 	buf := buildGGUF(t, []kvEntry{
 		{"general.architecture", "llama"},
 		{"general.parameter_count", int64(12000000000)},
-		{"llama.attention.layer_count", int64(40)},
+		{"llama.block_count", int64(40)},
 		{"llama.attention.head_count", int64(64)},
 		{"llama.attention.head_count_kv", int64(8)},
-		{"llama.embedding.length", int64(5120)},
+		{"llama.embedding_length", int64(5120)},
 		{"llama.expert_count", int64(8)},
 		{"llama.expert_used_count", int64(2)},
 		{"llama.expert_feed_forward_length", int64(14336)},
@@ -167,7 +167,7 @@ func TestParseV3(t *testing.T) {
 		{"general.architecture", "llama"},
 		{"general.name", "v3-test"},
 		{"general.parameter_count", int64(7000000000)},
-		{"llama.context.length", int64(8192)},
+		{"llama.context_length", int64(8192)},
 	})
 
 	g, err := gguf.Parse(bytes.NewReader(buf))
@@ -240,10 +240,11 @@ func TestNotGGUF(t *testing.T) {
 }
 
 // hfTinyLlamaURL is a small well-known GGUF on HuggingFace used for integration tests.
-// We fetch only the first 256 KB (enough to cover all GGUF metadata) via a range request.
+// We fetch only the first 4 MB via a range request — enough to cover TinyLlama's full
+// metadata section including the 32K-entry tokenizer.ggml.tokens array (~1.3 MB total).
 const hfTinyLlamaURL = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
 
-// downloadGGUFHeader fetches the first 256 KB of a GGUF file from HuggingFace using
+// downloadGGUFHeader fetches the first 4 MB of a GGUF file from HuggingFace using
 // an HTTP range request — enough to contain the full metadata section of any model.
 // The test is skipped (not failed) when the network is unavailable or -short is set.
 func downloadGGUFHeader(t *testing.T, url string) []byte {
@@ -252,7 +253,7 @@ func downloadGGUFHeader(t *testing.T, url string) []byte {
 		t.Skip("skipping HuggingFace download test with -short")
 	}
 
-	const rangeEnd = 256*1024 - 1
+	const rangeEnd = 4*1024*1024 - 1
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
@@ -312,9 +313,7 @@ func TestParseRealFile(t *testing.T) {
 	if g.ContextLength <= 0 {
 		t.Error("ContextLength <= 0")
 	}
-	if g.ParamCount <= 0 {
-		t.Error("ParamCount <= 0")
-	}
+	// general.parameter_count is optional in GGUF; not all quantizers write it
 }
 
 type kvEntry struct {
