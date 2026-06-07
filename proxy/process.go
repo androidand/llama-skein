@@ -416,6 +416,19 @@ func (p *Process) start() error {
 		}
 	}
 
+	// MLX and vLLM servers report /health OK before the model is loaded into
+	// memory. Send a minimal warm-up inference request so that model loading
+	// completes here, inside the startup phase, rather than blocking the first
+	// real user request (which would hit opencode's 2-minute timeout).
+	if !p.config.IsLlamaCpp() {
+		p.proxyLogger.Infof("<%s> Warming up model (triggering eager load for %s backend)", p.ID, p.config.Backend)
+		if err := p.warmupModel(); err != nil {
+			p.proxyLogger.Warnf("<%s> Model warm-up failed: %v — model may still be loading on first request", p.ID, err)
+		} else {
+			p.proxyLogger.Infof("<%s> Model warm-up complete", p.ID)
+		}
+	}
+
 	if p.config.UnloadAfter > 0 {
 		// start a goroutine to check every second if
 		// the process should be stopped
@@ -555,6 +568,71 @@ func (p *Process) checkHealthEndpoint(healthURL string) error {
 	}
 
 	return nil
+}
+
+// warmupModel triggers eager model loading for backends (e.g. MLX, vLLM) that
+// load weights lazily on the first inference request. Without this, the first
+// real request from the client would block for the full model-load time (often
+// several minutes), exceeding client-side timeouts.
+func (p *Process) warmupModel() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// MLX and vLLM validate the model name in requests against what they were
+	// started with (e.g. "mlx-community/Qwen3.5-35B-A3B-4bit"), not the
+	// llama-skein model ID (e.g. "mlx-qwen3-35b-a3b"). Query /v1/models to get
+	// the real model name the backend server knows about.
+	modelID := p.backendModelID(ctx)
+
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"."}],"max_tokens":1,"stream":false}`, modelID)
+	warmupURL := p.config.Proxy + "/v1/chat/completions"
+
+	req, err := http.NewRequestWithContext(ctx, "POST", warmupURL, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("warm-up request returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// backendModelID queries the backend's /v1/models endpoint to get the model ID
+// the server knows about (e.g. the HuggingFace repo path), which may differ
+// from the llama-skein config key. Falls back to p.ID on any error.
+func (p *Process) backendModelID(ctx context.Context) string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", p.config.Proxy+"/v1/models", nil)
+	if err != nil {
+		return p.ID
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return p.ID
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(func() []byte { b, _ := io.ReadAll(resp.Body); return b }(), &result); err != nil {
+		return p.ID
+	}
+	if len(result.Data) > 0 && result.Data[0].ID != "" {
+		return result.Data[0].ID
+	}
+	return p.ID
 }
 
 func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {

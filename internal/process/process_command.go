@@ -2,7 +2,9 @@ package process
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -510,6 +512,20 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 
+	// MLX and vLLM report /health OK before the model is loaded into memory.
+	// A warmup request blocks here until loading completes, preventing the first
+	// real client request from hitting a multi-minute load delay.
+	if !p.config.IsLlamaCpp() {
+		p.proxyLogger.Infof("<%s> Warming up model (triggering eager load for %s backend)", p.id, p.config.Backend)
+		warmupCtx, warmupCancel := context.WithTimeout(startCtx, 10*time.Minute)
+		defer warmupCancel()
+		if err := p.warmupModel(warmupCtx); err != nil {
+			p.proxyLogger.Warnf("<%s> Model warm-up failed: %v — model may still be loading on first request", p.id, err)
+		} else {
+			p.proxyLogger.Infof("<%s> Model warm-up complete", p.id)
+		}
+	}
+
 	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
 }
 
@@ -676,4 +692,58 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.inflight.Add(-1)
 	}()
 	(*fn)(w, r)
+}
+
+// warmupModel sends a minimal chat completion to the backend to trigger eager
+// model loading. MLX and vLLM report /health OK before weights are in memory,
+// so without this the first real request would block for the full load time.
+func (p *ProcessCommand) warmupModel(ctx context.Context) error {
+	modelID := p.backendModelID(ctx)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"."}],"max_tokens":1,"stream":false}`, modelID)
+	req, err := http.NewRequestWithContext(ctx, "POST", p.config.Proxy+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("warm-up request returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// backendModelID returns the model ID the backend server knows about by
+// querying /v1/models. Falls back to UseModelName (if set) then to p.id.
+func (p *ProcessCommand) backendModelID(ctx context.Context) string {
+	if p.config.UseModelName != "" {
+		return p.config.UseModelName
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", p.config.Proxy+"/v1/models", nil)
+	if err != nil {
+		return p.id
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return p.id
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return p.id
+	}
+	if len(result.Data) > 0 && result.Data[0].ID != "" {
+		return result.Data[0].ID
+	}
+	return p.id
 }
