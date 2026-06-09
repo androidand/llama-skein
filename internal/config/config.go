@@ -476,13 +476,6 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 			modelConfig.SendLoadingState = &v
 		}
 
-		// mlx_lm.server runs all generation on a single thread and can wedge or
-		// crash under concurrent requests; serialize them unless the config sets
-		// an explicit limit.
-		if modelConfig.Backend == BackendMLX && modelConfig.ConcurrencyLimit == 0 {
-			modelConfig.ConcurrencyLimit = 1
-		}
-
 		config.Models[modelId] = modelConfig
 	}
 

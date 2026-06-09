@@ -1545,7 +1545,13 @@ peers:
 	assert.Equal(t, 90, peerConfig.Timeouts.IdleConn)
 }
 
-func TestConfig_MLXConcurrencyLimitDefault(t *testing.T) {
+func TestConfig_MLXConcurrencyLimitNotDefaulted(t *testing.T) {
+	// Regression guard: an implicit concurrencyLimit for backend: mlx was
+	// tried and reverted — the limiter sits in front of the router, so a
+	// request waiting on the semaphore during a slow MLX model load gets no
+	// loading-state stream and a 429 after the acquire timeout. mlx_lm.server
+	// queues requests internally, so the proxy must not add its own limit
+	// unless the config asks for one.
 	configYaml := `
 models:
   m-mlx:
@@ -1557,21 +1563,11 @@ models:
     proxy: "http://localhost:9998"
     backend: mlx
     concurrencyLimit: 4
-  m-llama:
-    cmd: llama-server --port 9997
-    proxy: "http://localhost:9997"
 `
 
 	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
 	require.NoError(t, err)
 
-	// mlx defaults to serialized requests: its server runs generation on a
-	// single thread and can wedge or crash under concurrency
-	assert.Equal(t, 1, config.Models["m-mlx"].ConcurrencyLimit)
-
-	// explicit setting wins
+	assert.Equal(t, 0, config.Models["m-mlx"].ConcurrencyLimit)
 	assert.Equal(t, 4, config.Models["m-mlx-explicit"].ConcurrencyLimit)
-
-	// other backends keep the unset default
-	assert.Equal(t, 0, config.Models["m-llama"].ConcurrencyLimit)
 }
