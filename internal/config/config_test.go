@@ -1544,3 +1544,34 @@ peers:
 	assert.Equal(t, 1, peerConfig.Timeouts.ExpectContinue)
 	assert.Equal(t, 90, peerConfig.Timeouts.IdleConn)
 }
+
+func TestConfig_MLXConcurrencyLimitDefault(t *testing.T) {
+	configYaml := `
+models:
+  m-mlx:
+    cmd: mlx_lm.server --port 9999
+    proxy: "http://localhost:9999"
+    backend: mlx
+  m-mlx-explicit:
+    cmd: mlx_lm.server --port 9998
+    proxy: "http://localhost:9998"
+    backend: mlx
+    concurrencyLimit: 4
+  m-llama:
+    cmd: llama-server --port 9997
+    proxy: "http://localhost:9997"
+`
+
+	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
+	require.NoError(t, err)
+
+	// mlx defaults to serialized requests: its server runs generation on a
+	// single thread and can wedge or crash under concurrency
+	assert.Equal(t, 1, config.Models["m-mlx"].ConcurrencyLimit)
+
+	// explicit setting wins
+	assert.Equal(t, 4, config.Models["m-mlx-explicit"].ConcurrencyLimit)
+
+	// other backends keep the unset default
+	assert.Equal(t, 0, config.Models["m-llama"].ConcurrencyLimit)
+}

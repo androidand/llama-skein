@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,30 @@ const cmdWaitDelay = 10 * time.Second
 // Stop() by this point, so killProcess is a no-op kill; the short grace just
 // bounds the rare case where a process is still alive when its context is cut.
 const parentCancelGraceTimeout = time.Second
+
+// Crash-loop breaker: when the upstream exits unexpectedly (not via Stop)
+// crashLoopThreshold times within crashLoopWindow, restarts are refused until
+// crashLoopCooldown has elapsed since the most recent exit. This surfaces a
+// clear error to clients instead of silently cold-starting a crashing backend
+// on every request. An explicit Stop (manual unload, TTL) resets the history.
+const (
+	crashLoopWindow    = 10 * time.Minute
+	crashLoopThreshold = 3
+	crashLoopCooldown  = time.Minute
+)
+
+// Inference probe: mlx_lm.server runs generation on a single background
+// thread that can die (e.g. after a client disconnect mid-stream) while its
+// HTTP server keeps answering /health with 200, leaving the model "ready" but
+// unable to serve completions. While a backend:mlx model is ready and idle, a
+// 1-token completion is sent every inferenceProbeInterval; after
+// inferenceProbeThreshold consecutive failures the process is stopped so the
+// next request restarts it cleanly instead of hanging forever.
+const (
+	inferenceProbeInterval  = time.Minute
+	inferenceProbeTimeout   = time.Minute
+	inferenceProbeThreshold = 2
+)
 
 type runReq struct {
 	timeout time.Duration
@@ -74,6 +99,11 @@ type ProcessCommand struct {
 	// pipe-close backstop from dominating their runtime.
 	waitDelay time.Duration
 
+	// probe cadence for inferenceProbeLoop. Defaults to the inferenceProbe*
+	// constants; tests override them.
+	probeInterval time.Duration
+	probeTimeout  time.Duration
+
 	runCh       chan runReq
 	stopCh      chan stopReq
 	waitReadyCh chan waitReadyReq
@@ -87,6 +117,12 @@ type ProcessCommand struct {
 
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
+
+	// crashMu guards crashTimes: timestamps of unexpected upstream exits
+	// within crashLoopWindow. Appended by run(), read by doStart, cleared
+	// by an explicit Stop.
+	crashMu    sync.Mutex
+	crashTimes []time.Time
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -105,10 +141,12 @@ func New(
 		processLogger: processLogger,
 		proxyLogger:   proxyLogger,
 
-		runCh:       make(chan runReq),
-		stopCh:      make(chan stopReq),
-		waitReadyCh: make(chan waitReadyReq),
-		waitDelay:   cmdWaitDelay,
+		runCh:         make(chan runReq),
+		stopCh:        make(chan stopReq),
+		waitReadyCh:   make(chan waitReadyReq),
+		waitDelay:     cmdWaitDelay,
+		probeInterval: inferenceProbeInterval,
+		probeTimeout:  inferenceProbeTimeout,
 	}
 	p.state.Store(StateStopped)
 
@@ -211,6 +249,8 @@ func (p *ProcessCommand) run() {
 			cmdCancel = nil
 			p.handler.Store(nil)
 			setState(StateStopped)
+			crashes := p.recordUnexpectedExit()
+			p.proxyLogger.Warnf("<%s> upstream exited unexpectedly (%d unexpected exit(s) in the last %v)", p.id, crashes, crashLoopWindow)
 			respondRun(fmt.Errorf("[%s] upstream exited unexpectedly", p.id))
 
 		// WaitReady: if we're already in a terminal-for-this-question state,
@@ -265,6 +305,14 @@ func (p *ProcessCommand) run() {
 					// terminates, so we only fire this when Stop, parentCtx,
 					// or the upstream exit takes the process down.
 					runResp = req.respond
+
+					// MLX's HTTP server keeps answering /health after its
+					// generation thread dies; probe with real inference so a
+					// wedged backend is restarted instead of hanging callers.
+					// Self-terminates when state leaves StateReady.
+					if p.config.Backend == config.BackendMLX {
+						go p.inferenceProbeLoop()
+					}
 
 					// Start TTL goroutine if configured — self-terminates
 					// when state leaves StateReady.
@@ -350,6 +398,9 @@ func (p *ProcessCommand) run() {
 			// Stop is a no-op (and not an error) when already Stopped — this
 			// is what makes it idempotent for callers that don't track state.
 			setState(StateStopped)
+			// An explicit Stop (manual unload, TTL, shutdown path) is the
+			// operator's reset lever for the crash-loop breaker.
+			p.clearCrashHistory()
 			respondRun(nil)
 			stop.respond <- nil
 		}
@@ -357,6 +408,18 @@ func (p *ProcessCommand) run() {
 }
 
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {
+	if err := p.crashLoopError(); err != nil {
+		// Don't fail faster than the router's WaitReady call can register:
+		// baseRouter.doSwap issues WaitReady right after Run, and an instant
+		// failure here could resolve the whole Run before that waiter lands,
+		// stranding it. The 250ms mirrors the post-start grace below.
+		select {
+		case <-startCtx.Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+		return startResult{err: err}
+	}
+
 	if p.config.Proxy == "" {
 		return startResult{err: fmt.Errorf("upstream proxy missing")}
 	}
@@ -692,6 +755,108 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.inflight.Add(-1)
 	}()
 	(*fn)(w, r)
+}
+
+// recordUnexpectedExit appends a crash timestamp, prunes entries older than
+// crashLoopWindow, and returns the current count.
+func (p *ProcessCommand) recordUnexpectedExit() int {
+	p.crashMu.Lock()
+	defer p.crashMu.Unlock()
+	now := time.Now()
+	kept := p.crashTimes[:0]
+	for _, t := range p.crashTimes {
+		if now.Sub(t) <= crashLoopWindow {
+			kept = append(kept, t)
+		}
+	}
+	p.crashTimes = append(kept, now)
+	return len(p.crashTimes)
+}
+
+func (p *ProcessCommand) clearCrashHistory() {
+	p.crashMu.Lock()
+	p.crashTimes = nil
+	p.crashMu.Unlock()
+}
+
+// crashLoopError returns a non-nil error when the upstream has crashed at
+// least crashLoopThreshold times within crashLoopWindow and the most recent
+// crash was less than crashLoopCooldown ago. The error reaches clients via
+// the normal swap-failure path, replacing the silent restart-on-every-request
+// behaviour a crash-looping backend would otherwise get.
+func (p *ProcessCommand) crashLoopError() error {
+	p.crashMu.Lock()
+	defer p.crashMu.Unlock()
+	now := time.Now()
+	count := 0
+	var last time.Time
+	for _, t := range p.crashTimes {
+		if now.Sub(t) <= crashLoopWindow {
+			count++
+			if t.After(last) {
+				last = t
+			}
+		}
+	}
+	if count < crashLoopThreshold {
+		return nil
+	}
+	wait := crashLoopCooldown - now.Sub(last)
+	if wait <= 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"[%s] upstream crashed %d times in the last %v; refusing restart for another %v (check the model's logs and system memory, or unload the model to reset)",
+		p.id, count, crashLoopWindow, wait.Round(time.Second),
+	)
+}
+
+// inferenceProbeLoop periodically sends a 1-token completion to the backend
+// while the process is ready and idle. After inferenceProbeThreshold
+// consecutive failures the process is stopped so the next request triggers a
+// clean restart (with its loading banner) instead of hanging forever against
+// a backend whose generation thread has died. Self-terminates when the
+// process leaves StateReady.
+func (p *ProcessCommand) inferenceProbeLoop() {
+	ticker := time.NewTicker(p.probeInterval)
+	defer ticker.Stop()
+
+	failures := 0
+	for range ticker.C {
+		if p.State() != StateReady {
+			return
+		}
+		// Only probe an idle backend: a long-running real request would
+		// queue the probe behind it and time out spuriously.
+		if p.inflight.Load() != 0 {
+			failures = 0
+			continue
+		}
+		lastUseBefore := p.lastUse.Load()
+		ctx, cancel := context.WithTimeout(p.parentCtx, p.probeTimeout)
+		err := p.warmupModel(ctx)
+		cancel()
+		if p.State() != StateReady {
+			return
+		}
+		if err == nil {
+			failures = 0
+			continue
+		}
+		// A real request arrived or completed while we probed — the busy
+		// backend is the likely cause of the failure. Inconclusive; retry.
+		if p.inflight.Load() != 0 || p.lastUse.Load() != lastUseBefore {
+			continue
+		}
+		failures++
+		p.proxyLogger.Warnf("<%s> inference probe failed (%d/%d): %v", p.id, failures, inferenceProbeThreshold, err)
+		if failures < inferenceProbeThreshold {
+			continue
+		}
+		p.proxyLogger.Errorf("<%s> backend accepts connections but does not answer inference; stopping so the next request restarts it", p.id)
+		p.Stop(10 * time.Second)
+		return
+	}
 }
 
 // warmupModel sends a minimal chat completion to the backend to trigger eager

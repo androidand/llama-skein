@@ -644,3 +644,116 @@ func TestProcessCommand_ConcurrentRunStop(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessCommand_CrashLoopBreaker verifies that repeated unexpected
+// upstream exits trip the breaker (restarts refused with a clear error) and
+// that an explicit Stop resets it.
+func TestProcessCommand_CrashLoopBreaker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses the unix sleep command")
+	}
+
+	cfg := config.ModelConfig{
+		Cmd:                "sleep 0.2",
+		Proxy:              "http://127.0.0.1:1", // never contacted: checkEndpoint is none
+		CheckEndpoint:      "none",
+		HealthCheckTimeout: 10,
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	for i := 0; i < crashLoopThreshold; i++ {
+		err := p.Run(testStartTimeout)
+		if err == nil || !strings.Contains(err.Error(), "exited unexpectedly") {
+			t.Fatalf("crash %d: expected unexpected-exit error, got %v", i+1, err)
+		}
+	}
+
+	// breaker engaged: next Run is refused without starting the process
+	err := p.Run(testStartTimeout)
+	if err == nil || !strings.Contains(err.Error(), "refusing restart") {
+		t.Fatalf("expected crash-loop refusal, got %v", err)
+	}
+
+	// explicit Stop resets the breaker; the process starts (and crashes) again
+	if err := p.Stop(testStopTimeout); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	err = p.Run(testStartTimeout)
+	if err == nil || !strings.Contains(err.Error(), "exited unexpectedly") {
+		t.Fatalf("after reset: expected unexpected-exit error, got %v", err)
+	}
+}
+
+// TestProcessCommand_InferenceProbe_StopsWedgedBackend verifies that a
+// backend:mlx process whose /health stays 200 but whose inference endpoint
+// stops answering is detected by the periodic probe and stopped, so the next
+// request triggers a clean restart instead of hanging.
+func TestProcessCommand_InferenceProbe_StopsWedgedBackend(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	var mu sync.Mutex
+	wedged := false
+	setWedged := func(v bool) { mu.Lock(); wedged = v; mu.Unlock() }
+	isWedged := func() bool { mu.Lock(); defer mu.Unlock(); return wedged }
+
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" && isWedged() {
+			http.Error(w, "generation thread is dead", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[]}`))
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+		Backend:            config.BackendMLX,
+		UseModelName:       "mlx-test", // skip the /v1/models lookup in probes
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+
+	p := newProcessCommand(t, cfg)
+	p.probeInterval = 50 * time.Millisecond
+	p.probeTimeout = time.Second
+	t.Cleanup(func() {
+		if p.State() == StateReady {
+			p.Stop(testStopTimeout)
+		}
+	})
+
+	runErr := runAsync(t, p)
+
+	// healthy backend: several probe ticks pass without stopping the process
+	time.Sleep(250 * time.Millisecond)
+	if got := p.State(); got != StateReady {
+		t.Fatalf("expected StateReady with healthy probes, got %s", got)
+	}
+
+	// wedge the backend: inference fails while /health stays 200
+	setWedged(true)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for p.State() != StateStopped && time.Now().Before(deadline) {
+		time.Sleep(testPollInterval)
+	}
+	if got := p.State(); got != StateStopped {
+		t.Fatalf("expected probe to stop wedged process, got state %s", got)
+	}
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Errorf("Run after probe-stop: expected nil, got %v", err)
+		}
+	case <-time.After(testReturnTimeout):
+		t.Fatal("Run() did not return after probe stopped the process")
+	}
+}
