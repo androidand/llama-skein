@@ -21,6 +21,7 @@ type TimeoutsConfig struct {
 }
 
 type ModelConfig struct {
+	Backend       string   `yaml:"backend"`
 	Cmd           string   `yaml:"cmd"`
 	CmdStop       string   `yaml:"cmdStop"`
 	Proxy         string   `yaml:"proxy"`
@@ -62,6 +63,7 @@ type ModelConfig struct {
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type rawModelConfig ModelConfig
 	defaults := rawModelConfig{
+		Backend:          "",
 		Cmd:              "",
 		CmdStop:          "",
 		Proxy:            "http://localhost:${PORT}",

@@ -131,7 +131,15 @@ func (s *Server) handleAPILoadModel(w http.ResponseWriter, r *http.Request) {
 	}))
 
 	dw := &discardResponseWriter{status: http.StatusOK}
-	s.local.ServeHTTP(dw, req)
+	s.ServeHTTP(dw, req)
+	if dw.status >= http.StatusBadRequest {
+		msg := strings.TrimSpace(dw.body.String())
+		if msg == "" {
+			msg = fmt.Sprintf("model warm-up failed with status %d", dw.status)
+		}
+		router.SendResponse(w, r, dw.status, msg)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }

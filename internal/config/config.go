@@ -439,6 +439,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 			}
 		}
 
+		if err := applyBackendDefaults(modelId, &modelConfig); err != nil {
+			return Config{}, err
+		}
+
 		// Validate SetParamsByID keys and values
 		for key, paramMap := range modelConfig.Filters.SetParamsByID {
 			if matches := macroPatternRegex.FindAllStringSubmatch(key, -1); len(matches) > 0 {

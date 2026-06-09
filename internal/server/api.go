@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -127,6 +128,7 @@ func (s *Server) handleRunning(w http.ResponseWriter, r *http.Request) {
 type discardResponseWriter struct {
 	header http.Header
 	status int
+	body   bytes.Buffer
 }
 
 func (d *discardResponseWriter) Header() http.Header {
@@ -136,7 +138,10 @@ func (d *discardResponseWriter) Header() http.Header {
 	return d.header
 }
 
-func (d *discardResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (d *discardResponseWriter) Write(p []byte) (int, error) {
+	_, _ = d.body.Write(p)
+	return len(p), nil
+}
 
 func (d *discardResponseWriter) WriteHeader(status int) { d.status = status }
 
