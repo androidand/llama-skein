@@ -118,6 +118,15 @@ type ProcessCommand struct {
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
 
+	// mlxSlot serializes inference against mlx_lm.server, whose
+	// ThreadingHTTPServer crashes outright when two requests arrive
+	// simultaneously (observed on 0.31.3: both connections EOF and the
+	// process exits). Capacity 1; requests QUEUE here rather than being
+	// rejected, so slow model loads do not turn into 429s. The inference
+	// probe acquires the same slot so it can never overlap a real request.
+	// Nil for non-mlx backends.
+	mlxSlot chan struct{}
+
 	// crashMu guards crashTimes: timestamps of unexpected upstream exits
 	// within crashLoopWindow. Appended by run(), read by doStart, cleared
 	// by an explicit Stop.
@@ -147,6 +156,9 @@ func New(
 		waitDelay:     cmdWaitDelay,
 		probeInterval: inferenceProbeInterval,
 		probeTimeout:  inferenceProbeTimeout,
+	}
+	if conf.Backend == config.BackendMLX {
+		p.mlxSlot = make(chan struct{}, 1)
 	}
 	p.state.Store(StateStopped)
 
@@ -754,6 +766,17 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.lastUse.Store(time.Now().UnixNano())
 		p.inflight.Add(-1)
 	}()
+	// Serialize mlx requests: queue (honouring client disconnect) instead of
+	// rejecting, so requests parked behind a slow model load or a long
+	// generation wait their turn rather than 429ing. See mlxSlot.
+	if p.mlxSlot != nil {
+		select {
+		case p.mlxSlot <- struct{}{}:
+			defer func() { <-p.mlxSlot }()
+		case <-r.Context().Done():
+			return
+		}
+	}
 	(*fn)(w, r)
 }
 
@@ -832,10 +855,25 @@ func (p *ProcessCommand) inferenceProbeLoop() {
 			failures = 0
 			continue
 		}
+		// Take the serialization slot (non-blocking) so the probe can never
+		// run concurrently with a real request — simultaneous requests are
+		// exactly what crashes mlx_lm.server. Slot busy means the backend is
+		// working; that answers the health question for this round.
+		if p.mlxSlot != nil {
+			select {
+			case p.mlxSlot <- struct{}{}:
+			default:
+				failures = 0
+				continue
+			}
+		}
 		lastUseBefore := p.lastUse.Load()
 		ctx, cancel := context.WithTimeout(p.parentCtx, p.probeTimeout)
 		err := p.warmupModel(ctx)
 		cancel()
+		if p.mlxSlot != nil {
+			<-p.mlxSlot
+		}
 		if p.State() != StateReady {
 			return
 		}
@@ -843,9 +881,9 @@ func (p *ProcessCommand) inferenceProbeLoop() {
 			failures = 0
 			continue
 		}
-		// A real request arrived or completed while we probed — the busy
-		// backend is the likely cause of the failure. Inconclusive; retry.
-		if p.inflight.Load() != 0 || p.lastUse.Load() != lastUseBefore {
+		// A real request completed while we probed — the busy backend is
+		// the likely cause of the failure. Inconclusive; retry.
+		if p.lastUse.Load() != lastUseBefore {
 			continue
 		}
 		failures++

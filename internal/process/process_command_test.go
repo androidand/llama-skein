@@ -757,3 +757,72 @@ func TestProcessCommand_InferenceProbe_StopsWedgedBackend(t *testing.T) {
 		t.Fatal("Run() did not return after probe stopped the process")
 	}
 }
+
+// TestProcessCommand_MLXSerializesRequests verifies that requests to a
+// backend:mlx process are queued one-at-a-time at the process layer —
+// simultaneous requests crash mlx_lm.server — while non-mlx requests are not
+// serialized. Queueing (not 429) keeps slow loads from rejecting clients.
+func TestProcessCommand_MLXSerializesRequests(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	var mu sync.Mutex
+	inflight, maxInflight := 0, 0
+
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" && r.Method == "POST" {
+			mu.Lock()
+			inflight++
+			if inflight > maxInflight {
+				maxInflight = inflight
+			}
+			mu.Unlock()
+			time.Sleep(30 * time.Millisecond)
+			mu.Lock()
+			inflight--
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[]}`))
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+		Backend:            config.BackendMLX,
+		UseModelName:       "mlx-test",
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+	runAsync(t, p)
+
+	// reset counters: the startup warmup also POSTs to the mock
+	mu.Lock()
+	inflight, maxInflight = 0, 0
+	mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+			p.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	got := maxInflight
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("expected max 1 concurrent upstream request for mlx backend, got %d", got)
+	}
+}
