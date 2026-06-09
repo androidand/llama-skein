@@ -128,6 +128,7 @@ type Config struct {
 	MetricsMaxInMemory int                    `yaml:"metricsMaxInMemory"`
 	CaptureBuffer      int                    `yaml:"captureBuffer"`
 	Performance        PerformanceConfig      `yaml:"performance"`
+	MemoryGuard        MemoryGuardConfig      `yaml:"memoryGuard"`
 	GlobalTTL          int                    `yaml:"globalTTL"`
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
 	Profiles           map[string][]string    `yaml:"profiles"`
@@ -252,6 +253,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	}
 	if err = config.Performance.Validate(); err != nil {
 		return Config{}, fmt.Errorf("performance: %w", err)
+	}
+
+	if config.MemoryGuard, err = config.MemoryGuard.Normalize(); err != nil {
+		return Config{}, err
 	}
 
 	if config.StartPort < 1 {

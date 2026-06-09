@@ -174,6 +174,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 
 	s.routes()
 	s.startPreload()
+	s.startMemoryGuard()
 	return s, nil
 }
 

@@ -27,10 +27,15 @@ type NetIOStat struct {
 type SysStat struct {
 	Timestamp time.Time `json:"timestamp"`
 
-	CpuUtilPerCore []float64   `json:"cpu_util_per_core"`
-	MemTotalMB     int         `json:"mem_total_mb"`
-	MemUsedMB      int         `json:"mem_used_mb"`
-	MemFreeMB      int         `json:"mem_free_mb"`
+	CpuUtilPerCore []float64 `json:"cpu_util_per_core"`
+	MemTotalMB     int       `json:"mem_total_mb"`
+	MemUsedMB      int       `json:"mem_used_mb"`
+	MemFreeMB      int       `json:"mem_free_mb"`
+	// MemAvailableMB is memory available for new allocations without paging
+	// (includes reclaimable cache/inactive pages). Use this — not MemFreeMB,
+	// which on macOS excludes inactive pages and is always near zero — to
+	// judge memory pressure.
+	MemAvailableMB int         `json:"mem_available_mb"`
 	SwapTotalMB    int         `json:"swap_total_mb"`
 	SwapUsedMB     int         `json:"swap_used_mb"`
 	LoadAvg1       float64     `json:"load_avg_1"`

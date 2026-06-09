@@ -134,6 +134,20 @@ apiKeys:
   - "${env.API_KEY_1}"
   - "${env.API_KEY_2}"
 
+# memoryGuard: protect the host from memory exhaustion (fork extension)
+# - optional. When available system memory stays below minAvailablePct for
+#   consecutiveSamples checks, ALL local models are unloaded; they reload on
+#   the next request. On macOS, exhausting unified memory while a model holds
+#   wired GPU allocations can panic the whole machine, so the guard is ON by
+#   default there; on other platforms it is OFF by default (the OOM killer
+#   only takes the child process, which llama-skein recovers from).
+#memoryGuard:
+#  enabled: true        # default: true on macOS, false elsewhere
+#  minAvailablePct: 10  # trigger when available memory drops below this
+#  consecutiveSamples: 2
+#  checkInterval: 5     # seconds between checks
+#  cooldown: 60         # seconds between two triggers
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests

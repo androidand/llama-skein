@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1570,4 +1571,29 @@ models:
 
 	assert.Equal(t, 0, config.Models["m-mlx"].ConcurrencyLimit)
 	assert.Equal(t, 4, config.Models["m-mlx-explicit"].ConcurrencyLimit)
+}
+
+func TestConfig_MemoryGuardDefaults(t *testing.T) {
+	config, err := LoadConfigFromReader(strings.NewReader("models: {}\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(10), config.MemoryGuard.MinAvailablePct)
+	assert.Equal(t, 2, config.MemoryGuard.ConsecutiveSamples)
+	assert.Equal(t, 5, config.MemoryGuard.CheckIntervalSeconds)
+	assert.Equal(t, 60, config.MemoryGuard.CooldownSeconds)
+	// platform default: on for darwin (panic risk), off elsewhere
+	assert.Equal(t, runtime.GOOS == "darwin", config.MemoryGuard.IsEnabled())
+
+	explicit := MemoryGuardConfig{}
+	on, off := true, false
+	explicit.Enabled = &on
+	assert.True(t, explicit.IsEnabled())
+	explicit.Enabled = &off
+	assert.False(t, explicit.IsEnabled())
+}
+
+func TestConfig_MemoryGuardValidation(t *testing.T) {
+	_, err := LoadConfigFromReader(strings.NewReader("memoryGuard:\n  minAvailablePct: 95\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "minAvailablePct")
 }

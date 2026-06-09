@@ -237,6 +237,12 @@ groups:
 		Performance: PerformanceConfig{
 			Every: 5 * time.Second,
 		},
+		MemoryGuard: MemoryGuardConfig{
+			MinAvailablePct:      10,
+			ConsecutiveSamples:   2,
+			CheckIntervalSeconds: 5,
+			CooldownSeconds:      60,
+		},
 		Profiles: map[string][]string{
 			"test": {"model1", "model2"},
 		},
