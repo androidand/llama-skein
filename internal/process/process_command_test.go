@@ -826,3 +826,107 @@ func TestProcessCommand_MLXSerializesRequests(t *testing.T) {
 		t.Errorf("expected max 1 concurrent upstream request for mlx backend, got %d", got)
 	}
 }
+
+// TestProcessCommand_ContextExceededMapsTo413 verifies that llama.cpp's
+// exceed_context_size_error (HTTP 400) is remapped to 413 so callers can
+// detect context overflow without parsing the body.
+func TestProcessCommand_ContextExceededMapsTo413(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"type":"exceed_context_size_error","message":"too big"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+	runAsync(t, p)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for exceed_context_size_error, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "exceed_context_size_error") {
+		t.Errorf("expected original body preserved, got %q", body)
+	}
+}
+
+// TestProcessCommand_CancelsBusySlotsOnDisconnect verifies that a client
+// disconnect mid-request triggers a cancel of processing llama.cpp slots.
+func TestProcessCommand_CancelsBusySlotsOnDisconnect(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	cancelled := make(chan int, 4)
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/slots" && r.Method == "GET":
+			w.Write([]byte(`[{"id":0,"state":1},{"id":1,"state":0}]`))
+		case strings.HasPrefix(r.URL.Path, "/slots/") && r.Method == "DELETE":
+			var id int
+			fmt.Sscanf(r.URL.Path, "/slots/%d", &id)
+			cancelled <- id
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/chat/completions":
+			// slow generation: block until the client goes away
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+	runAsync(t, p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`)).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	time.Sleep(100 * time.Millisecond) // let the request reach the mock
+	cancel()                           // simulate client disconnect
+	<-done
+
+	select {
+	case id := <-cancelled:
+		if id != 0 {
+			t.Errorf("expected slot 0 cancelled, got %d", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no slot cancel received after client disconnect")
+	}
+}

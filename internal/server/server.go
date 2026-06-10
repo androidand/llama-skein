@@ -298,6 +298,18 @@ func (s *Server) routes() {
 	mux.Handle("PUT "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerSet))
 	mux.Handle("DELETE "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
 
+	// Legacy fork paths — still consumed by skein (llamaswap client, ollama
+	// adapter, provider probing) and Ollama-mode frontends. /api/events,
+	// /api/resources and /api/storage are aliases of the relocated handlers;
+	// the rest are ported Ollama-compat endpoints. See apicompat.go.
+	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPISystemEvents))
+	mux.Handle("GET /api/resources", apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET /api/storage", apiChain.ThenFunc(s.handleAPIHardwareStorage))
+	mux.Handle("GET /api/ps", apiChain.ThenFunc(s.handleAPIPS))
+	mux.Handle("GET /api/tags", apiChain.ThenFunc(s.handleOllamaTags))
+	mux.Handle("POST /api/show", apiChain.ThenFunc(s.handleOllamaShow))
+	mux.Handle("DELETE /api/delete", apiChain.ThenFunc(s.handleOllamaDelete))
+
 	// System — version, capabilities, events, metrics, upgrade.
 	mux.Handle("GET "+api.RouteSystemVersion, apiChain.ThenFunc(s.handleAPISystemVersion))
 	mux.Handle("GET "+api.RouteSystemCapabilities, apiChain.ThenFunc(s.handleAPISystemCapabilities))

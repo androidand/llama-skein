@@ -1,6 +1,7 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -465,6 +466,24 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			resp.Header.Set("X-Accel-Buffering", "no")
 		}
+		// Remap llama.cpp context-overflow errors to HTTP 413 so callers
+		// (skein, opencode) can detect overflow without body string matching.
+		if p.config.IsLlamaCpp() && resp.StatusCode == http.StatusBadRequest {
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(body)) // always restore
+			if err == nil {
+				var errBody struct {
+					Error struct {
+						Type string `json:"type"`
+					} `json:"error"`
+				}
+				if json.Unmarshal(body, &errBody) == nil &&
+					errBody.Error.Type == "exceed_context_size_error" {
+					resp.StatusCode = http.StatusRequestEntityTooLarge // 413
+				}
+			}
+		}
 		return nil
 	}
 	// httputil.ReverseProxy panics with http.ErrAbortHandler when the upstream
@@ -778,6 +797,62 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	(*fn)(w, r)
+
+	// If the client disconnected mid-stream and this was the only in-flight
+	// request, cancel orphaned llama.cpp inference slots so they do not keep
+	// generating for a dead connection (and block the next request behind
+	// --parallel 1). Only llama.cpp exposes the /slots endpoint needed.
+	if p.config.IsLlamaCpp() && r.Context().Err() != nil && p.inflight.Load() <= 1 {
+		go p.cancelBusySlots()
+	}
+}
+
+// cancelBusySlots queries the upstream llama.cpp /slots endpoint and sends a
+// cancel for every slot currently processing. Called when the downstream
+// client disconnects mid-generation so orphaned inference does not burn GPU
+// or block subsequent requests. Requires the upstream llama-server to have
+// the /slots endpoint enabled.
+func (p *ProcessCommand) cancelBusySlots() {
+	base := strings.TrimRight(p.config.Proxy, "/")
+	if base == "" {
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, err := client.Get(base + "/slots")
+	if err != nil {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: GET /slots: %v", p.id, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var slots []struct {
+		ID    int `json:"id"`
+		State int `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: decode: %v", p.id, err)
+		return
+	}
+
+	for _, slot := range slots {
+		if slot.State != 1 { // only cancel processing slots
+			continue
+		}
+		cancelURL := fmt.Sprintf("%s/slots/%d", base, slot.ID)
+		body := bytes.NewBufferString(`{"action":"cancel"}`)
+		req, err := http.NewRequest(http.MethodDelete, cancelURL, body)
+		if err != nil {
+			continue
+		}
+		cancelResp, err := client.Do(req)
+		if err != nil {
+			p.proxyLogger.Debugf("<%s> cancelBusySlots: DELETE slot %d: %v", p.id, slot.ID, err)
+			continue
+		}
+		cancelResp.Body.Close()
+		p.proxyLogger.Infof("<%s> cancelBusySlots: cancelled orphaned slot %d (client disconnected)", p.id, slot.ID)
+	}
 }
 
 // recordUnexpectedExit appends a crash timestamp, prunes entries older than
