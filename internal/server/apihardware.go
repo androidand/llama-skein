@@ -158,9 +158,9 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 			kvEst = 0
 		}
 		resp["loaded_model"] = map[string]any{
-			"id":              modelID,
-			"model_mb":        modelMB,
-			"kv_estimate_mb":  kvEst,
+			"id":             modelID,
+			"model_mb":       modelMB,
+			"kv_estimate_mb": kvEst,
 		}
 	}
 

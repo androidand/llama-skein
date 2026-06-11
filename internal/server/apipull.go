@@ -15,10 +15,10 @@ import (
 )
 
 type pullRequest struct {
-	Model    string       `json:"model"`
-	Token    string       `json:"token"`
-	Stream   *bool        `json:"stream"`
-	Subdir   string       `json:"subdir"`
+	Model    string        `json:"model"`
+	Token    string        `json:"token"`
+	Stream   *bool         `json:"stream"`
+	Subdir   string        `json:"subdir"`
 	Register *pullRegister `json:"register"`
 }
 
