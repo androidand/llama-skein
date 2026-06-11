@@ -312,7 +312,9 @@
                       "type": "string"
                     }
                   },
-                  "required": ["status"]
+                  "required": [
+                    "status"
+                  ]
                 }
               }
             }
@@ -322,13 +324,94 @@
           }
         }
       }
+    },
+    "/api/config/default-model": {
+      "get": {
+        "operationId": "getDefaultModel",
+        "summary": "Returns the configured default model used when a request omits the 'model' field.",
+        "responses": {
+          "200": {
+            "description": "Default model info. 'model' is null when no default is configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigDefaultModelResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setDefaultModel",
+        "summary": "Sets the default model in the on-disk config YAML and triggers reload. The model must be a configured model ID or alias.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigDefaultModelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Default model updated; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request."
+          },
+          "404": {
+            "description": "Model not found in config."
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "clearDefaultModel",
+        "summary": "Removes the default model from the on-disk config YAML and triggers reload. Idempotent.",
+        "responses": {
+          "202": {
+            "description": "Default model cleared; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Config file path not set."
+          },
+          "500": {
+            "description": "Internal server error."
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
       "Capabilities": {
         "type": "object",
-        "required": ["version", "features"],
+        "required": [
+          "version",
+          "features"
+        ],
         "properties": {
           "version": {
             "type": "integer"
@@ -343,7 +426,12 @@
       },
       "VersionInfo": {
         "type": "object",
-        "required": ["version", "commit", "build_date", "runtime"],
+        "required": [
+          "version",
+          "commit",
+          "build_date",
+          "runtime"
+        ],
         "properties": {
           "version": {
             "type": "string"
@@ -547,11 +635,16 @@
       },
       "ModelList": {
         "type": "object",
-        "required": ["object", "data"],
+        "required": [
+          "object",
+          "data"
+        ],
         "properties": {
           "object": {
             "type": "string",
-            "enum": ["list"]
+            "enum": [
+              "list"
+            ]
           },
           "data": {
             "type": "array",
@@ -563,7 +656,10 @@
       },
       "Model": {
         "type": "object",
-        "required": ["id", "object"],
+        "required": [
+          "id",
+          "object"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -597,14 +693,27 @@
           },
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx", "vllm"],
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ],
             "description": "Inference backend type."
+          },
+          "default": {
+            "type": "boolean",
+            "description": "True when this model is the configured default, used for requests that omit the 'model' field. Listed first in the model list. llama-skein extension to the OpenAI schema."
           }
         }
       },
       "ConfigInfoResponse": {
         "type": "object",
-        "required": ["config_file", "models_dir", "model_count", "models"],
+        "required": [
+          "config_file",
+          "models_dir",
+          "model_count",
+          "models"
+        ],
         "properties": {
           "config_file": {
             "type": "string"
@@ -620,12 +729,18 @@
             "items": {
               "$ref": "#/components/schemas/ConfigModelInfo"
             }
+          },
+          "default_model": {
+            "type": "string",
+            "description": "Configured default model ID; omitted when no default is set."
           }
         }
       },
       "ConfigModelInfo": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -640,7 +755,10 @@
       },
       "ConfigModelRequest": {
         "type": "object",
-        "required": ["id", "cmd"],
+        "required": [
+          "id",
+          "cmd"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -650,7 +768,11 @@
           },
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx", "vllm"],
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ],
             "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp."
           },
           "name": {
@@ -678,7 +800,11 @@
           },
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx", "vllm"],
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ],
             "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp."
           },
           "name": {
@@ -753,13 +879,41 @@
       },
       "ConfigModelResponse": {
         "type": "object",
-        "required": ["id", "status"],
+        "required": [
+          "id",
+          "status"
+        ],
         "properties": {
           "id": {
             "type": "string"
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ConfigDefaultModelRequest": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model ID or alias to use when a request omits the 'model' field."
+          }
+        }
+      },
+      "ConfigDefaultModelResponse": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "nullable": true,
+            "description": "Configured default model ID, or null when no default is set."
           }
         }
       }

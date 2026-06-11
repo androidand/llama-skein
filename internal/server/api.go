@@ -19,6 +19,7 @@ import (
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	created := int(time.Now().Unix())
 	data := make([]apicontract.Model, 0, len(s.cfg.Models))
+	defaultID, _ := s.cfg.RealModelName(s.cfg.DefaultModel)
 
 	newRecord := func(id, name, description string, mc config.ModelConfig, state string, loaded bool) apicontract.Model {
 		rec := apicontract.Model{
@@ -26,6 +27,10 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Object:  "model",
 			Created: &created,
 			OwnedBy: stringPtr("llama-skein"),
+		}
+		if defaultID != "" && id == defaultID {
+			isDefault := true
+			rec.Default = &isDefault
 		}
 		if name = strings.TrimSpace(name); name != "" {
 			rec.Name = &name
@@ -70,7 +75,16 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sort.Slice(data, func(i, j int) bool { return data[i].Id < data[j].Id })
+	// Alphabetical, except the default model is listed first: some clients
+	// pick the first entry when the user has not chosen a model.
+	sort.Slice(data, func(i, j int) bool {
+		di := data[i].Default != nil && *data[i].Default
+		dj := data[j].Default != nil && *data[j].Default
+		if di != dj {
+			return di
+		}
+		return data[i].Id < data[j].Id
+	})
 
 	// Echo the Origin so browser clients can read the listing.
 	if origin := r.Header.Get("Origin"); origin != "" {

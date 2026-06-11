@@ -289,6 +289,9 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
 	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
+	mux.Handle("GET /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
+	mux.Handle("PUT /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
+	mux.Handle("DELETE /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))
 
 	// Hardware — resources, storage, performance, GPU power.
 	mux.Handle("GET "+api.RouteHardware, apiChain.ThenFunc(s.handleAPIHardware))

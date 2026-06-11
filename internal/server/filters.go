@@ -41,7 +41,7 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 			}
 
 			useModelName, filters, ok := resolveFilters(cfg, data.Model)
-			if !ok {
+			if !ok && !data.ModelDefaulted {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -52,10 +52,22 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
-			body, err = applyFilters(body, data.Model, useModelName, filters)
-			if err != nil {
-				router.SendResponse(w, r, http.StatusInternalServerError, err.Error())
-				return
+			// The request omitted "model" and the configured default was
+			// substituted. Write it into the body: llama.cpp tolerates a
+			// missing model field but vLLM and MLX servers reject it.
+			if data.ModelDefaulted {
+				if body, err = sjson.SetBytes(body, "model", data.Model); err != nil {
+					router.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+
+			if ok {
+				body, err = applyFilters(body, data.Model, useModelName, filters)
+				if err != nil {
+					router.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+					return
+				}
 			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))

@@ -65,12 +65,70 @@ func (s *Server) handleAPIConfigInfo(w http.ResponseWriter, r *http.Request) {
 		models = append(models, mi)
 	}
 
-	writeJSON(w, map[string]any{
+	info := map[string]any{
 		"config_file": s.configFile,
 		"models_dir":  s.modelsDir(),
 		"model_count": len(s.cfg.Models),
 		"models":      models,
-	})
+	}
+	if s.cfg.DefaultModel != "" {
+		info["default_model"] = s.cfg.DefaultModel
+	}
+	writeJSON(w, info)
+}
+
+// handleAPIConfigGetDefaultModel implements GET /api/config/default-model.
+func (s *Server) handleAPIConfigGetDefaultModel(w http.ResponseWriter, r *http.Request) {
+	var model any
+	if s.cfg.DefaultModel != "" {
+		model = s.cfg.DefaultModel
+	}
+	writeJSON(w, map[string]any{"model": model})
+}
+
+// handleAPIConfigSetDefaultModel implements PUT /api/config/default-model.
+func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Model == "" {
+		router.SendResponse(w, r, http.StatusBadRequest, "model is required")
+		return
+	}
+	if _, found := s.cfg.RealModelName(req.Model); !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found in config")
+		return
+	}
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
+		return
+	}
+	if err := s.writeDefaultModelToConfig(req.Model); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": req.Model, "status": "updated"})
+}
+
+// handleAPIConfigClearDefaultModel implements DELETE /api/config/default-model.
+func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http.Request) {
+	if s.configFile == "" {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
+		return
+	}
+	if err := s.writeDefaultModelToConfig(""); err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError,
+			fmt.Sprintf("write config: %v", err))
+		return
+	}
+	s.triggerReload()
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": s.cfg.DefaultModel, "status": "removed"})
 }
 
 // handleAPIConfigAddModel implements POST /api/config/models.
@@ -246,6 +304,24 @@ func (s *Server) triggerReload() {
 	if s.reloadFn != nil {
 		go s.reloadFn()
 	}
+}
+
+// writeDefaultModelToConfig sets or removes (model == "") the top-level
+// defaultModel key in the config YAML.
+func (s *Server) writeDefaultModelToConfig(model string) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	root, err := readYAMLRoot(s.configFile)
+	if err != nil {
+		return err
+	}
+	if model == "" {
+		yamlMapDelete(root, "defaultModel")
+	} else {
+		yamlMapSet(root, "defaultModel", yamlScalar(model))
+	}
+	return writeYAMLRoot(s.configFile, root, 0o644)
 }
 
 // writeModelToConfig reads the config YAML, sets models[id]=mc, and writes back.

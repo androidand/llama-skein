@@ -26,9 +26,20 @@ type ReqContextData struct {
 	Streaming        bool
 	SendLoadingState bool
 	LoadingTheme     LoadingTheme
+
+	// ModelDefaulted is true when the request did not name a model and the
+	// configured defaultModel was substituted. The filter middleware uses it
+	// to inject the model into the forwarded body, since some backends
+	// (vLLM, MLX) reject requests without a model field.
+	ModelDefaulted bool
 }
 
 var (
+	// ErrModelMissing reports that the request named no model at all (as
+	// opposed to an unparseable body). FetchContext substitutes the
+	// configured defaultModel for this error only.
+	ErrModelMissing = fmt.Errorf("no model specified in request")
+
 	ErrNoModelInContext  = fmt.Errorf("no model in request context")
 	ErrNoRouterFound     = fmt.Errorf("no router found for model")
 	ErrNoPeerModelFound  = fmt.Errorf("peer model not found")
@@ -83,21 +94,28 @@ func FetchContext(r *http.Request, cfg config.Config) (ReqContextData, error) {
 		return data, nil
 	}
 
-	if data, err := ExtractContext(r); err == nil {
-		realName, _ := cfg.RealModelName(data.Model)
-		if realName == "" {
-			realName = data.Model
+	data, err := ExtractContext(r)
+	if err != nil {
+		// fall back to the configured default model only when the request
+		// simply named no model; parse failures still error out.
+		if !errors.Is(err, ErrModelMissing) || cfg.DefaultModel == "" {
+			return ReqContextData{}, ErrNoModelInContext
 		}
-		data.ModelID = realName
-		if mc, ok := cfg.Models[realName]; ok {
-			data.SendLoadingState = mc.SendLoadingState != nil && *mc.SendLoadingState
-		}
-		data.LoadingTheme = LoadingTheme(r.Header.Get("X-Loading-Theme"))
-		*r = *r.WithContext(SetContext(r.Context(), data))
-		return data, nil
+		data.Model = cfg.DefaultModel
+		data.ModelDefaulted = true
 	}
 
-	return ReqContextData{}, ErrNoModelInContext
+	realName, _ := cfg.RealModelName(data.Model)
+	if realName == "" {
+		realName = data.Model
+	}
+	data.ModelID = realName
+	if mc, ok := cfg.Models[realName]; ok {
+		data.SendLoadingState = mc.SendLoadingState != nil && *mc.SendLoadingState
+	}
+	data.LoadingTheme = LoadingTheme(r.Header.Get("X-Loading-Theme"))
+	*r = *r.WithContext(SetContext(r.Context(), data))
+	return data, nil
 }
 
 func SetContext(ctx context.Context, data ReqContextData) context.Context {
@@ -120,7 +138,8 @@ func ExtractContext(r *http.Request) (ReqContextData, error) {
 		if model := r.URL.Query().Get("model"); model != "" {
 			return ReqContextData{Model: model, Streaming: r.URL.Query().Get("stream") == "true"}, nil
 		}
-		return ReqContextData{}, fmt.Errorf("missing 'model' query parameter")
+		return ReqContextData{Streaming: r.URL.Query().Get("stream") == "true"},
+			fmt.Errorf("missing 'model' query parameter: %w", ErrModelMissing)
 	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -136,7 +155,8 @@ func ExtractContext(r *http.Request) (ReqContextData, error) {
 	if strings.Contains(contentType, "application/json") {
 		model := gjson.GetBytes(bodyBytes, "model").String()
 		if model == "" {
-			return ReqContextData{}, fmt.Errorf("missing or empty 'model' in JSON body")
+			return ReqContextData{Streaming: gjson.GetBytes(bodyBytes, "stream").Bool()},
+				fmt.Errorf("missing or empty 'model' in JSON body: %w", ErrModelMissing)
 		}
 		return ReqContextData{Model: model, Streaming: gjson.GetBytes(bodyBytes, "stream").Bool()}, nil
 	}
@@ -159,7 +179,8 @@ func ExtractContext(r *http.Request) (ReqContextData, error) {
 		return ReqContextData{Model: model, Streaming: r.FormValue("stream") == "true"}, nil
 	}
 
-	return ReqContextData{}, fmt.Errorf("missing 'model' parameter")
+	return ReqContextData{Streaming: r.FormValue("stream") == "true"},
+		fmt.Errorf("missing 'model' parameter: %w", ErrModelMissing)
 }
 
 func SendError(w http.ResponseWriter, r *http.Request, err error) {

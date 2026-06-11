@@ -87,6 +87,15 @@ sendLoadingState: true
 #   all fields except for Id so chat UIs can use the alias equivalent to the original.
 includeAliasesInList: false
 
+# defaultModel: model to use when a request omits the "model" field
+# - optional, default: "" (requests without a model are rejected)
+# - must be a configured model ID or alias
+# - listed first in /v1/models and marked with "default": true
+# - the resolved model id is injected into the forwarded request body, so
+#   backends that require a model field (vLLM, MLX) also work with
+#   model-less requests
+# defaultModel: "qwen3-30b"
+
 # globalTTL: the default TTL in seconds before unloading a model
 # - optional, default: 0 (never automatically unload)
 # - must be >= 0

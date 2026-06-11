@@ -176,6 +176,11 @@
             "default": false,
             "description": "Present aliases within the /v1/models OpenAI API listing. when true, model aliases will be output to the API model listing duplicating all fields except for Id so chat UIs can use the alias equivalent to the original."
         },
+        "defaultModel": {
+            "type": "string",
+            "default": "",
+            "description": "Model ID or alias to use when a request omits the model field. Must reference a configured model or alias. The default model is listed first in /v1/models and marked with default: true."
+        },
         "macros": {
             "$ref": "#/definitions/macros"
         },

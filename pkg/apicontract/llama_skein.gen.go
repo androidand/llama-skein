@@ -110,6 +110,18 @@ type Capabilities struct {
 	Version  int      `json:"version"`
 }
 
+// ConfigDefaultModelRequest defines model for ConfigDefaultModelRequest.
+type ConfigDefaultModelRequest struct {
+	// Model Model ID or alias to use when a request omits the 'model' field.
+	Model string `json:"model"`
+}
+
+// ConfigDefaultModelResponse defines model for ConfigDefaultModelResponse.
+type ConfigDefaultModelResponse struct {
+	// Model Configured default model ID, or null when no default is set.
+	Model *string `json:"model"`
+}
+
 // ConfigGroupPatchRequest defines model for ConfigGroupPatchRequest.
 type ConfigGroupPatchRequest struct {
 	AutoUnload *bool `json:"autoUnload,omitempty"`
@@ -119,10 +131,13 @@ type ConfigGroupPatchRequest struct {
 
 // ConfigInfoResponse defines model for ConfigInfoResponse.
 type ConfigInfoResponse struct {
-	ConfigFile string            `json:"config_file"`
-	ModelCount int               `json:"model_count"`
-	Models     []ConfigModelInfo `json:"models"`
-	ModelsDir  string            `json:"models_dir"`
+	ConfigFile string `json:"config_file"`
+
+	// DefaultModel Configured default model ID; omitted when no default is set.
+	DefaultModel *string           `json:"default_model,omitempty"`
+	ModelCount   int               `json:"model_count"`
+	Models       []ConfigModelInfo `json:"models"`
+	ModelsDir    string            `json:"models_dir"`
 }
 
 // ConfigModelInfo defines model for ConfigModelInfo.
@@ -220,17 +235,20 @@ type MemoryInfo struct {
 // Model defines model for Model.
 type Model struct {
 	// Backend Inference backend type.
-	Backend         *ModelBackend `json:"backend,omitempty"`
-	ContextLength   *int          `json:"context_length,omitempty"`
-	Created         *int          `json:"created,omitempty"`
-	Description     *string       `json:"description,omitempty"`
-	Id              string        `json:"id"`
-	Loaded          *bool         `json:"loaded,omitempty"`
-	MaxOutputTokens *int          `json:"max_output_tokens,omitempty"`
-	Name            *string       `json:"name,omitempty"`
-	Object          string        `json:"object"`
-	OwnedBy         *string       `json:"owned_by,omitempty"`
-	State           *string       `json:"state,omitempty"`
+	Backend       *ModelBackend `json:"backend,omitempty"`
+	ContextLength *int          `json:"context_length,omitempty"`
+	Created       *int          `json:"created,omitempty"`
+
+	// Default True when this model is the configured default, used for requests that omit the 'model' field. Listed first in the model list. llama-skein extension to the OpenAI schema.
+	Default         *bool   `json:"default,omitempty"`
+	Description     *string `json:"description,omitempty"`
+	Id              string  `json:"id"`
+	Loaded          *bool   `json:"loaded,omitempty"`
+	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
+	Name            *string `json:"name,omitempty"`
+	Object          string  `json:"object"`
+	OwnedBy         *string `json:"owned_by,omitempty"`
+	State           *string `json:"state,omitempty"`
 }
 
 // ModelBackend Inference backend type.
@@ -284,6 +302,9 @@ type VersionInfo struct {
 	Runtime       map[string]interface{} `json:"runtime"`
 	Version       string                 `json:"version"`
 }
+
+// SetDefaultModelJSONRequestBody defines body for SetDefaultModel for application/json ContentType.
+type SetDefaultModelJSONRequestBody = ConfigDefaultModelRequest
 
 // PatchConfigGroupJSONRequestBody defines body for PatchConfigGroup for application/json ContentType.
 type PatchConfigGroupJSONRequestBody = ConfigGroupPatchRequest
@@ -367,6 +388,17 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ClearDefaultModel request
+	ClearDefaultModel(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetDefaultModel request
+	GetDefaultModel(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetDefaultModelWithBody request with any body
+	SetDefaultModelWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetDefaultModel(ctx context.Context, body SetDefaultModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PatchConfigGroupWithBody request with any body
 	PatchConfigGroupWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -405,6 +437,54 @@ type ClientInterface interface {
 
 	// ListModels request
 	ListModels(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ClearDefaultModel(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClearDefaultModelRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetDefaultModel(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDefaultModelRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetDefaultModelWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetDefaultModelRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetDefaultModel(ctx context.Context, body SetDefaultModelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetDefaultModelRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) PatchConfigGroupWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -573,6 +653,100 @@ func (c *Client) ListModels(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewClearDefaultModelRequest generates requests for ClearDefaultModel
+func NewClearDefaultModelRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/default-model")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetDefaultModelRequest generates requests for GetDefaultModel
+func NewGetDefaultModelRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/default-model")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSetDefaultModelRequest calls the generic SetDefaultModel builder with application/json body
+func NewSetDefaultModelRequest(server string, body SetDefaultModelJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetDefaultModelRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewSetDefaultModelRequestWithBody generates requests for SetDefaultModel with any type of body
+func NewSetDefaultModelRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/default-model")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewPatchConfigGroupRequest calls the generic PatchConfigGroup builder with application/json body
@@ -982,6 +1156,17 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ClearDefaultModelWithResponse request
+	ClearDefaultModelWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ClearDefaultModelResponse, error)
+
+	// GetDefaultModelWithResponse request
+	GetDefaultModelWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetDefaultModelResponse, error)
+
+	// SetDefaultModelWithBodyWithResponse request with any body
+	SetDefaultModelWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetDefaultModelResponse, error)
+
+	SetDefaultModelWithResponse(ctx context.Context, body SetDefaultModelJSONRequestBody, reqEditors ...RequestEditorFn) (*SetDefaultModelResponse, error)
+
 	// PatchConfigGroupWithBodyWithResponse request with any body
 	PatchConfigGroupWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error)
 
@@ -1020,6 +1205,96 @@ type ClientWithResponsesInterface interface {
 
 	// ListModelsWithResponse request
 	ListModelsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelsResponse, error)
+}
+
+type ClearDefaultModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r ClearDefaultModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClearDefaultModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClearDefaultModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetDefaultModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ConfigDefaultModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDefaultModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDefaultModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDefaultModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type SetDefaultModelResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ConfigModelResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r SetDefaultModelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetDefaultModelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SetDefaultModelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type PatchConfigGroupResponse struct {
@@ -1354,6 +1629,41 @@ func (r ListModelsResponse) ContentType() string {
 	return ""
 }
 
+// ClearDefaultModelWithResponse request returning *ClearDefaultModelResponse
+func (c *ClientWithResponses) ClearDefaultModelWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ClearDefaultModelResponse, error) {
+	rsp, err := c.ClearDefaultModel(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClearDefaultModelResponse(rsp)
+}
+
+// GetDefaultModelWithResponse request returning *GetDefaultModelResponse
+func (c *ClientWithResponses) GetDefaultModelWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetDefaultModelResponse, error) {
+	rsp, err := c.GetDefaultModel(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDefaultModelResponse(rsp)
+}
+
+// SetDefaultModelWithBodyWithResponse request with arbitrary body returning *SetDefaultModelResponse
+func (c *ClientWithResponses) SetDefaultModelWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetDefaultModelResponse, error) {
+	rsp, err := c.SetDefaultModelWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetDefaultModelResponse(rsp)
+}
+
+func (c *ClientWithResponses) SetDefaultModelWithResponse(ctx context.Context, body SetDefaultModelJSONRequestBody, reqEditors ...RequestEditorFn) (*SetDefaultModelResponse, error) {
+	rsp, err := c.SetDefaultModel(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetDefaultModelResponse(rsp)
+}
+
 // PatchConfigGroupWithBodyWithResponse request with arbitrary body returning *PatchConfigGroupResponse
 func (c *ClientWithResponses) PatchConfigGroupWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error) {
 	rsp, err := c.PatchConfigGroupWithBody(ctx, id, contentType, body, reqEditors...)
@@ -1475,6 +1785,84 @@ func (c *ClientWithResponses) ListModelsWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseListModelsResponse(rsp)
+}
+
+// ParseClearDefaultModelResponse parses an HTTP response from a ClearDefaultModelWithResponse call
+func ParseClearDefaultModelResponse(rsp *http.Response) (*ClearDefaultModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClearDefaultModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDefaultModelResponse parses an HTTP response from a GetDefaultModelWithResponse call
+func ParseGetDefaultModelResponse(rsp *http.Response) (*GetDefaultModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDefaultModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConfigDefaultModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetDefaultModelResponse parses an HTTP response from a SetDefaultModelWithResponse call
+func ParseSetDefaultModelResponse(rsp *http.Response) (*SetDefaultModelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetDefaultModelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ConfigModelResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParsePatchConfigGroupResponse parses an HTTP response from a PatchConfigGroupWithResponse call

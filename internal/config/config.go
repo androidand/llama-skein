@@ -170,6 +170,10 @@ type Config struct {
 
 	// silent mode — reduce GPU power to lower fan noise on blower coolers.
 	SilentMode SilentModeConfig `yaml:"silentMode"`
+
+	// model to use when a request omits the "model" field. Must be a
+	// configured model ID or alias.
+	DefaultModel string `yaml:"defaultModel"`
 }
 
 // SilentModeConfig controls automatic silent mode scheduling.
@@ -281,6 +285,13 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 				return Config{}, fmt.Errorf("duplicate alias %s found in model: %s", alias, modelName)
 			}
 			config.aliases[alias] = modelName
+		}
+	}
+
+	// defaultModel must point at a configured model or alias
+	if config.DefaultModel != "" {
+		if _, found := config.RealModelName(config.DefaultModel); !found {
+			return Config{}, fmt.Errorf("defaultModel %q not found in models or aliases", config.DefaultModel)
 		}
 	}
 
