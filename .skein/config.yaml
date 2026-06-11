@@ -7,13 +7,13 @@ providers:
     - m3
     - m5
     - rocky
-    - cerebras
-    - groq
-    - gemini
-    - huggingface
-    - zai
-    - openrouter
-    - opencode-go
+    - cerebras:llama-3.3-70b
+    - groq:llama-3.3-70b-versatile
+    - gemini:gemini-2.5-flash
+    - huggingface:Qwen-Qwen2.5-72B-Instruct
+    - zai:glm-4.7-flash
+    - openrouter:poolside/laguna-m.1:free
+    - opencode-go:deepseek-v4-flash-free
 tiers:
     cerebras: free-cloud
     groq: free-cloud
