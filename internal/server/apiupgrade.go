@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +20,7 @@ import (
 
 type upgradeRequest struct {
 	Method string `json:"method"` // "prebuilt" or "source"
-	Ref    string `json:"ref"`    // build tag like "b5142"
+	Ref    string `json:"ref"`    // build tag like "b9200"
 }
 
 type upgradeProgressEvent struct {
@@ -144,9 +146,10 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 		s.restoreBackup(w, backupPath, serverPath)
 		return fmt.Errorf("rename: %w", err)
 	}
+	selinuxRelabel(serverPath)
 
 	s.sendUpgradeEvent(w, "smoke-check", "running post-upgrade smoke test")
-	if err := smokeTest(serverPath); err != nil {
+	if err := smokeTest(serverPath, filepath.Dir(serverPath)); err != nil {
 		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("smoke test failed — restoring backup: %v", err))
 		s.restoreBackup(w, backupPath, serverPath)
 		return fmt.Errorf("smoke test failed: %w", err)
@@ -154,12 +157,9 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 
 	s.sendUpgradeEvent(w, "restart", "restarting llama-server process")
 	if err := restartLlamaServer(); err != nil {
-		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("restart failed — restoring backup: %v", err))
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("restart: %w", err)
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("restart: %v", err))
 	}
 
-	s.sendUpgradeEvent(w, "complete", "upgrade complete — llama-server restarted")
 	return nil
 }
 
@@ -176,66 +176,87 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 		}
 	}
 
-	modelsDir := s.modelsDir()
-	if modelsDir == "" {
-		return fmt.Errorf("models directory unknown; set modelsDir in config")
+	// Use /tmp for the build tree: avoids NTFS locking issues on model mounts
+	// and keeps the model storage clean. Always start fresh so there is no
+	// stale cmake cache from a prior failed run.
+	workspace := filepath.Join(os.TempDir(), "llama-skein-upgrade-src")
+	if err := os.RemoveAll(workspace); err != nil {
+		return fmt.Errorf("clean workspace: %w", err)
 	}
-	workspace := filepath.Join(modelsDir, ".upgrade-src")
 
 	s.sendUpgradeEvent(w, "checkout", fmt.Sprintf("checking out ref %s in %s", ref, workspace))
+	s.sendUpgradeEvent(w, "cloning", "cloning llama.cpp at "+ref)
 
-	if _, err := os.Stat(filepath.Join(workspace, ".git")); os.IsNotExist(err) {
-		s.sendUpgradeEvent(w, "cloning", "initial clone of llama.cpp")
-		cmd := exec.CommandContext(r.Context(), "git", "clone", "https://github.com/ggerganov/llama.cpp", workspace)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			os.RemoveAll(workspace)
-			s.sendUpgradeEvent(w, "rollback", "git clone failed — restoring backup")
-			s.restoreBackup(w, backupPath, serverPath)
-			return fmt.Errorf("git clone: %w\n%s", err, string(out))
-		}
-	} else {
-		s.sendUpgradeEvent(w, "fetching", "fetching latest refs")
-		cmd := exec.CommandContext(r.Context(), "git", "-C", workspace, "fetch", "origin")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			os.RemoveAll(workspace)
-			s.sendUpgradeEvent(w, "rollback", "git fetch failed — restoring backup")
-			s.restoreBackup(w, backupPath, serverPath)
-			return fmt.Errorf("git fetch: %w\n%s", err, string(out))
-		}
-	}
-
-	s.sendUpgradeEvent(w, "checkout-ref", fmt.Sprintf("checking out %s", ref))
-	cmd := exec.CommandContext(r.Context(), "git", "-C", workspace, "checkout", ref)
+	// shallow clone at the specific tag — no history needed
+	cmd := exec.CommandContext(r.Context(), "git", "clone", "--depth", "1", "--branch", ref,
+		"https://github.com/ggml-org/llama.cpp", workspace)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(workspace)
-		s.sendUpgradeEvent(w, "rollback", "git checkout failed — restoring backup")
+		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("git clone failed — restoring backup:\n%s", string(out)))
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("git checkout: %w\n%s", err, string(out))
+		return fmt.Errorf("git clone: %w\n%s", err, string(out))
 	}
 
+	buildDir := filepath.Join(workspace, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	// cmake configure
+	s.sendUpgradeEvent(w, "configuring", "running cmake configure")
+	cmakeArgs := []string{"-B", buildDir, "-DBUILD_SHARED_LIBS=ON", "-DLLAMA_SERVER_SSL=OFF", "-DLLAMA_BUILD_UI=OFF", "-DLLAMA_BUILD_WEBUI=OFF"}
+	if s.detectROCm() {
+		cmakeArgs = append(cmakeArgs, "-DGGML_HIPBLAS=ON")
+		s.sendUpgradeEvent(w, "rocm", "ROCm detected — adding -DGGML_HIPBLAS=ON")
+	}
+	cmakeArgs = append(cmakeArgs, workspace)
+	cmd = exec.CommandContext(r.Context(), "cmake", cmakeArgs...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(workspace)
+		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("cmake configure failed — restoring backup:\n%s", string(out)))
+		s.restoreBackup(w, backupPath, serverPath)
+		return fmt.Errorf("cmake configure: %w\n%s", err, string(out))
+	}
+
+	// cmake build
 	s.sendUpgradeEvent(w, "building", "compiling llama-server")
-	cmd = exec.CommandContext(r.Context(), "make", "-C", workspace, "llama-server")
+	nCPU := strconv.Itoa(runtime.NumCPU())
+	cmd = exec.CommandContext(r.Context(), "cmake", "--build", buildDir, "--config", "Release", "-t", "llama-server", "-j", nCPU)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(workspace)
 		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("build failed — restoring backup:\n%s", string(out)))
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("make: %w\n%s", err, string(out))
+		return fmt.Errorf("cmake build: %w\n%s", err, string(out))
 	}
 
-	newServer := filepath.Join(workspace, "bin", "llama-server")
+	// find the built binary (cmake puts it in build/bin/ or build/)
+	newServer := filepath.Join(buildDir, "bin", "llama-server")
 	if _, err := os.Stat(newServer); os.IsNotExist(err) {
-		os.RemoveAll(workspace)
-		s.sendUpgradeEvent(w, "rollback", "built binary not found — restoring backup")
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("built binary not found at %s", newServer)
+		newServer = filepath.Join(buildDir, "llama-server")
+		if _, err := os.Stat(newServer); os.IsNotExist(err) {
+			os.RemoveAll(workspace)
+			s.sendUpgradeEvent(w, "rollback", "built binary not found — restoring backup")
+			s.restoreBackup(w, backupPath, serverPath)
+			return fmt.Errorf("built binary not found at %s/bin/llama-server", buildDir)
+		}
+	}
+
+	// copy shared libs to the binary's directory
+	libDir := filepath.Dir(serverPath)
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		return fmt.Errorf("create lib dir %s: %w", libDir, err)
+	}
+	s.sendUpgradeEvent(w, "libs", fmt.Sprintf("copying shared libraries to %s", libDir))
+	if err := copySharedLibs(buildDir, libDir); err != nil {
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
 	}
 
 	s.sendUpgradeEvent(w, "replacing", "replacing current binary")
-	if err := os.Rename(newServer, serverPath); err != nil {
+	if err := copyFile(newServer, serverPath); err != nil {
 		os.RemoveAll(workspace)
-		s.sendUpgradeEvent(w, "rollback", "rename failed — restoring backup")
+		s.sendUpgradeEvent(w, "rollback", "copy failed — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("rename: %w", err)
+		return fmt.Errorf("copy binary: %w", err)
 	}
 	if err := os.Chmod(serverPath, 0o755); err != nil {
 		os.RemoveAll(workspace)
@@ -243,26 +264,26 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 		s.restoreBackup(w, backupPath, serverPath)
 		return fmt.Errorf("chmod: %w", err)
 	}
+	selinuxRelabel(serverPath)
 	os.RemoveAll(workspace)
 
 	s.sendUpgradeEvent(w, "smoke-check", "running post-upgrade smoke test")
-	if err := smokeTest(serverPath); err != nil {
+	if err := smokeTest(serverPath, libDir); err != nil {
 		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("smoke test failed — restoring backup: %v", err))
 		s.restoreBackup(w, backupPath, serverPath)
 		return fmt.Errorf("smoke test failed: %w", err)
 	}
 
-	s.sendUpgradeEvent(w, "restart", "restarting llama-server process")
+	s.sendUpgradeEvent(w, "restart", "restarting llama-server processes")
 	if err := restartLlamaServer(); err != nil {
-		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("restart failed — restoring backup: %v", err))
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("restart: %w", err)
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("restart: %v", err))
 	}
 
-	s.sendUpgradeEvent(w, "complete", "upgrade from source complete — llama-server restarted")
 	return nil
 }
 
+// currentServerPath returns the filesystem path to the running llama-server binary.
+// It inspects pgrep output first; falls back to the standard user install path.
 func (s *Server) currentServerPath() (string, error) {
 	cmd := exec.Command("pgrep", "-a", "llama-server")
 	out, err := cmd.Output()
@@ -270,16 +291,65 @@ func (s *Server) currentServerPath() (string, error) {
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		if len(lines) > 0 {
 			fields := strings.Fields(lines[0])
+			// pgrep -a output: <PID> <binary> [args...]
 			if len(fields) >= 2 {
-				return fields[len(fields)-1], nil
+				return fields[1], nil
 			}
 		}
 	}
-	modelsDir := s.modelsDir()
-	if modelsDir != "" {
-		return filepath.Join(modelsDir, "llama-server"), nil
+	// Fallback: standard user installation path
+	if home, err := os.UserHomeDir(); err == nil {
+		candidate := filepath.Join(home, ".local", "lib", "llama-cpp", "llama-server")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
 	}
-	return "", fmt.Errorf("cannot determine current llama-server path")
+	return "", fmt.Errorf("cannot determine llama-server path: no running process and ~/.local/lib/llama-cpp/llama-server not found")
+}
+
+// detectROCm returns true if ROCm appears to be installed on this host.
+func (s *Server) detectROCm() bool {
+	if _, err := os.Stat("/opt/rocm"); err == nil {
+		return true
+	}
+	if _, err := exec.LookPath("hipcc"); err == nil {
+		return true
+	}
+	return false
+}
+
+// copySharedLibs walks srcDir recursively and copies every .so file into dstDir.
+func copySharedLibs(srcDir, dstDir string) error {
+	var errs []string
+	err := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".so") && !strings.Contains(name, ".so.") {
+			return nil
+		}
+		dst := filepath.Join(dstDir, name)
+		if copyErr := copyFile(path, dst); copyErr != nil {
+			errs = append(errs, copyErr.Error())
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// selinuxRelabel runs chcon -t bin_t on path when chcon is available (Rocky Linux).
+func selinuxRelabel(path string) {
+	if _, err := exec.LookPath("chcon"); err != nil {
+		return
+	}
+	_ = exec.Command("chcon", "-t", "bin_t", path).Run()
 }
 
 func (s *Server) restoreBackup(w http.ResponseWriter, backupPath, targetPath string) {
@@ -301,19 +371,26 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	if err != nil {
+	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}
 	return out.Close()
 }
 
-func smokeTest(serverPath string) error {
+func smokeTest(serverPath, libDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, serverPath, "--version")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("exit %d: %s", cmd.ProcessState.ExitCode(), string(out))
+	if libDir != "" {
+		existing := os.Getenv("LD_LIBRARY_PATH")
+		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+libDir+":"+existing)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if cmd.ProcessState != nil {
+			return fmt.Errorf("exit %d: %s", cmd.ProcessState.ExitCode(), string(out))
+		}
+		return err
 	}
 	return nil
 }
@@ -333,7 +410,7 @@ func restartLlamaServer() error {
 		if pid > 0 {
 			proc, err := os.FindProcess(pid)
 			if err == nil {
-				_ = proc.Signal(os.Interrupt)
+				_ = proc.Kill()
 			}
 		}
 	}

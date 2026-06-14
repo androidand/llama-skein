@@ -70,6 +70,7 @@ func (s *Server) handleAPISystemCapabilities(w http.ResponseWriter, r *http.Requ
 var currentSystemFeatures = []string{
 	"capabilities",
 	"hardware-power",
+	"llama-cpp-upgrade",
 }
 
 // handleAPISystemMetrics implements GET /api/system/metrics.
