@@ -14,6 +14,7 @@ import (
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 )
 
 const systemCapabilitiesVersion = 1
@@ -59,9 +60,9 @@ func (s *Server) handleAPISystemVersion(w http.ResponseWriter, r *http.Request) 
 // Returns the feature set supported by this instance; clients check this to
 // detect optional features without relying on 404 probing.
 func (s *Server) handleAPISystemCapabilities(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{
-		"version":  systemCapabilitiesVersion,
-		"features": currentSystemFeatures,
+	writeJSON(w, apicontract.Capabilities{
+		Version:  systemCapabilitiesVersion,
+		Features: currentSystemFeatures,
 	})
 }
 

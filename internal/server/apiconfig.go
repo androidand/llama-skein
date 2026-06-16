@@ -58,44 +58,42 @@ func derefString(s *string) string {
 	return *s
 }
 
+func ptrOf[T any](v T) *T { return &v }
+
 // handleAPIConfigInfo implements GET /api/config/info.
 func (s *Server) handleAPIConfigInfo(w http.ResponseWriter, r *http.Request) {
-	type modelInfo struct {
-		ID         string `json:"id"`
-		FilePath   string `json:"file_path,omitempty"`
-		FileExists bool   `json:"file_exists"`
-	}
-
-	models := make([]modelInfo, 0, len(s.cfg.Models))
+	models := make([]apicontract.ConfigModelInfo, 0, len(s.cfg.Models))
 	for id, mc := range s.cfg.Models {
-		mi := modelInfo{ID: id}
+		mi := apicontract.ConfigModelInfo{Id: id}
+		exists := false
 		if p := parseModelPath(mc.Cmd); p != "" {
-			mi.FilePath = p
 			_, err := os.Stat(p)
-			mi.FileExists = err == nil
+			exists = err == nil
+			mi.FilePath = ptrOf(p)
 		}
+		mi.FileExists = ptrOf(exists)
 		models = append(models, mi)
 	}
 
-	info := map[string]any{
-		"config_file": s.configFile,
-		"models_dir":  s.modelsDir(),
-		"model_count": len(s.cfg.Models),
-		"models":      models,
+	resp := apicontract.ConfigInfoResponse{
+		ConfigFile: s.configFile,
+		ModelsDir:  s.modelsDir(),
+		ModelCount: len(s.cfg.Models),
+		Models:     models,
 	}
 	if s.cfg.DefaultModel != "" {
-		info["default_model"] = s.cfg.DefaultModel
+		resp.DefaultModel = ptrOf(s.cfg.DefaultModel)
 	}
-	writeJSON(w, info)
+	writeJSON(w, resp)
 }
 
 // handleAPIConfigGetDefaultModel implements GET /api/config/default-model.
 func (s *Server) handleAPIConfigGetDefaultModel(w http.ResponseWriter, r *http.Request) {
-	var model any
+	resp := apicontract.ConfigDefaultModelResponse{}
 	if s.cfg.DefaultModel != "" {
-		model = s.cfg.DefaultModel
+		resp.Model = ptrOf(s.cfg.DefaultModel)
 	}
-	writeJSON(w, map[string]any{"model": model})
+	writeJSON(w, resp)
 }
 
 // handleAPIConfigSetDefaultModel implements PUT /api/config/default-model.
@@ -123,7 +121,7 @@ func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.triggerReload()
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": req.Model, "status": "updated"})
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: req.Model, Status: "updated"})
 }
 
 // handleAPIConfigClearDefaultModel implements DELETE /api/config/default-model.
@@ -138,7 +136,7 @@ func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http
 		return
 	}
 	s.triggerReload()
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": s.cfg.DefaultModel, "status": "removed"})
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: s.cfg.DefaultModel, Status: "removed"})
 }
 
 // handleAPIConfigAddModel implements POST /api/config/models.
@@ -202,9 +200,9 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.triggerReload()
-	resp := map[string]any{"id": req.Id, "status": "added"}
+	resp := apicontract.ConfigModelResponse{Id: req.Id, Status: "added"}
 	if len(warnings) > 0 {
-		resp["warnings"] = warnings
+		resp.Warnings = &warnings
 	}
 	writeJSONStatus(w, http.StatusAccepted, resp)
 }
@@ -219,35 +217,48 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 	}
 	mc := s.cfg.Models[realID]
 
+	parts, _ := config.SanitizeCommand(mc.Cmd)
 	flags := map[string]string{}
-	if parts, err := config.SanitizeCommand(mc.Cmd); err == nil {
-		for i := 1; i < len(parts); i++ {
-			if !strings.HasPrefix(parts[i], "--") {
-				continue
-			}
-			if i+1 < len(parts) && !strings.HasPrefix(parts[i+1], "--") {
-				flags[parts[i]] = parts[i+1]
-				i++
-			} else {
-				flags[parts[i]] = "true"
-			}
+	for i := 1; i < len(parts); i++ {
+		if !strings.HasPrefix(parts[i], "--") {
+			continue
+		}
+		if i+1 < len(parts) && !strings.HasPrefix(parts[i+1], "--") {
+			flags[parts[i]] = parts[i+1]
+			i++
+		} else {
+			flags[parts[i]] = "true"
 		}
 	}
 
-	writeJSON(w, map[string]any{
-		"id":               realID,
-		"cmd":              mc.Cmd,
-		"name":             mc.Name,
-		"description":      mc.Description,
-		"aliases":          mc.Aliases,
-		"ttl":              mc.UnloadAfter,
-		"concurrencyLimit": mc.ConcurrencyLimit,
-		"ctx_size":         flags["--ctx-size"],
-		"n_gpu_layers":     flags["--n-gpu-layers"],
-		"cache_type_k":     flags["--cache-type-k"],
-		"cache_type_v":     flags["--cache-type-v"],
-		"flags":            flags,
-	})
+	detail := apicontract.ConfigModelDetail{
+		Id:               realID,
+		Cmd:              mc.Cmd,
+		Ttl:              ptrOf(mc.UnloadAfter),
+		ConcurrencyLimit: ptrOf(mc.ConcurrencyLimit),
+		CtxSize:          ptrOf(flags["--ctx-size"]),
+		NGpuLayers:       ptrOf(flags["--n-gpu-layers"]),
+		CacheTypeK:       ptrOf(flags["--cache-type-k"]),
+		CacheTypeV:       ptrOf(flags["--cache-type-v"]),
+		Flags:            &flags,
+	}
+	if mc.Name != "" {
+		detail.Name = ptrOf(mc.Name)
+	}
+	if mc.Description != "" {
+		detail.Description = ptrOf(mc.Description)
+	}
+	if len(mc.Aliases) > 0 {
+		detail.Aliases = ptrOf(mc.Aliases)
+	}
+	// Offload read-back via the model's backend translator.
+	spec := offload.For(mc.Backend).Parse(parts)
+	detail.NCpuMoe = spec.NCpuMoe
+	detail.CpuMoe = spec.CpuMoe
+	detail.CpuOffloadGb = spec.CpuOffloadGB
+	detail.OverrideTensor = spec.OverrideTensor
+
+	writeJSON(w, detail)
 }
 
 // handleAPIConfigPatchModel implements PATCH /api/config/models/{id}.
@@ -275,9 +286,9 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.triggerReload()
-	resp := map[string]any{"id": realID, "status": "updated"}
+	resp := apicontract.ConfigModelResponse{Id: realID, Status: "updated"}
 	if len(warnings) > 0 {
-		resp["warnings"] = warnings
+		resp.Warnings = &warnings
 	}
 	writeJSONStatus(w, http.StatusAccepted, resp)
 }
@@ -300,7 +311,7 @@ func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.triggerReload()
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": realID, "status": "removed"})
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: realID, Status: "removed"})
 }
 
 // handleAPIConfigPatchGroup implements PATCH /api/config/groups/{id}.
@@ -326,7 +337,7 @@ func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.triggerReload()
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": id, "status": "updated"})
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: id, Status: "updated"})
 }
 
 // handleAPIConfigReload implements POST /api/config/reload.
@@ -336,7 +347,7 @@ func (s *Server) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
 			"reload not available; restart llama-skein manually")
 		return
 	}
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"status": "reloading"})
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ReloadResponse{Status: "reloading"})
 	go s.reloadFn()
 }
 

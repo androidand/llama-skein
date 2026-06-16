@@ -161,6 +161,28 @@ type ConfigInfoResponse struct {
 	ModelsDir    string            `json:"models_dir"`
 }
 
+// ConfigModelDetail Full stored config for a model plus llama-server flags parsed out of its command. ctx_size and n_gpu_layers are the raw flag values (strings); offload fields reflect the current command.
+type ConfigModelDetail struct {
+	Aliases          *[]string `json:"aliases,omitempty"`
+	CacheTypeK       *string   `json:"cache_type_k,omitempty"`
+	CacheTypeV       *string   `json:"cache_type_v,omitempty"`
+	Cmd              string    `json:"cmd"`
+	ConcurrencyLimit *int      `json:"concurrencyLimit,omitempty"`
+	CpuMoe           *bool     `json:"cpu_moe,omitempty"`
+	CpuOffloadGb     *int      `json:"cpu_offload_gb,omitempty"`
+	CtxSize          *string   `json:"ctx_size,omitempty"`
+	Description      *string   `json:"description,omitempty"`
+
+	// Flags All --flags parsed from the command, as raw string values.
+	Flags          *map[string]string `json:"flags,omitempty"`
+	Id             string             `json:"id"`
+	NCpuMoe        *int               `json:"n_cpu_moe,omitempty"`
+	NGpuLayers     *string            `json:"n_gpu_layers,omitempty"`
+	Name           *string            `json:"name,omitempty"`
+	OverrideTensor *string            `json:"override_tensor,omitempty"`
+	Ttl            *int               `json:"ttl,omitempty"`
+}
+
 // ConfigModelInfo defines model for ConfigModelInfo.
 type ConfigModelInfo struct {
 	FileExists *bool   `json:"file_exists,omitempty"`
@@ -241,6 +263,9 @@ type ConfigModelRequestBackend string
 type ConfigModelResponse struct {
 	Id     string `json:"id"`
 	Status string `json:"status"`
+
+	// Warnings Non-fatal warnings produced while applying the request, e.g. offload knobs unsupported by the model's backend. Omitted when there are none.
+	Warnings *[]string `json:"warnings,omitempty"`
 }
 
 // GPUSnapshot defines model for GPUSnapshot.
@@ -352,6 +377,11 @@ type OffloadRecommendation struct {
 
 // OffloadRecommendationBackend Inference backend the recommendation targets.
 type OffloadRecommendationBackend string
+
+// ReloadResponse defines model for ReloadResponse.
+type ReloadResponse struct {
+	Status string `json:"status"`
+}
 
 // ResourceSnapshot defines model for ResourceSnapshot.
 type ResourceSnapshot struct {
@@ -1562,7 +1592,7 @@ func (r RemoveConfigModelResponse) ContentType() string {
 type GetConfigModelResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *ConfigModelResponse
+	JSON200      *ConfigModelDetail
 }
 
 // Status returns HTTPResponse.Status
@@ -1622,9 +1652,7 @@ func (r PatchConfigModelResponse) ContentType() string {
 type ReloadConfigResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *struct {
-		Status string `json:"status"`
-	}
+	JSON202      *ReloadResponse
 }
 
 // Status returns HTTPResponse.Status
@@ -2165,7 +2193,7 @@ func ParseGetConfigModelResponse(rsp *http.Response) (*GetConfigModelResponse, e
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest ConfigModelResponse
+		var dest ConfigModelDetail
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -2217,9 +2245,7 @@ func ParseReloadConfigResponse(rsp *http.Response) (*ReloadConfigResponse, error
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest struct {
-			Status string `json:"status"`
-		}
+		var dest ReloadResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

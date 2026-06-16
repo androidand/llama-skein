@@ -177,11 +177,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Model configuration response.",
+            "description": "Model configuration and parsed llama-server flags.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConfigModelResponse"
+                  "$ref": "#/components/schemas/ConfigModelDetail"
                 }
               }
             }
@@ -338,15 +338,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "status"
-                  ]
+                  "$ref": "#/components/schemas/ReloadResponse"
                 }
               }
             }
@@ -979,6 +971,89 @@
           "id": {
             "type": "string"
           },
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Non-fatal warnings produced while applying the request, e.g. offload knobs unsupported by the model's backend. Omitted when there are none."
+          }
+        }
+      },
+      "ConfigModelDetail": {
+        "type": "object",
+        "description": "Full stored config for a model plus llama-server flags parsed out of its command. ctx_size and n_gpu_layers are the raw flag values (strings); offload fields reflect the current command.",
+        "required": [
+          "id",
+          "cmd"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "cmd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "concurrencyLimit": {
+            "type": "integer"
+          },
+          "ctx_size": {
+            "type": "string"
+          },
+          "n_gpu_layers": {
+            "type": "string"
+          },
+          "cache_type_k": {
+            "type": "string"
+          },
+          "cache_type_v": {
+            "type": "string"
+          },
+          "n_cpu_moe": {
+            "type": "integer"
+          },
+          "cpu_moe": {
+            "type": "boolean"
+          },
+          "cpu_offload_gb": {
+            "type": "integer"
+          },
+          "override_tensor": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "All --flags parsed from the command, as raw string values."
+          }
+        }
+      },
+      "ReloadResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
           "status": {
             "type": "string"
           }
