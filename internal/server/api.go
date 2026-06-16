@@ -50,6 +50,18 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if maxOutputTokens, ok := hints["max_output_tokens"].(int); ok {
 			rec.MaxOutputTokens = &maxOutputTokens
 		}
+		if v, ok := hints["n_cpu_moe"].(int); ok {
+			rec.NCpuMoe = &v
+		}
+		if v, ok := hints["cpu_moe"].(bool); ok {
+			rec.CpuMoe = &v
+		}
+		if v, ok := hints["cpu_offload_gb"].(int); ok {
+			rec.CpuOffloadGb = &v
+		}
+		if v, ok := hints["override_tensor"].(string); ok {
+			rec.OverrideTensor = &v
+		}
 		return rec
 	}
 

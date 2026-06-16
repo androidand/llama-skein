@@ -7,9 +7,15 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
+
+// defaultRecommendationCtx is the context length assumed for offload/VRAM
+// budgeting when a model's command does not pin --ctx-size.
+const defaultRecommendationCtx int64 = 32768
 
 // handleAPIListModels implements GET /api/models.
 // Returns all configured models with runtime state, file metadata, and inferred
@@ -238,6 +244,100 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 		"min":         minCtx,
 		"max":         maxCtx,
 	})
+}
+
+// freeVRAMBytes returns the free GPU VRAM (or system RAM when no GPU is
+// present) in bytes and megabytes, from the latest performance snapshot.
+func (s *Server) freeVRAMBytes() (bytes int64, mb int) {
+	if s.perf == nil {
+		return 0, 0
+	}
+	sysStats, gpuStats := s.perf.Current()
+	if len(sysStats) == 0 {
+		return 0, 0
+	}
+	if len(gpuStats) > 0 {
+		gpu := gpuStats[0]
+		bytes = int64(gpu.MemTotalMB-gpu.MemUsedMB) << 20
+	} else {
+		bytes = int64(sysStats[len(sysStats)-1].MemFreeMB) << 20
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
+	return bytes, int(bytes >> 20)
+}
+
+// handleAPIOffloadRecommendation implements GET /api/models/offload/{model}.
+// It recommends a --n-cpu-moe value from GGUF expert tensor sizes and current
+// free VRAM. MoE-scoped: non-MoE models and non-llamacpp backends return
+// applicable=false with a reason.
+func (s *Server) handleAPIOffloadRecommendation(w http.ResponseWriter, r *http.Request) {
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	realName, found := s.cfg.RealModelName(requested)
+	if !found {
+		router.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	mc := s.cfg.Models[realName]
+
+	backend := mc.Backend
+	if backend == "" {
+		backend = config.BackendLlamaCpp
+	}
+	resp := apicontract.OffloadRecommendation{
+		Backend: apicontract.OffloadRecommendationBackend(backend),
+	}
+
+	if backend != config.BackendLlamaCpp {
+		resp.Reason = stringPtr("offload recommendation is only computed for the llamacpp backend")
+		writeJSON(w, resp)
+		return
+	}
+
+	ggufPath := parseModelPath(mc.Cmd)
+	if ggufPath == "" {
+		resp.Reason = stringPtr("no model file (-m/--model) found in the model command")
+		writeJSON(w, resp)
+		return
+	}
+	g, err := gguf.ParseFile(ggufPath)
+	if err != nil {
+		resp.Reason = stringPtr(fmt.Sprintf("could not read GGUF metadata: %v", err))
+		writeJSON(w, resp)
+		return
+	}
+
+	freeBytes, freeMB := s.freeVRAMBytes()
+	if freeMB > 0 {
+		resp.VramFreeMb = &freeMB
+	}
+
+	// Budget the KV cache against the configured context, else the trained one.
+	ctxLen := defaultRecommendationCtx
+	args, _ := mc.SanitizedCommand()
+	if v, ok := commandFlagInt(args, "--ctx-size", "-c"); ok {
+		ctxLen = int64(v)
+	} else if g.ContextLength > 0 && g.ContextLength < ctxLen {
+		ctxLen = g.ContextLength
+	}
+	ctxInt := int(ctxLen)
+	resp.CtxSize = &ctxInt
+
+	plan := g.RecommendCpuMoe(freeBytes, ctxLen)
+	resp.Applicable = plan.Applicable
+	resp.Reason = stringPtr(plan.Reason)
+	if plan.ExpertBytesTotal > 0 {
+		eb := int(plan.ExpertBytesTotal)
+		resp.ExpertBytesTotal = &eb
+	}
+	if plan.Applicable {
+		n := plan.NCpuMoe
+		resp.NCpuMoe = &n
+		fits := plan.FitsFullyOnGPU
+		resp.FitsFullyOnGpu = &fits
+	}
+	writeJSON(w, resp)
 }
 
 // writeJSON encodes v as JSON with the correct content-type header.

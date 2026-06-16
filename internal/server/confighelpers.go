@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/offload"
 	"gopkg.in/yaml.v3"
 )
 
@@ -170,4 +171,70 @@ func patchCommandFlags(cmd string, flags map[string]string) (string, error) {
 		}
 	}
 	return strings.Join(parts, " "), nil
+}
+
+// applyFlagOps applies a sequence of offload flag operations to a command
+// string, supporting value flags, valueless boolean flags, and removal. It is
+// the counterpart of patchCommandFlags for offload settings, which need
+// boolean and removal semantics that the simple value-flag map cannot express.
+func applyFlagOps(cmd string, ops []offload.FlagOp) (string, error) {
+	parts, err := config.SanitizeCommand(cmd)
+	if err != nil {
+		return "", err
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("cmd is empty")
+	}
+	for _, op := range ops {
+		parts = applyOneFlagOp(parts, op)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+// applyOneFlagOp mutates parts for a single flag operation. It matches both the
+// "--flag value" and "--flag=value" forms.
+func applyOneFlagOp(parts []string, op offload.FlagOp) []string {
+	idx, eq := -1, false
+	for i, p := range parts {
+		if p == op.Name {
+			idx, eq = i, false
+			break
+		}
+		if strings.HasPrefix(p, op.Name+"=") {
+			idx, eq = i, true
+			break
+		}
+	}
+
+	switch {
+	case op.Remove:
+		if idx < 0 {
+			return parts
+		}
+		// A space-separated value flag also drops its following value token.
+		if !eq && !op.Boolean && idx+1 < len(parts) && !strings.HasPrefix(parts[idx+1], "-") {
+			return append(parts[:idx], parts[idx+2:]...)
+		}
+		return append(parts[:idx], parts[idx+1:]...)
+
+	case op.Boolean:
+		if idx >= 0 {
+			return parts // already present
+		}
+		return append(parts, op.Name)
+
+	default: // value flag
+		if idx < 0 {
+			return append(parts, op.Name, op.Value)
+		}
+		if eq {
+			parts[idx] = op.Name + "=" + op.Value
+			return parts
+		}
+		if idx+1 < len(parts) {
+			parts[idx+1] = op.Value
+			return parts
+		}
+		return append(parts, op.Value)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/offload"
 	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
@@ -112,6 +113,22 @@ func addModelRuntimeHints(record map[string]any, mc config.ModelConfig) {
 	}
 	if maxTokens, ok := commandFlagInt(args, "--n-predict", "-n"); ok {
 		record["max_output_tokens"] = maxTokens
+	}
+
+	// Read back any CPU/MoE offload settings currently in the command, using the
+	// backend's own flag vocabulary.
+	spec := offload.For(mc.Backend).Parse(args)
+	if spec.NCpuMoe != nil {
+		record["n_cpu_moe"] = *spec.NCpuMoe
+	}
+	if spec.CpuMoe != nil {
+		record["cpu_moe"] = *spec.CpuMoe
+	}
+	if spec.CpuOffloadGB != nil {
+		record["cpu_offload_gb"] = *spec.CpuOffloadGB
+	}
+	if spec.OverrideTensor != nil {
+		record["override_tensor"] = *spec.OverrideTensor
 	}
 }
 

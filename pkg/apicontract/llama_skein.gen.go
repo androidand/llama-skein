@@ -60,19 +60,19 @@ func (e ConfigModelRequestBackend) Valid() bool {
 
 // Defines values for ModelBackend.
 const (
-	Llamacpp ModelBackend = "llamacpp"
-	Mlx      ModelBackend = "mlx"
-	Vllm     ModelBackend = "vllm"
+	ModelBackendLlamacpp ModelBackend = "llamacpp"
+	ModelBackendMlx      ModelBackend = "mlx"
+	ModelBackendVllm     ModelBackend = "vllm"
 )
 
 // Valid indicates whether the value is a known member of the ModelBackend enum.
 func (e ModelBackend) Valid() bool {
 	switch e {
-	case Llamacpp:
+	case ModelBackendLlamacpp:
 		return true
-	case Mlx:
+	case ModelBackendMlx:
 		return true
-	case Vllm:
+	case ModelBackendVllm:
 		return true
 	default:
 		return false
@@ -88,6 +88,27 @@ const (
 func (e ModelListObject) Valid() bool {
 	switch e {
 	case List:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OffloadRecommendationBackend.
+const (
+	OffloadRecommendationBackendLlamacpp OffloadRecommendationBackend = "llamacpp"
+	OffloadRecommendationBackendMlx      OffloadRecommendationBackend = "mlx"
+	OffloadRecommendationBackendVllm     OffloadRecommendationBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the OffloadRecommendationBackend enum.
+func (e OffloadRecommendationBackend) Valid() bool {
+	switch e {
+	case OffloadRecommendationBackendLlamacpp:
+		return true
+	case OffloadRecommendationBackendMlx:
+		return true
+	case OffloadRecommendationBackendVllm:
 		return true
 	default:
 		return false
@@ -160,14 +181,29 @@ type ConfigModelPatchRequest struct {
 	Cmd                   *string                         `json:"cmd,omitempty"`
 	ConcurrencyLimitCamel *int                            `json:"concurrencyLimit,omitempty"`
 	ConcurrencyLimit      *int                            `json:"concurrency_limit,omitempty"`
-	CtxSizeDash           *int                            `json:"ctx-size,omitempty"`
-	CtxSize               *int                            `json:"ctx_size,omitempty"`
-	Description           *string                         `json:"description,omitempty"`
-	Flags                 *map[string]interface{}         `json:"flags,omitempty"`
-	NGPULayersDash        *int                            `json:"n-gpu-layers,omitempty"`
-	NGpuLayers            *int                            `json:"n_gpu_layers,omitempty"`
-	Name                  *string                         `json:"name,omitempty"`
-	Ttl                   *int                            `json:"ttl,omitempty"`
+	CpuOffloadGBDash      *int                            `json:"cpu-offload-gb,omitempty"`
+
+	// CpuMoe Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). false removes the flag. llamacpp only.
+	CpuMoe *bool `json:"cpu_moe,omitempty"`
+
+	// CpuOffloadGb GiB of weights to offload to CPU per GPU (vLLM --cpu-offload-gb). 0 removes the flag. vllm only.
+	CpuOffloadGb   *int                    `json:"cpu_offload_gb,omitempty"`
+	CtxSizeDash    *int                    `json:"ctx-size,omitempty"`
+	CtxSize        *int                    `json:"ctx_size,omitempty"`
+	Description    *string                 `json:"description,omitempty"`
+	Flags          *map[string]interface{} `json:"flags,omitempty"`
+	NCpuMoeDash    *int                    `json:"n-cpu-moe,omitempty"`
+	NGPULayersDash *int                    `json:"n-gpu-layers,omitempty"`
+
+	// NCpuMoe Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). 0 removes the flag. llamacpp only.
+	NCpuMoe            *int    `json:"n_cpu_moe,omitempty"`
+	NGpuLayers         *int    `json:"n_gpu_layers,omitempty"`
+	Name               *string `json:"name,omitempty"`
+	OverrideTensorDash *string `json:"override-tensor,omitempty"`
+
+	// OverrideTensor Advanced tensor placement override regex (llama.cpp --override-tensor). Empty removes the flag. llamacpp only.
+	OverrideTensor *string `json:"override_tensor,omitempty"`
+	Ttl            *int    `json:"ttl,omitempty"`
 }
 
 // ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
@@ -178,12 +214,24 @@ type ConfigModelRequest struct {
 	Aliases *[]string `json:"aliases,omitempty"`
 
 	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
-	Backend     *ConfigModelRequestBackend `json:"backend,omitempty"`
-	Cmd         string                     `json:"cmd"`
-	Description *string                    `json:"description,omitempty"`
-	Id          string                     `json:"id"`
-	Name        *string                    `json:"name,omitempty"`
-	Ttl         *int                       `json:"ttl,omitempty"`
+	Backend *ConfigModelRequestBackend `json:"backend,omitempty"`
+	Cmd     string                     `json:"cmd"`
+
+	// CpuMoe Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). llamacpp only.
+	CpuMoe *bool `json:"cpu_moe,omitempty"`
+
+	// CpuOffloadGb GiB of weights to offload to CPU per GPU (vLLM --cpu-offload-gb). vllm only.
+	CpuOffloadGb *int    `json:"cpu_offload_gb,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Id           string  `json:"id"`
+
+	// NCpuMoe Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). llamacpp only.
+	NCpuMoe *int    `json:"n_cpu_moe,omitempty"`
+	Name    *string `json:"name,omitempty"`
+
+	// OverrideTensor Advanced tensor placement override regex (llama.cpp --override-tensor). llamacpp only.
+	OverrideTensor *string `json:"override_tensor,omitempty"`
+	Ttl            *int    `json:"ttl,omitempty"`
 }
 
 // ConfigModelRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
@@ -237,7 +285,13 @@ type Model struct {
 	// Backend Inference backend type.
 	Backend       *ModelBackend `json:"backend,omitempty"`
 	ContextLength *int          `json:"context_length,omitempty"`
-	Created       *int          `json:"created,omitempty"`
+
+	// CpuMoe True when --cpu-moe is present in the model command (all MoE experts offloaded to CPU).
+	CpuMoe *bool `json:"cpu_moe,omitempty"`
+
+	// CpuOffloadGb Current --cpu-offload-gb value parsed from the model command, when set (vLLM weight offload).
+	CpuOffloadGb *int `json:"cpu_offload_gb,omitempty"`
+	Created      *int `json:"created,omitempty"`
 
 	// Default True when this model is the configured default, used for requests that omit the 'model' field. Listed first in the model list. llama-skein extension to the OpenAI schema.
 	Default         *bool   `json:"default,omitempty"`
@@ -245,10 +299,16 @@ type Model struct {
 	Id              string  `json:"id"`
 	Loaded          *bool   `json:"loaded,omitempty"`
 	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
-	Name            *string `json:"name,omitempty"`
-	Object          string  `json:"object"`
-	OwnedBy         *string `json:"owned_by,omitempty"`
-	State           *string `json:"state,omitempty"`
+
+	// NCpuMoe Current --n-cpu-moe value parsed from the model command, when set (llama.cpp MoE expert CPU offload).
+	NCpuMoe *int    `json:"n_cpu_moe,omitempty"`
+	Name    *string `json:"name,omitempty"`
+	Object  string  `json:"object"`
+
+	// OverrideTensor Current --override-tensor value parsed from the model command, when set (llama.cpp tensor placement).
+	OverrideTensor *string `json:"override_tensor,omitempty"`
+	OwnedBy        *string `json:"owned_by,omitempty"`
+	State          *string `json:"state,omitempty"`
 }
 
 // ModelBackend Inference backend type.
@@ -262,6 +322,36 @@ type ModelList struct {
 
 // ModelListObject defines model for ModelList.Object.
 type ModelListObject string
+
+// OffloadRecommendation defines model for OffloadRecommendation.
+type OffloadRecommendation struct {
+	// Applicable False for non-MoE models and backends where offload does not apply (e.g. mlx); see reason.
+	Applicable bool `json:"applicable"`
+
+	// Backend Inference backend the recommendation targets.
+	Backend OffloadRecommendationBackend `json:"backend"`
+
+	// CtxSize Context length assumed for the KV-cache portion of the estimate.
+	CtxSize *int `json:"ctx_size,omitempty"`
+
+	// ExpertBytesTotal Estimated total bytes of MoE expert tensors in the model.
+	ExpertBytesTotal *int `json:"expert_bytes_total,omitempty"`
+
+	// FitsFullyOnGpu True when the model fits in free VRAM without any offload.
+	FitsFullyOnGpu *bool `json:"fits_fully_on_gpu,omitempty"`
+
+	// NCpuMoe Recommended --n-cpu-moe value (number of leading layers whose MoE experts to offload to CPU). 0 means the model fits fully on GPU.
+	NCpuMoe *int `json:"n_cpu_moe,omitempty"`
+
+	// Reason Human-readable explanation of the recommendation or why it is not applicable.
+	Reason *string `json:"reason,omitempty"`
+
+	// VramFreeMb Free VRAM (MB) used for the calculation; falls back to system RAM when no GPU is present.
+	VramFreeMb *int `json:"vram_free_mb,omitempty"`
+}
+
+// OffloadRecommendationBackend Inference backend the recommendation targets.
+type OffloadRecommendationBackend string
 
 // ResourceSnapshot defines model for ResourceSnapshot.
 type ResourceSnapshot struct {
@@ -428,6 +518,9 @@ type ClientInterface interface {
 
 	// GetHardware request
 	GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetOffloadRecommendation request
+	GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetSystemCapabilities request
 	GetSystemCapabilities(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -609,6 +702,18 @@ func (c *Client) ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn
 
 func (c *Client) GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHardwareRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetOffloadRecommendationRequest(c.Server, model)
 	if err != nil {
 		return nil, err
 	}
@@ -1032,6 +1137,40 @@ func NewGetHardwareRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetOffloadRecommendationRequest generates requests for GetOffloadRecommendation
+func NewGetOffloadRecommendationRequest(server string, model string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "model", model, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/offload/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetSystemCapabilitiesRequest generates requests for GetSystemCapabilities
 func NewGetSystemCapabilitiesRequest(server string) (*http.Request, error) {
 	var err error
@@ -1196,6 +1335,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetHardwareWithResponse request
 	GetHardwareWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHardwareResponse, error)
+
+	// GetOffloadRecommendationWithResponse request
+	GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error)
 
 	// GetSystemCapabilitiesWithResponse request
 	GetSystemCapabilitiesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetSystemCapabilitiesResponse, error)
@@ -1539,6 +1681,36 @@ func (r GetHardwareResponse) ContentType() string {
 	return ""
 }
 
+type GetOffloadRecommendationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *OffloadRecommendation
+}
+
+// Status returns HTTPResponse.Status
+func (r GetOffloadRecommendationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetOffloadRecommendationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetOffloadRecommendationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetSystemCapabilitiesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1758,6 +1930,15 @@ func (c *ClientWithResponses) GetHardwareWithResponse(ctx context.Context, reqEd
 		return nil, err
 	}
 	return ParseGetHardwareResponse(rsp)
+}
+
+// GetOffloadRecommendationWithResponse request returning *GetOffloadRecommendationResponse
+func (c *ClientWithResponses) GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error) {
+	rsp, err := c.GetOffloadRecommendation(ctx, model, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetOffloadRecommendationResponse(rsp)
 }
 
 // GetSystemCapabilitiesWithResponse request returning *GetSystemCapabilitiesResponse
@@ -2065,6 +2246,32 @@ func ParseGetHardwareResponse(rsp *http.Response) (*GetHardwareResponse, error) 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ResourceSnapshot
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetOffloadRecommendationResponse parses an HTTP response from a GetOffloadRecommendationWithResponse call
+func ParseGetOffloadRecommendationResponse(rsp *http.Response) (*GetOffloadRecommendationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetOffloadRecommendationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OffloadRecommendation
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

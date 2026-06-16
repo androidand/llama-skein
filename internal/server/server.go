@@ -274,6 +274,7 @@ func (s *Server) routes() {
 	// Models — lifecycle management.
 	mux.Handle("GET /api/models", apiChain.ThenFunc(s.handleAPIListModels))
 	mux.Handle("GET /api/models/context/{model...}", apiChain.ThenFunc(s.handleAPIContextRecommendation))
+	mux.Handle("GET /api/models/offload/{model...}", apiChain.ThenFunc(s.handleAPIOffloadRecommendation))
 	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
 	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
 	mux.Handle("POST /api/models/load/{model...}", apiChain.ThenFunc(s.handleAPILoadModel))

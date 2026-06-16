@@ -56,6 +56,38 @@
         }
       }
     },
+    "/api/models/offload/{model}": {
+      "get": {
+        "operationId": "getOffloadRecommendation",
+        "summary": "Recommends CPU/MoE offload settings for a model given current free VRAM. MoE-scoped; non-MoE models and the mlx backend return applicable=false.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Model ID or alias."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recommended offload settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OffloadRecommendation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found."
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "listModels",
@@ -691,6 +723,22 @@
           "max_output_tokens": {
             "type": "integer"
           },
+          "n_cpu_moe": {
+            "type": "integer",
+            "description": "Current --n-cpu-moe value parsed from the model command, when set (llama.cpp MoE expert CPU offload)."
+          },
+          "cpu_moe": {
+            "type": "boolean",
+            "description": "True when --cpu-moe is present in the model command (all MoE experts offloaded to CPU)."
+          },
+          "cpu_offload_gb": {
+            "type": "integer",
+            "description": "Current --cpu-offload-gb value parsed from the model command, when set (vLLM weight offload)."
+          },
+          "override_tensor": {
+            "type": "string",
+            "description": "Current --override-tensor value parsed from the model command, when set (llama.cpp tensor placement)."
+          },
           "backend": {
             "type": "string",
             "enum": [
@@ -789,6 +837,22 @@
           },
           "ttl": {
             "type": "integer"
+          },
+          "n_cpu_moe": {
+            "type": "integer",
+            "description": "Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). llamacpp only."
+          },
+          "cpu_moe": {
+            "type": "boolean",
+            "description": "Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). llamacpp only."
+          },
+          "cpu_offload_gb": {
+            "type": "integer",
+            "description": "GiB of weights to offload to CPU per GPU (vLLM --cpu-offload-gb). vllm only."
+          },
+          "override_tensor": {
+            "type": "string",
+            "description": "Advanced tensor placement override regex (llama.cpp --override-tensor). llamacpp only."
           }
         }
       },
@@ -857,6 +921,34 @@
             "type": "string",
             "x-go-name": "CacheTypeVDash"
           },
+          "n_cpu_moe": {
+            "type": "integer",
+            "description": "Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). 0 removes the flag. llamacpp only."
+          },
+          "n-cpu-moe": {
+            "type": "integer",
+            "x-go-name": "NCpuMoeDash"
+          },
+          "cpu_moe": {
+            "type": "boolean",
+            "description": "Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). false removes the flag. llamacpp only."
+          },
+          "cpu_offload_gb": {
+            "type": "integer",
+            "description": "GiB of weights to offload to CPU per GPU (vLLM --cpu-offload-gb). 0 removes the flag. vllm only."
+          },
+          "cpu-offload-gb": {
+            "type": "integer",
+            "x-go-name": "CpuOffloadGBDash"
+          },
+          "override_tensor": {
+            "type": "string",
+            "description": "Advanced tensor placement override regex (llama.cpp --override-tensor). Empty removes the flag. llamacpp only."
+          },
+          "override-tensor": {
+            "type": "string",
+            "x-go-name": "OverrideTensorDash"
+          },
           "flags": {
             "type": "object",
             "additionalProperties": true
@@ -914,6 +1006,52 @@
             "type": "string",
             "nullable": true,
             "description": "Configured default model ID, or null when no default is set."
+          }
+        }
+      },
+      "OffloadRecommendation": {
+        "type": "object",
+        "required": [
+          "applicable",
+          "backend"
+        ],
+        "properties": {
+          "applicable": {
+            "type": "boolean",
+            "description": "False for non-MoE models and backends where offload does not apply (e.g. mlx); see reason."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ],
+            "description": "Inference backend the recommendation targets."
+          },
+          "n_cpu_moe": {
+            "type": "integer",
+            "description": "Recommended --n-cpu-moe value (number of leading layers whose MoE experts to offload to CPU). 0 means the model fits fully on GPU."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable explanation of the recommendation or why it is not applicable."
+          },
+          "expert_bytes_total": {
+            "type": "integer",
+            "description": "Estimated total bytes of MoE expert tensors in the model."
+          },
+          "vram_free_mb": {
+            "type": "integer",
+            "description": "Free VRAM (MB) used for the calculation; falls back to system RAM when no GPU is present."
+          },
+          "fits_fully_on_gpu": {
+            "type": "boolean",
+            "description": "True when the model fits in free VRAM without any offload."
+          },
+          "ctx_size": {
+            "type": "integer",
+            "description": "Context length assumed for the KV-cache portion of the estimate."
           }
         }
       }

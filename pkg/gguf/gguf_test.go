@@ -206,12 +206,12 @@ func TestParseArrayMetadata(t *testing.T) {
 
 	// KV 2: F32 array — same layout as e.g. rope.dimension_sections in real models
 	writeKeyV(&buf, "llama.test.float_array", 3)
-	binary.Write(&buf, binary.LittleEndian, uint32(9))                       // ARRAY
-	binary.Write(&buf, binary.LittleEndian, uint32(6))                       // elem type: F32
-	binary.Write(&buf, binary.LittleEndian, uint64(3))                       // count
-	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(1.5)))  // [0]
-	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(2.5)))  // [1]
-	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(3.5)))  // [2]
+	binary.Write(&buf, binary.LittleEndian, uint32(9))                      // ARRAY
+	binary.Write(&buf, binary.LittleEndian, uint32(6))                      // elem type: F32
+	binary.Write(&buf, binary.LittleEndian, uint64(3))                      // count
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(1.5))) // [0]
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(2.5))) // [1]
+	binary.Write(&buf, binary.LittleEndian, math.Float32bits(float32(3.5))) // [2]
 
 	g, err := gguf.Parse(bytes.NewReader(buf.Bytes()))
 	if err != nil {

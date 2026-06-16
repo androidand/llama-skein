@@ -41,17 +41,17 @@ const (
 	GGUFTypeF64    GGUFType = 12
 
 	// Array types: 9 + element_type * 0x10000
-	GGUFTypeU8Array   GGUFType = 9 + 0*0x10000   // 0x00000009
-	GGUFTypeI8Array   GGUFType = 9 + 1*0x10000   // 0x00010009
-	GGUFTypeU16Array  GGUFType = 9 + 2*0x10000   // 0x00020009
-	GGUFTypeI16Array  GGUFType = 9 + 3*0x10000   // 0x00030009
-	GGUFTypeU32Array  GGUFType = 9 + 4*0x10000   // 0x00040009
-	GGUFTypeI32Array  GGUFType = 9 + 5*0x10000   // 0x00050009
-	GGUFTypeF32Array  GGUFType = 9 + 6*0x10000   // 0x00060009
-	GGUFTypeStringArray GGUFType = 9 + 8*0x10000 // 0x00080009
-	GGUFTypeU64Array  GGUFType = 9 + 10*0x10000  // 0x000A0009
-	GGUFTypeI64Array  GGUFType = 9 + 11*0x10000  // 0x000B0009
-	GGUFTypeF64Array  GGUFType = 9 + 12*0x10000  // 0x000C0009
+	GGUFTypeU8Array     GGUFType = 9 + 0*0x10000  // 0x00000009
+	GGUFTypeI8Array     GGUFType = 9 + 1*0x10000  // 0x00010009
+	GGUFTypeU16Array    GGUFType = 9 + 2*0x10000  // 0x00020009
+	GGUFTypeI16Array    GGUFType = 9 + 3*0x10000  // 0x00030009
+	GGUFTypeU32Array    GGUFType = 9 + 4*0x10000  // 0x00040009
+	GGUFTypeI32Array    GGUFType = 9 + 5*0x10000  // 0x00050009
+	GGUFTypeF32Array    GGUFType = 9 + 6*0x10000  // 0x00060009
+	GGUFTypeStringArray GGUFType = 9 + 8*0x10000  // 0x00080009
+	GGUFTypeU64Array    GGUFType = 9 + 10*0x10000 // 0x000A0009
+	GGUFTypeI64Array    GGUFType = 9 + 11*0x10000 // 0x000B0009
+	GGUFTypeF64Array    GGUFType = 9 + 12*0x10000 // 0x000C0009
 )
 
 // GGUF holds the parsed metadata from a GGUF file.
@@ -88,6 +88,11 @@ type GGUF struct {
 
 	// File size on disk (set by caller, not from GGUF header).
 	FileSize int64
+
+	// Tensors holds the tensor info table (name, dims, type) when it could be
+	// read. Empty when the tensor section was unavailable or failed to parse;
+	// callers fall back to dimensional estimates in that case.
+	Tensors []TensorInfo
 }
 
 // RopeScaling describes RoPE scaling configuration.
@@ -96,6 +101,14 @@ type RopeScaling struct {
 	Factor         float64
 	OriginalLength int64
 	Finetuned      bool
+}
+
+// TensorInfo describes a single entry from the GGUF tensor info section.
+type TensorInfo struct {
+	Name   string
+	Dims   []uint64
+	Type   uint32 // ggml_type
+	Offset uint64
 }
 
 // IsMoE returns true if the model uses mixture-of-experts architecture.
@@ -286,11 +299,20 @@ func Parse(r io.Reader) (*GGUF, error) {
 		metadata[key] = val
 	}
 
+	// The tensor info section follows the metadata. Read it best-effort: a
+	// failure here must not break callers that only need metadata, so partial
+	// results are discarded and Tensors is left empty.
+	tensors, terr := readTensorInfos(r, tensorCount, version)
+	if terr != nil {
+		tensors = nil
+	}
+
 	g := &GGUF{
 		Version:     version,
 		TensorCount: tensorCount,
 		KVCount:     kvCount,
 		Metadata:    metadata,
+		Tensors:     tensors,
 	}
 
 	// Parse convenience fields
@@ -662,6 +684,50 @@ func readI64(r io.Reader) (int64, error) {
 		return 0, err
 	}
 	return int64(binary.LittleEndian.Uint64(buf)), nil
+}
+
+// maxTensorDims caps tensor dimensionality to guard against corrupt headers.
+const maxTensorDims = 8
+
+// readTensorInfos reads the GGUF tensor info section, which follows the metadata
+// key-value section. Each entry is: name (gguf string), n_dims (u32),
+// dims (n_dims * u64), ggml_type (u32), offset (u64). It does not read tensor
+// data. The format is identical across GGUF v2 and v3.
+func readTensorInfos(r io.Reader, count uint64, version uint32) ([]TensorInfo, error) {
+	if count > maxMetadataArrayCount {
+		return nil, fmt.Errorf("tensor count %d exceeds limit %d", count, maxMetadataArrayCount)
+	}
+	tensors := make([]TensorInfo, 0, count)
+	for i := uint64(0); i < count; i++ {
+		name, err := readString(r, version)
+		if err != nil {
+			return nil, fmt.Errorf("read tensor %d name: %w", i, err)
+		}
+		nDims, err := readU32(r)
+		if err != nil {
+			return nil, fmt.Errorf("read tensor %q n_dims: %w", name, err)
+		}
+		if nDims > maxTensorDims {
+			return nil, fmt.Errorf("tensor %q has implausible n_dims %d", name, nDims)
+		}
+		dims := make([]uint64, nDims)
+		for d := uint32(0); d < nDims; d++ {
+			dims[d], err = readU64(r)
+			if err != nil {
+				return nil, fmt.Errorf("read tensor %q dim %d: %w", name, d, err)
+			}
+		}
+		typ, err := readU32(r)
+		if err != nil {
+			return nil, fmt.Errorf("read tensor %q type: %w", name, err)
+		}
+		offset, err := readU64(r)
+		if err != nil {
+			return nil, fmt.Errorf("read tensor %q offset: %w", name, err)
+		}
+		tensors = append(tensors, TensorInfo{Name: name, Dims: dims, Type: typ, Offset: offset})
+	}
+	return tensors, nil
 }
 
 // Helper functions to extract typed values from the metadata map.
