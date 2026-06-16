@@ -10,68 +10,33 @@ import (
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/offload"
 	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 	"gopkg.in/yaml.v3"
 )
 
-type configModelRequest struct {
-	ID          string   `json:"id"`
-	Cmd         string   `json:"cmd"`
-	Backend     string   `json:"backend"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Aliases     []string `json:"aliases"`
-	TTL         *int     `json:"ttl"`
+// The config API request bodies are decoded directly into the generated
+// apicontract types (the OpenAPI spec is the source of truth) rather than
+// hand-written mirrors. The helpers below adapt those generated types to the
+// internal config model.
 
-	// Backend-neutral offload knobs (applied to cmd at creation time).
-	NCpuMoe        *int    `json:"n_cpu_moe"`
-	CpuMoe         *bool   `json:"cpu_moe"`
-	CpuOffloadGB   *int    `json:"cpu_offload_gb"`
-	OverrideTensor *string `json:"override_tensor"`
-}
-
-type configModelPatchRequest struct {
-	Cmd                   *string        `json:"cmd"`
-	Name                  *string        `json:"name"`
-	Description           *string        `json:"description"`
-	Aliases               *[]string      `json:"aliases"`
-	TTL                   *int           `json:"ttl"`
-	ConcurrencyLimit      *int           `json:"concurrencyLimit"`
-	ConcurrencyLimitSnake *int           `json:"concurrency_limit"`
-	CtxSize               *int           `json:"ctx_size"`
-	CtxSizeDash           *int           `json:"ctx-size"`
-	NGPULayers            *int           `json:"n_gpu_layers"`
-	NGPUDash              *int           `json:"n-gpu-layers"`
-	CacheTypeK            *string        `json:"cache_type_k"`
-	CacheTypeKDash        *string        `json:"cache-type-k"`
-	CacheTypeV            *string        `json:"cache_type_v"`
-	CacheTypeVDash        *string        `json:"cache-type-v"`
-	NCpuMoe               *int           `json:"n_cpu_moe"`
-	NCpuMoeDash           *int           `json:"n-cpu-moe"`
-	CpuMoe                *bool          `json:"cpu_moe"`
-	CpuOffloadGB          *int           `json:"cpu_offload_gb"`
-	CpuOffloadGBDash      *int           `json:"cpu-offload-gb"`
-	OverrideTensor        *string        `json:"override_tensor"`
-	OverrideTensorDash    *string        `json:"override-tensor"`
-	Flags                 map[string]any `json:"flags"`
-}
-
-// offloadSpec collects the offload knobs from an add-model request.
-func (req configModelRequest) offloadSpec() offload.Spec {
+// offloadSpecFromAddRequest collects offload knobs from an add-model request.
+func offloadSpecFromAddRequest(req apicontract.ConfigModelRequest) offload.Spec {
 	return offload.Spec{
 		NCpuMoe:        req.NCpuMoe,
 		CpuMoe:         req.CpuMoe,
-		CpuOffloadGB:   req.CpuOffloadGB,
+		CpuOffloadGB:   req.CpuOffloadGb,
 		OverrideTensor: req.OverrideTensor,
 	}
 }
 
-// offloadSpec collects the offload knobs from a patch request. The dash-named
-// alias wins when both forms are present, matching the ctx_size/ctx-size rule.
-func (req configModelPatchRequest) offloadSpec() offload.Spec {
+// offloadSpecFromPatchRequest collects offload knobs from a patch request. The
+// dash-named alias wins when both forms are present, matching the
+// ctx_size/ctx-size rule.
+func offloadSpecFromPatchRequest(req apicontract.ConfigModelPatchRequest) offload.Spec {
 	s := offload.Spec{
 		NCpuMoe:        req.NCpuMoe,
 		CpuMoe:         req.CpuMoe,
-		CpuOffloadGB:   req.CpuOffloadGB,
+		CpuOffloadGB:   req.CpuOffloadGb,
 		OverrideTensor: req.OverrideTensor,
 	}
 	if req.NCpuMoeDash != nil {
@@ -86,10 +51,11 @@ func (req configModelPatchRequest) offloadSpec() offload.Spec {
 	return s
 }
 
-type configGroupPatchRequest struct {
-	AutoUnload *bool `json:"autoUnload"`
-	Exclusive  *bool `json:"exclusive"`
-	Swap       *bool `json:"swap"`
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // handleAPIConfigInfo implements GET /api/config/info.
@@ -134,9 +100,7 @@ func (s *Server) handleAPIConfigGetDefaultModel(w http.ResponseWriter, r *http.R
 
 // handleAPIConfigSetDefaultModel implements PUT /api/config/default-model.
 func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Model string `json:"model"`
-	}
+	var req apicontract.ConfigDefaultModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -179,16 +143,16 @@ func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http
 
 // handleAPIConfigAddModel implements POST /api/config/models.
 func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request) {
-	var req configModelRequest
+	var req apicontract.ConfigModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.ID == "" || req.Cmd == "" {
+	if req.Id == "" || req.Cmd == "" {
 		router.SendResponse(w, r, http.StatusBadRequest, "id and cmd are required")
 		return
 	}
-	if !isValidModelID(req.ID) {
+	if !isValidModelID(req.Id) {
 		router.SendResponse(w, r, http.StatusBadRequest,
 			"model ID contains invalid characters; use A-Za-z0-9 . _ : / -")
 		return
@@ -199,20 +163,26 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	backend := ""
+	if req.Backend != nil {
+		backend = string(*req.Backend)
+	}
 	mc := config.ModelConfig{
 		Cmd:         req.Cmd,
-		Backend:     req.Backend,
-		Name:        req.Name,
-		Description: req.Description,
-		Aliases:     req.Aliases,
+		Backend:     backend,
+		Name:        derefString(req.Name),
+		Description: derefString(req.Description),
 		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
 	}
-	if req.TTL != nil {
-		mc.UnloadAfter = *req.TTL
+	if req.Aliases != nil {
+		mc.Aliases = *req.Aliases
+	}
+	if req.Ttl != nil {
+		mc.UnloadAfter = *req.Ttl
 	}
 
 	var warnings []string
-	if spec := req.offloadSpec(); !spec.Empty() {
+	if spec := offloadSpecFromAddRequest(req); !spec.Empty() {
 		ops, warn := offload.For(mc.Backend).Ops(spec)
 		warnings = warn
 		if len(ops) > 0 {
@@ -226,13 +196,13 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if err := s.writeModelToConfig(req.ID, &mc); err != nil {
+	if err := s.writeModelToConfig(req.Id, &mc); err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError,
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
 	s.triggerReload()
-	resp := map[string]any{"id": req.ID, "status": "added"}
+	resp := map[string]any{"id": req.Id, "status": "added"}
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}
@@ -293,7 +263,7 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var req configModelPatchRequest
+	var req apicontract.ConfigModelPatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -345,7 +315,7 @@ func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var req configGroupPatchRequest
+	var req apicontract.ConfigGroupPatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -445,7 +415,7 @@ func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) error {
 
 // patchModelInConfig applies a partial model update, preserving other fields.
 // It returns any warnings produced while translating offload settings.
-func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) ([]string, error) {
+func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchRequest) ([]string, error) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
@@ -478,25 +448,29 @@ func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) ([]s
 		}
 		yamlMapSet(entryNode, "aliases", seq)
 	}
-	if req.TTL != nil {
-		yamlMapSet(entryNode, "ttl", yamlInt(*req.TTL))
+	if req.Ttl != nil {
+		yamlMapSet(entryNode, "ttl", yamlInt(*req.Ttl))
+	}
+	// Generated field names: ConcurrencyLimitCamel maps the camelCase JSON key,
+	// ConcurrencyLimit maps the snake_case key.
+	if req.ConcurrencyLimitCamel != nil {
+		if *req.ConcurrencyLimitCamel < 0 {
+			return nil, fmt.Errorf("concurrencyLimit must be >= 0")
+		}
+		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimitCamel))
 	}
 	if req.ConcurrencyLimit != nil {
 		if *req.ConcurrencyLimit < 0 {
-			return nil, fmt.Errorf("concurrencyLimit must be >= 0")
+			return nil, fmt.Errorf("concurrency_limit must be >= 0")
 		}
 		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimit))
 	}
-	if req.ConcurrencyLimitSnake != nil {
-		if *req.ConcurrencyLimitSnake < 0 {
-			return nil, fmt.Errorf("concurrency_limit must be >= 0")
-		}
-		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimitSnake))
-	}
 
-	flags := make(map[string]string, len(req.Flags)+6)
-	for k, v := range req.Flags {
-		flags[normalizeCmdFlag(k)] = flagValueString(v)
+	flags := make(map[string]string)
+	if req.Flags != nil {
+		for k, v := range *req.Flags {
+			flags[normalizeCmdFlag(k)] = flagValueString(v)
+		}
 	}
 	if req.CtxSize != nil {
 		flags["--ctx-size"] = fmt.Sprint(*req.CtxSize)
@@ -504,11 +478,11 @@ func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) ([]s
 	if req.CtxSizeDash != nil {
 		flags["--ctx-size"] = fmt.Sprint(*req.CtxSizeDash)
 	}
-	if req.NGPULayers != nil {
-		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPULayers)
+	if req.NGpuLayers != nil {
+		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGpuLayers)
 	}
-	if req.NGPUDash != nil {
-		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPUDash)
+	if req.NGPULayersDash != nil {
+		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGPULayersDash)
 	}
 	if req.CacheTypeK != nil {
 		flags["--cache-type-k"] = *req.CacheTypeK
@@ -537,7 +511,7 @@ func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) ([]s
 	// Translate backend-neutral offload knobs into native flags using the
 	// model's configured backend (empty == llamacpp).
 	var warnings []string
-	if spec := req.offloadSpec(); !spec.Empty() {
+	if spec := offloadSpecFromPatchRequest(req); !spec.Empty() {
 		ops, warn := offload.For(s.cfg.Models[id].Backend).Ops(spec)
 		warnings = warn
 		if len(ops) > 0 {
@@ -560,7 +534,7 @@ func (s *Server) patchModelInConfig(id string, req configModelPatchRequest) ([]s
 }
 
 // patchGroupInConfig applies a partial group update, preserving other fields.
-func (s *Server) patchGroupInConfig(id string, req configGroupPatchRequest) error {
+func (s *Server) patchGroupInConfig(id string, req apicontract.ConfigGroupPatchRequest) error {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
