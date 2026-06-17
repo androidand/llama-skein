@@ -4,7 +4,9 @@ import (
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/shared"
 )
 
 // memGuardState is the pure decision core of the memory guard, kept free of
@@ -102,6 +104,14 @@ func (s *Server) startMemoryGuard() {
 			}
 			s.proxylog.Errorf("memory guard: available memory %d/%d MB below %.0f%% — unloading all local models to prevent host memory exhaustion: %v",
 				st.MemAvailableMB, st.MemTotalMB, mg.MinAvailablePct, models)
+			// Surface a structured error to clients (UI/skein) so models don't
+			// just silently vanish — the log line alone is easy to miss.
+			event.Emit(shared.MemoryGuardTrippedEvent{
+				AvailableMB:    st.MemAvailableMB,
+				TotalMB:        st.MemTotalMB,
+				ThresholdPct:   mg.MinAvailablePct,
+				UnloadedModels: models,
+			})
 			s.local.Unload(5 * time.Second)
 			s.proxylog.Infof("memory guard: unload complete; models reload on next request (cooldown %ds)", mg.CooldownSeconds)
 		}

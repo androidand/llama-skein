@@ -191,6 +191,7 @@ const (
 	msgTypeLogData     messageType = "logData"
 	msgTypeMetrics     messageType = "metrics"
 	msgTypeInFlight    messageType = "inflight"
+	msgTypeMemoryGuard messageType = "memoryGuard"
 )
 
 type messageEnvelope struct {
@@ -298,6 +299,11 @@ func (s *Server) handleAPISystemEvents(w http.ResponseWriter, r *http.Request) {
 	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
 	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
 	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
+	defer event.On(func(e shared.MemoryGuardTrippedEvent) {
+		if j, err := json.Marshal(e); err == nil {
+			send(messageEnvelope{Type: msgTypeMemoryGuard, Data: string(j)})
+		}
+	})()
 
 	sendLogData("proxy", s.proxylog.GetHistory())
 	sendLogData("upstream", s.upstreamlog.GetHistory())

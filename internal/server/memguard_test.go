@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/shared"
 )
 
 func memGuardConf() config.MemoryGuardConfig {
@@ -64,6 +66,29 @@ func TestMemGuard_CooldownSuppressesRetrigger(t *testing.T) {
 	// re-triggers immediately (the consecutive count is already met)
 	if !g.Observe(2500, 36000, now.Add(70*time.Second)) {
 		t.Fatal("expected re-trigger after cooldown")
+	}
+}
+
+func TestMemGuard_TrippedEventEmitted(t *testing.T) {
+	got := make(chan shared.MemoryGuardTrippedEvent, 1)
+	off := event.On(func(e shared.MemoryGuardTrippedEvent) { got <- e })
+	defer off()
+
+	event.Emit(shared.MemoryGuardTrippedEvent{
+		AvailableMB:    2500,
+		TotalMB:        36000,
+		ThresholdPct:   5,
+		UnloadedModels: []string{"mlx-qwen3-35b-a3b"},
+	})
+
+	select {
+	case e := <-got:
+		if e.AvailableMB != 2500 || e.ThresholdPct != 5 ||
+			len(e.UnloadedModels) != 1 || e.UnloadedModels[0] != "mlx-qwen3-35b-a3b" {
+			t.Fatalf("unexpected event payload: %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected MemoryGuardTrippedEvent to be delivered to subscribers")
 	}
 }
 
