@@ -35,11 +35,18 @@ type SysStat struct {
 	// (includes reclaimable cache/inactive pages). Use this — not MemFreeMB,
 	// which on macOS excludes inactive pages and is always near zero — to
 	// judge memory pressure.
-	MemAvailableMB int         `json:"mem_available_mb"`
-	SwapTotalMB    int         `json:"swap_total_mb"`
-	SwapUsedMB     int         `json:"swap_used_mb"`
-	LoadAvg1       float64     `json:"load_avg_1"`
-	LoadAvg5       float64     `json:"load_avg_5"`
-	LoadAvg15      float64     `json:"load_avg_15"`
-	NetIO          []NetIOStat `json:"net_io"`
+	MemAvailableMB int `json:"mem_available_mb"`
+	// MemPressureLevel is the macOS kernel's holistic memory-pressure verdict
+	// from kern.memorystatus_vm_pressure_level: 1=normal, 2=warning,
+	// 4=critical. It accounts for compression, swap, and wired memory — unlike
+	// a raw available-% figure, which a legitimately-resident large model
+	// drives low without the system being in any danger. 0 on platforms that
+	// don't expose it (Linux, Windows).
+	MemPressureLevel int         `json:"mem_pressure_level"`
+	SwapTotalMB      int         `json:"swap_total_mb"`
+	SwapUsedMB       int         `json:"swap_used_mb"`
+	LoadAvg1         float64     `json:"load_avg_1"`
+	LoadAvg5         float64     `json:"load_avg_5"`
+	LoadAvg15        float64     `json:"load_avg_15"`
+	NetIO            []NetIOStat `json:"net_io"`
 }

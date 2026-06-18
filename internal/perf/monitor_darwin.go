@@ -12,6 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
+	"golang.org/x/sys/unix"
 )
 
 func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
@@ -215,6 +216,20 @@ func parseVmStatAvailableMB(out string) int {
 	return int((free + inactive + purgeable) * uint64(pageSize) / (1024 * 1024))
 }
 
+// darwinPressureLevel reads the kernel's memory-pressure verdict
+// (kern.memorystatus_vm_pressure_level: 1=normal, 2=warning, 4=critical). This is the
+// signal `memory_pressure` and jetsam use; it stays at normal even when a
+// large model legitimately occupies most of unified memory, and only rises
+// under genuine pressure (compression + swap thrashing). Returns 0 if the
+// sysctl is unavailable so callers can fall back to an available-% heuristic.
+func darwinPressureLevel() int {
+	v, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level")
+	if err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 func readSysStats() (SysStat, error) {
 	cpuPcts, err := cpu.Percent(0, true)
 	if err != nil {
@@ -252,16 +267,17 @@ func readSysStats() (SysStat, error) {
 	}
 
 	return SysStat{
-		Timestamp:      time.Now(),
-		CpuUtilPerCore: cpuPcts,
-		MemTotalMB:     int(vmStat.Total / toMB),
-		MemUsedMB:      int(vmStat.Used / toMB),
-		MemFreeMB:      int(vmStat.Free / toMB),
-		MemAvailableMB: availableMB,
-		SwapTotalMB:    swapTotalMB,
-		SwapUsedMB:     swapUsedMB,
-		LoadAvg1:       loadAvg1,
-		LoadAvg5:       loadAvg5,
-		LoadAvg15:      loadAvg15,
+		Timestamp:        time.Now(),
+		CpuUtilPerCore:   cpuPcts,
+		MemTotalMB:       int(vmStat.Total / toMB),
+		MemUsedMB:        int(vmStat.Used / toMB),
+		MemFreeMB:        int(vmStat.Free / toMB),
+		MemAvailableMB:   availableMB,
+		MemPressureLevel: darwinPressureLevel(),
+		SwapTotalMB:      swapTotalMB,
+		SwapUsedMB:       swapUsedMB,
+		LoadAvg1:         loadAvg1,
+		LoadAvg5:         loadAvg5,
+		LoadAvg15:        loadAvg15,
 	}, nil
 }
