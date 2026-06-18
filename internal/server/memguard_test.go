@@ -18,15 +18,18 @@ func memGuardConf() config.MemoryGuardConfig {
 	}
 }
 
+// readyOne = one ready (unloadable) model present.
+const readyOne = 1
+
 func TestMemGuard_TriggersAfterConsecutiveLowSamples(t *testing.T) {
 	g := &memGuardState{conf: memGuardConf()}
 	now := time.Now()
 
 	// 36 GB host, 2.5 GB available = ~7% — below the 10% threshold
-	if g.Observe(2500, 36000, now) {
+	if g.Observe(2500, 36000, readyOne, now) {
 		t.Fatal("should not trigger on the first low sample")
 	}
-	if !g.Observe(2500, 36000, now.Add(5*time.Second)) {
+	if !g.Observe(2500, 36000, readyOne, now.Add(5*time.Second)) {
 		t.Fatal("should trigger on the second consecutive low sample")
 	}
 }
@@ -35,14 +38,14 @@ func TestMemGuard_HealthySampleResetsCounter(t *testing.T) {
 	g := &memGuardState{conf: memGuardConf()}
 	now := time.Now()
 
-	if g.Observe(2500, 36000, now) {
+	if g.Observe(2500, 36000, readyOne, now) {
 		t.Fatal("should not trigger on the first low sample")
 	}
 	// recovery above threshold resets the consecutive counter
-	if g.Observe(12000, 36000, now.Add(5*time.Second)) {
+	if g.Observe(12000, 36000, readyOne, now.Add(5*time.Second)) {
 		t.Fatal("healthy sample must not trigger")
 	}
-	if g.Observe(2500, 36000, now.Add(10*time.Second)) {
+	if g.Observe(2500, 36000, readyOne, now.Add(10*time.Second)) {
 		t.Fatal("counter should have reset; one low sample must not trigger")
 	}
 }
@@ -51,21 +54,44 @@ func TestMemGuard_CooldownSuppressesRetrigger(t *testing.T) {
 	g := &memGuardState{conf: memGuardConf()}
 	now := time.Now()
 
-	g.Observe(2500, 36000, now)
-	if !g.Observe(2500, 36000, now.Add(5*time.Second)) {
+	g.Observe(2500, 36000, readyOne, now)
+	if !g.Observe(2500, 36000, readyOne, now.Add(5*time.Second)) {
 		t.Fatal("expected initial trigger")
 	}
 
 	// still low immediately after: suppressed by cooldown
-	g.Observe(2500, 36000, now.Add(10*time.Second))
-	if g.Observe(2500, 36000, now.Add(15*time.Second)) {
+	g.Observe(2500, 36000, readyOne, now.Add(10*time.Second))
+	if g.Observe(2500, 36000, readyOne, now.Add(15*time.Second)) {
 		t.Fatal("must not re-trigger within cooldown")
 	}
 
 	// under sustained pressure, the first sample after cooldown expiry
 	// re-triggers immediately (the consecutive count is already met)
-	if !g.Observe(2500, 36000, now.Add(70*time.Second)) {
+	if !g.Observe(2500, 36000, readyOne, now.Add(70*time.Second)) {
 		t.Fatal("expected re-trigger after cooldown")
+	}
+}
+
+// TestMemGuard_DoesNotUnloadLoadingModel is the regression guard for the
+// macOS misfire: when no model is ready to unload (the only model is still
+// loading, unloadable=0), sustained low memory must NOT trigger — and must
+// not consume the cooldown, so a real trigger can still fire once a model
+// becomes ready.
+func TestMemGuard_DoesNotUnloadLoadingModel(t *testing.T) {
+	g := &memGuardState{conf: memGuardConf()}
+	now := time.Now()
+
+	// Sustained low memory while a model is loading (unloadable=0).
+	if g.Observe(2500, 36000, 0, now) {
+		t.Fatal("must not trigger while loading")
+	}
+	if g.Observe(2500, 36000, 0, now.Add(5*time.Second)) {
+		t.Fatal("must not trigger while loading even after consecutive samples")
+	}
+	// Model finishes loading and becomes ready; still under pressure. The
+	// cooldown was never consumed, so this fires immediately.
+	if !g.Observe(2500, 36000, 1, now.Add(10*time.Second)) {
+		t.Fatal("should trigger once a ready model exists under sustained pressure")
 	}
 }
 
@@ -96,7 +122,7 @@ func TestMemGuard_IgnoresInvalidSamples(t *testing.T) {
 	g := &memGuardState{conf: memGuardConf()}
 	now := time.Now()
 
-	if g.Observe(0, 0, now) || g.Observe(-1, 36000, now) {
+	if g.Observe(0, 0, readyOne, now) || g.Observe(-1, 36000, readyOne, now) {
 		t.Fatal("invalid samples must never trigger")
 	}
 }

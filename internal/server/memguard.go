@@ -1,11 +1,13 @@
 package server
 
 import (
+	"sort"
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/shared"
 )
 
@@ -20,8 +22,19 @@ type memGuardState struct {
 	lastTrigger time.Time
 }
 
-func (g *memGuardState) Observe(availableMB, totalMB int, now time.Time) bool {
+// Observe records one memory sample and reports whether the guard should
+// unload now. unloadable is the number of models that are safe to unload
+// (StateReady) — a model still loading is excluded by the caller, since a load
+// legitimately spikes memory and killing it is self-defeating.
+//
+// A trigger requires: available below threshold for ConsecutiveSamples in a
+// row, at least one unloadable model, and the cooldown since the last actual
+// trigger elapsed. When there is nothing to unload (only a loading model, or
+// pressure from other processes) the guard does NOT fire and does NOT consume
+// the cooldown — it keeps watching.
+func (g *memGuardState) Observe(availableMB, totalMB, unloadable int, now time.Time) bool {
 	if totalMB <= 0 || availableMB < 0 {
+		g.consecutive = 0
 		return false
 	}
 	pct := float64(availableMB) / float64(totalMB) * 100
@@ -31,6 +44,9 @@ func (g *memGuardState) Observe(availableMB, totalMB int, now time.Time) bool {
 	}
 	g.consecutive++
 	if g.consecutive < g.conf.ConsecutiveSamples {
+		return false
+	}
+	if unloadable == 0 {
 		return false
 	}
 	if !g.lastTrigger.IsZero() && now.Sub(g.lastTrigger) < time.Duration(g.conf.CooldownSeconds)*time.Second {
@@ -77,43 +93,48 @@ func (s *Server) startMemoryGuard() {
 			}
 
 			st, err := perf.ReadSysStats()
-			if err != nil || st.MemAvailableMB == 0 {
+			if err != nil || st.MemAvailableMB <= 0 || st.MemTotalMB <= 0 {
 				continue // sampling unavailable on this platform; stay quiet
 			}
 
-			if state.consecutive == 0 && float64(st.MemAvailableMB)/float64(st.MemTotalMB)*100 < mg.MinAvailablePct {
-				s.proxylog.Warnf("memory guard: available memory low: %d/%d MB (%.1f%%, threshold %.0f%%)",
-					st.MemAvailableMB, st.MemTotalMB,
-					float64(st.MemAvailableMB)/float64(st.MemTotalMB)*100, mg.MinAvailablePct)
+			// Only StateReady models are safe to unload. A model still loading
+			// (StateStarting/warmup) legitimately spikes memory; unloading it
+			// would kill the very load that tripped the guard — the misfire
+			// that made the guard unusable on macOS.
+			ready := make([]string, 0)
+			loading := 0
+			for id, pst := range s.local.RunningModels() {
+				switch pst {
+				case process.StateReady:
+					ready = append(ready, id)
+				case process.StateStarting:
+					loading++
+				}
 			}
 
-			if !state.Observe(st.MemAvailableMB, st.MemTotalMB, time.Now()) {
+			pct := float64(st.MemAvailableMB) / float64(st.MemTotalMB) * 100
+			if state.consecutive == 0 && pct < mg.MinAvailablePct {
+				s.proxylog.Warnf("memory guard: available memory low: %d/%d MB (%.1f%%, threshold %.0f%%); ready=%d loading=%d",
+					st.MemAvailableMB, st.MemTotalMB, pct, mg.MinAvailablePct, len(ready), loading)
+			}
+
+			if !state.Observe(st.MemAvailableMB, st.MemTotalMB, len(ready), time.Now()) {
 				continue
 			}
 
-			running := s.local.RunningModels()
-			if len(running) == 0 {
-				s.proxylog.Warnf("memory guard: memory critically low (%d MB available) but no local models are loaded — pressure is from other processes",
-					st.MemAvailableMB)
-				continue
-			}
-
-			models := make([]string, 0, len(running))
-			for id := range running {
-				models = append(models, id)
-			}
-			s.proxylog.Errorf("memory guard: available memory %d/%d MB below %.0f%% — unloading all local models to prevent host memory exhaustion: %v",
-				st.MemAvailableMB, st.MemTotalMB, mg.MinAvailablePct, models)
+			sort.Strings(ready)
+			s.proxylog.Errorf("memory guard: available memory %d/%d MB below %.0f%% — unloading %d ready model(s) to prevent host memory exhaustion: %v",
+				st.MemAvailableMB, st.MemTotalMB, mg.MinAvailablePct, len(ready), ready)
 			// Surface a structured error to clients (UI/skein) so models don't
 			// just silently vanish — the log line alone is easy to miss.
 			event.Emit(shared.MemoryGuardTrippedEvent{
 				AvailableMB:    st.MemAvailableMB,
 				TotalMB:        st.MemTotalMB,
 				ThresholdPct:   mg.MinAvailablePct,
-				UnloadedModels: models,
+				UnloadedModels: ready,
 			})
-			s.local.Unload(5 * time.Second)
-			s.proxylog.Infof("memory guard: unload complete; models reload on next request (cooldown %ds)", mg.CooldownSeconds)
+			s.local.Unload(5*time.Second, ready...)
+			s.proxylog.Infof("memory guard: unload complete; %d model(s) freed, reload on next request (cooldown %ds)", len(ready), mg.CooldownSeconds)
 		}
 	}()
 }

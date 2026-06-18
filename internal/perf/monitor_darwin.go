@@ -167,6 +167,54 @@ func tryMactop(ctx context.Context, every time.Duration, logger *logmon.Monitor)
 	return ch, nil
 }
 
+// darwinAvailableMB returns reclaimable memory (free + inactive + purgeable)
+// in MB by parsing `vm_stat`. This is the memory the kernel can hand to a new
+// allocation without paging — the correct pressure signal on macOS, where
+// gopsutil's Available omits the inactive/purgeable pools and reads near zero
+// even at rest. Modeled on llmfit's hardware.rs. Returns 0 when vm_stat is
+// unavailable so the caller falls back to gopsutil.
+func darwinAvailableMB() int {
+	out, err := exec.Command("vm_stat").Output()
+	if err != nil {
+		return 0
+	}
+	return parseVmStatAvailableMB(string(out))
+}
+
+// parseVmStatAvailableMB extracts free+inactive+purgeable from `vm_stat`
+// output and returns it in MB. Split out from darwinAvailableMB so the
+// parsing is unit-testable without shelling out.
+func parseVmStatAvailableMB(out string) int {
+	pageSize := 16384 // Apple Silicon default; overridden from the header below
+	var free, inactive, purgeable uint64
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if i := strings.Index(line, "page size of "); i >= 0 {
+			fmt.Sscanf(line[i+len("page size of "):], "%d", &pageSize)
+			continue
+		}
+		var dst *uint64
+		switch {
+		case strings.HasPrefix(line, "Pages free"):
+			dst = &free
+		case strings.HasPrefix(line, "Pages inactive"):
+			dst = &inactive
+		case strings.HasPrefix(line, "Pages purgeable"):
+			dst = &purgeable
+		default:
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		// values look like "  123456." — Sscanf %d stops at the trailing dot
+		fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", dst)
+	}
+	return int((free + inactive + purgeable) * uint64(pageSize) / (1024 * 1024))
+}
+
 func readSysStats() (SysStat, error) {
 	cpuPcts, err := cpu.Percent(0, true)
 	if err != nil {
@@ -179,6 +227,16 @@ func readSysStats() (SysStat, error) {
 	}
 
 	const toMB = 1024 * 1024
+
+	// gopsutil's Available undercounts on recent macOS: it omits the inactive
+	// and purgeable pools that the kernel reclaims on demand, so it reads near
+	// zero even when the machine is mostly idle. Compute the reclaimable pool
+	// from vm_stat instead (free + inactive + purgeable), matching llmfit's
+	// approach. Fall back to gopsutil only if vm_stat is unavailable.
+	availableMB := int(vmStat.Available / toMB)
+	if vmAvail := darwinAvailableMB(); vmAvail > 0 {
+		availableMB = vmAvail
+	}
 
 	var swapTotalMB, swapUsedMB int
 	if swapStat, err := mem.SwapMemory(); err == nil {
@@ -199,7 +257,7 @@ func readSysStats() (SysStat, error) {
 		MemTotalMB:     int(vmStat.Total / toMB),
 		MemUsedMB:      int(vmStat.Used / toMB),
 		MemFreeMB:      int(vmStat.Free / toMB),
-		MemAvailableMB: int(vmStat.Available / toMB),
+		MemAvailableMB: availableMB,
 		SwapTotalMB:    swapTotalMB,
 		SwapUsedMB:     swapUsedMB,
 		LoadAvg1:       loadAvg1,
