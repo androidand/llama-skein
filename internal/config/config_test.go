@@ -1597,3 +1597,32 @@ func TestConfig_MemoryGuardValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "minAvailablePct")
 }
+
+func TestConfig_MLXStripsUnsupportedFlags(t *testing.T) {
+	// A backend-unaware ctx path injected llama.cpp-only flags into an MLX
+	// cmd. Loader must strip them so mlx_lm.server doesn't reject the cmd.
+	configYaml := `
+models:
+  mlx-model:
+    backend: mlx
+    proxy: http://localhost:5900
+    cmd: /venv/bin/mlx_lm.server --host 127.0.0.1 --port 5900 --model mlx-community/Qwen3.5-35B-A3B-4bit --ctx-size 262144 --cache-type-k q8_0 --n-gpu-layers 99
+    useModelName: mlx-community/Qwen3.5-35B-A3B-4bit
+  llama-model:
+    backend: llamacpp
+    proxy: http://localhost:5901
+    cmd: /opt/llama-server --port 5901 --model /m/x.gguf --ctx-size 32768
+`
+	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
+	require.NoError(t, err)
+
+	mlx := config.Models["mlx-model"].Cmd
+	for _, bad := range []string{"--ctx-size", "--cache-type-k", "--n-gpu-layers", "262144"} {
+		assert.NotContains(t, mlx, bad, "mlx cmd should not contain %s", bad)
+	}
+	assert.Contains(t, mlx, "--model mlx-community/Qwen3.5-35B-A3B-4bit", "model arg must survive")
+	assert.Contains(t, mlx, "--port 5900", "other flags must survive")
+
+	// llama.cpp models keep --ctx-size untouched
+	assert.Contains(t, config.Models["llama-model"].Cmd, "--ctx-size 32768")
+}

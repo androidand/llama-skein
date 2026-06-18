@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"runtime"
+	"strings"
 )
 
 const (
@@ -119,6 +120,43 @@ func (m *ModelConfig) SanitizedCommand() ([]string, error) {
 // Use this to gate llama.cpp-specific behaviours such as /slots cancellation.
 func (m *ModelConfig) IsLlamaCpp() bool {
 	return m.Backend == "" || m.Backend == BackendLlamaCpp
+}
+
+// mlxUnsupportedFlags are llama.cpp/llama-server flags that mlx_lm.server does
+// not accept. If any reach an MLX command (e.g. a backend-unaware ctx-tuning
+// path injects --ctx-size), mlx_lm exits instantly on an argparse error and
+// the model appears to "fail to load with no error". Each takes one value.
+var mlxUnsupportedFlags = []string{
+	"--ctx-size",
+	"--cache-type-k",
+	"--cache-type-v",
+	"--n-gpu-layers",
+}
+
+// stripMLXUnsupportedFlags removes any mlxUnsupportedFlags (and their values)
+// from a command string. Returns the cleaned command and the list of flags
+// that were removed. Defensive: mlx_lm cannot use these, so keeping them only
+// crashes the process.
+func stripMLXUnsupportedFlags(cmd string) (string, []string) {
+	fields := strings.Fields(cmd)
+	unsupported := make(map[string]bool, len(mlxUnsupportedFlags))
+	for _, f := range mlxUnsupportedFlags {
+		unsupported[f] = true
+	}
+	out := make([]string, 0, len(fields))
+	var removed []string
+	for i := 0; i < len(fields); i++ {
+		if unsupported[fields[i]] {
+			removed = append(removed, fields[i])
+			i++ // also skip the flag's value
+			continue
+		}
+		out = append(out, fields[i])
+	}
+	if len(removed) == 0 {
+		return cmd, nil
+	}
+	return strings.Join(out, " "), removed
 }
 
 // ModelFilters embeds Filters and adds legacy support for strip_params field

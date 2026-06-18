@@ -68,15 +68,19 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 				memType = "unified"
 			}
 			resp["memory"] = map[string]any{
-				"total_mb":   sys.MemTotalMB,
-				"used_mb":    sys.MemUsedMB,
-				"free_mb":    sys.MemFreeMB,
-				"swap_total": sys.SwapTotalMB,
-				"swap_used":  sys.SwapUsedMB,
-				"type":       memType,
-				"load_avg1":  sys.LoadAvg1,
-				"load_avg5":  sys.LoadAvg5,
-				"load_avg15": sys.LoadAvg15,
+				"total_mb": sys.MemTotalMB,
+				"used_mb":  sys.MemUsedMB,
+				"free_mb":  sys.MemFreeMB,
+				// available_mb is the reclaimable pool (the memory guard's
+				// signal). On macOS this is free+inactive+purgeable, far larger
+				// and more meaningful than free_mb — use it for fit decisions.
+				"available_mb": sys.MemAvailableMB,
+				"swap_total":   sys.SwapTotalMB,
+				"swap_used":    sys.SwapUsedMB,
+				"type":         memType,
+				"load_avg1":    sys.LoadAvg1,
+				"load_avg5":    sys.LoadAvg5,
+				"load_avg15":   sys.LoadAvg15,
 			}
 
 			var cpuAvg float64

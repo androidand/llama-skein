@@ -318,6 +318,18 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		modelConfig.Cmd = StripComments(modelConfig.Cmd)
 		modelConfig.CmdStop = StripComments(modelConfig.CmdStop)
 
+		// mlx_lm.server does not accept llama.cpp-only flags; if a ctx-tuning
+		// path (config API, skein, opencode) injected --ctx-size, the process
+		// exits instantly on an argparse error and the model "won't load".
+		// Strip them defensively here so no caller can break an MLX model,
+		// regardless of how the flag reached the cmd. See model_config.go.
+		if modelConfig.Backend == BackendMLX {
+			if stripped, removed := stripMLXUnsupportedFlags(modelConfig.Cmd); len(removed) > 0 {
+				modelConfig.Cmd = stripped
+				fmt.Fprintf(os.Stderr, "[WARN] model %s: backend mlx does not support %v; stripped from cmd (mlx_lm.server would reject them and exit)\n", modelId, removed)
+			}
+		}
+
 		// set model TTL to globalTTL it is the default value
 		if modelConfig.UnloadAfter == MODEL_CONFIG_DEFAULT_TTL {
 			modelConfig.UnloadAfter = config.GlobalTTL
