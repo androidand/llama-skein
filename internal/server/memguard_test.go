@@ -109,10 +109,12 @@ func TestHostUnderPressure_MacOSUsesKernelLevel(t *testing.T) {
 	if p, _, _ := hostUnderPressure(healthy, 10); p {
 		t.Errorf("kernel level 1 (normal) must not be treated as pressure despite low available%%")
 	}
-	// kernel warning (2): pressured, not critical.
+	// kernel warning (2): NOT pressured. This is the normal steady state for a
+	// host holding a model that uses most of unified memory — unloading here
+	// caused the load→unload→reload cycle that made MLX unusable.
 	warn := perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 1600, MemPressureLevel: 2}
-	if p, c, _ := hostUnderPressure(warn, 10); !p || c {
-		t.Errorf("kernel level 2 should be pressured+non-critical, got pressured=%v critical=%v", p, c)
+	if p, _, _ := hostUnderPressure(warn, 10); p {
+		t.Errorf("kernel level 2 (warning) must NOT trigger an unload; only critical does")
 	}
 	// kernel critical (4): pressured + critical.
 	critical := perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 800, MemPressureLevel: 4}

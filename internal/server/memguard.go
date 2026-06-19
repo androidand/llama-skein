@@ -13,11 +13,10 @@ import (
 	"github.com/androidand/llama-skein/internal/shared"
 )
 
-// macOS kern.memorystatus_vm_pressure_level values (perf.SysStat.MemPressureLevel).
-const (
-	pressureWarning  = 2
-	pressureCritical = 4
-)
+// macOS kern.memorystatus_vm_pressure_level critical value
+// (perf.SysStat.MemPressureLevel: 1 normal, 2 warning, 4 critical). Only
+// critical triggers the guard — see hostUnderPressure.
+const pressureCritical = 4
 
 // memGuardState is the pure decision core of the memory guard, kept free of
 // goroutines and clocks so it can be unit-tested. Observe returns true when
@@ -75,9 +74,13 @@ func (g *memGuardState) Observe(pressured, critical bool, unloadable int, now ti
 // percentage, which is reliable on Linux. The reason string is for logging.
 func hostUnderPressure(st perf.SysStat, minAvailablePct float64) (pressured, critical bool, reason string) {
 	if st.MemPressureLevel > 0 {
-		// macOS kernel verdict: 1 normal, 2 warning, 4 critical.
+		// macOS kernel verdict: 1 normal, 2 warning, 4 critical. Only CRITICAL
+		// triggers an unload: warning is the normal steady state for a host whose
+		// job is to hold a model that uses most of unified memory (the kernel
+		// routinely asks for cache back and compresses fine). Unloading at warning
+		// caused a load→ready→unload→reload cycle that made MLX models unusable.
 		critical = st.MemPressureLevel >= pressureCritical
-		pressured = st.MemPressureLevel >= pressureWarning
+		pressured = critical
 		return pressured, critical, fmt.Sprintf("kernel pressure level %d", st.MemPressureLevel)
 	}
 	if st.MemTotalMB <= 0 || st.MemAvailableMB < 0 {
@@ -111,7 +114,7 @@ func (s *Server) startMemoryGuard() {
 
 	signal := fmt.Sprintf("available < %.0f%%", mg.MinAvailablePct)
 	if runtime.GOOS == "darwin" {
-		signal = "kernel pressure level >= warning"
+		signal = "kernel pressure level critical"
 	}
 	s.proxylog.Infof("memory guard: enabled (unload ready models on sustained pressure [%s] for %d checks, %ds interval, %ds cooldown)",
 		signal, mg.ConsecutiveSamples, mg.CheckIntervalSeconds, mg.CooldownSeconds)
