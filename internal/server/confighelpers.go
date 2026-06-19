@@ -42,6 +42,19 @@ func writeYAMLRoot(path string, root *yaml.Node, perm os.FileMode) error {
 	return atomicWriteFile(path, out, perm)
 }
 
+// marshalYAMLRoot serializes a root mapping node to YAML bytes. Use it to
+// snapshot config state before and after a mutation so a no-op patch can be
+// detected by content (normalized through the same marshaler), independent of
+// the file's original indentation.
+func marshalYAMLRoot(root *yaml.Node) ([]byte, error) {
+	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	return out, nil
+}
+
 // atomicWriteFile writes data to path via temp file + rename.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	tmp := path + ".tmp"

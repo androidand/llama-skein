@@ -133,6 +133,18 @@ var mlxUnsupportedFlags = []string{
 	"--n-gpu-layers",
 }
 
+// IsMLXUnsupportedFlag reports whether flag is a llama.cpp-only flag that
+// mlx_lm.server rejects — used by the config-patch handler to refuse writing
+// such a flag onto an mlx command in the first place.
+func IsMLXUnsupportedFlag(flag string) bool {
+	for _, f := range mlxUnsupportedFlags {
+		if f == flag {
+			return true
+		}
+	}
+	return false
+}
+
 // stripMLXUnsupportedFlags removes any mlxUnsupportedFlags (and their values)
 // from a command string. Returns the cleaned command and the list of flags
 // that were removed. Defensive: mlx_lm cannot use these, so keeping them only

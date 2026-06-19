@@ -196,3 +196,36 @@ func TestServer_ApplyFlagOps(t *testing.T) {
 		t.Fatalf("unrelated flag should survive, got %q", got)
 	}
 }
+
+// TestServer_PatchMLX_DropsCtxSizeNoOp verifies the churn fix: patching
+// --ctx-size onto an mlx model is ignored (warning, cmd unchanged) and the
+// no-op patch does not rewrite the file — so the config watcher won't reload
+// and abort the running model.
+func TestServer_PatchMLX_DropsCtxSizeNoOp(t *testing.T) {
+	cmd := "/venv/bin/mlx_lm.server --model mlx-community/Qwen3.5-35B-A3B-4bit"
+	yaml := "models:\n  mlx1:\n    backend: mlx\n    cmd: " + cmd + "\n"
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"mlx1": {Cmd: cmd, Backend: config.BackendMLX},
+	}}
+	s, cf := newOffloadTestServer(t, yaml, cfg)
+	before, _ := os.ReadFile(cf)
+
+	w := patchModel(t, s, "mlx1", `{"ctx_size":262144}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Warnings []string `json:"warnings"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Warnings) == 0 {
+		t.Errorf("expected a warning for --ctx-size on mlx, body=%q", w.Body.String())
+	}
+	after, _ := os.ReadFile(cf)
+	if string(after) != string(before) {
+		t.Fatalf("mlx ctx_size patch must be a no-op; file changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if strings.Contains(string(after), "--ctx-size") {
+		t.Fatalf("--ctx-size must never be written onto an mlx cmd:\n%s", after)
+	}
+}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -279,13 +280,17 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 		router.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	warnings, err := s.patchModelInConfig(realID, req)
+	warnings, changed, err := s.patchModelInConfig(realID, req)
 	if err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError,
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
-	s.triggerReload()
+	// Only reload when the file actually changed — a no-op patch (e.g. a flag
+	// filtered out for this backend) must not restart running models.
+	if changed {
+		s.triggerReload()
+	}
 	resp := apicontract.ConfigModelResponse{Id: realID, Status: "updated"}
 	if len(warnings) > 0 {
 		resp.Warnings = &warnings
@@ -426,21 +431,32 @@ func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) error {
 
 // patchModelInConfig applies a partial model update, preserving other fields.
 // It returns any warnings produced while translating offload settings.
-func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchRequest) ([]string, error) {
+// patchModelInConfig applies a partial model update. It returns the collected
+// warnings and whether the config file actually changed (so the caller can
+// skip a reload — and the model restart it causes — on a no-op patch).
+func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchRequest) ([]string, bool, error) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
+	var warnings []string
+
 	root, err := readYAMLRoot(s.configFile)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	// Snapshot the canonical form before mutation so a no-op patch (a flag
+	// filtered out for this backend) is detected by content, not formatting.
+	origYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return nil, false, err
 	}
 	modelsNode := yamlMapGet(root, "models")
 	if modelsNode == nil {
-		return nil, fmt.Errorf("models section missing")
+		return nil, false, fmt.Errorf("models section missing")
 	}
 	entryNode := yamlMapGet(modelsNode, id)
 	if entryNode == nil || entryNode.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("model %q not found", id)
+		return nil, false, fmt.Errorf("model %q not found", id)
 	}
 
 	if req.Cmd != nil {
@@ -466,13 +482,13 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 	// ConcurrencyLimit maps the snake_case key.
 	if req.ConcurrencyLimitCamel != nil {
 		if *req.ConcurrencyLimitCamel < 0 {
-			return nil, fmt.Errorf("concurrencyLimit must be >= 0")
+			return nil, false, fmt.Errorf("concurrencyLimit must be >= 0")
 		}
 		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimitCamel))
 	}
 	if req.ConcurrencyLimit != nil {
 		if *req.ConcurrencyLimit < 0 {
-			return nil, fmt.Errorf("concurrency_limit must be >= 0")
+			return nil, false, fmt.Errorf("concurrency_limit must be >= 0")
 		}
 		yamlMapSet(entryNode, "concurrencyLimit", yamlInt(*req.ConcurrencyLimit))
 	}
@@ -507,6 +523,17 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 	if req.CacheTypeVDash != nil {
 		flags["--cache-type-v"] = *req.CacheTypeVDash
 	}
+	// mlx_lm.server rejects llama.cpp-only flags. A backend-unaware ctx-tuning
+	// caller was patching --ctx-size onto the MLX model; each PATCH rewrote the
+	// file and the reload aborted the running model. Refuse to write them.
+	if s.cfg.Models[id].Backend == config.BackendMLX {
+		for f := range flags {
+			if config.IsMLXUnsupportedFlag(f) {
+				delete(flags, f)
+				warnings = append(warnings, fmt.Sprintf("ignored %s: backend mlx does not support it", f))
+			}
+		}
+	}
 	if len(flags) > 0 {
 		cmd := ""
 		if n := yamlMapGet(entryNode, "cmd"); n != nil {
@@ -514,17 +541,16 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 		}
 		patched, err := patchCommandFlags(cmd, flags)
 		if err != nil {
-			return nil, err
+			return warnings, false, err
 		}
 		yamlMapSet(entryNode, "cmd", yamlScalar(patched))
 	}
 
 	// Translate backend-neutral offload knobs into native flags using the
 	// model's configured backend (empty == llamacpp).
-	var warnings []string
 	if spec := offloadSpecFromPatchRequest(req); !spec.Empty() {
 		ops, warn := offload.For(s.cfg.Models[id].Backend).Ops(spec)
-		warnings = warn
+		warnings = append(warnings, warn...)
 		if len(ops) > 0 {
 			cmd := ""
 			if n := yamlMapGet(entryNode, "cmd"); n != nil {
@@ -532,16 +558,23 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 			}
 			patched, err := applyFlagOps(cmd, ops)
 			if err != nil {
-				return warnings, err
+				return warnings, false, err
 			}
 			yamlMapSet(entryNode, "cmd", yamlScalar(patched))
 		}
 	}
 
-	if err := writeYAMLRoot(s.configFile, root, 0o644); err != nil {
-		return warnings, err
+	newYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return warnings, false, err
 	}
-	return warnings, nil
+	if bytes.Equal(origYAML, newYAML) {
+		return warnings, false, nil // no-op patch: don't write, don't reload
+	}
+	if err := atomicWriteFile(s.configFile, newYAML, 0o644); err != nil {
+		return warnings, false, err
+	}
+	return warnings, true, nil
 }
 
 // patchGroupInConfig applies a partial group update, preserving other fields.
