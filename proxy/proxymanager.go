@@ -1045,6 +1045,21 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 			} else {
 				processGroup, err := pm.swapProcessGroup(modelID)
 				if err != nil {
+					// If the load failed because the configured context is larger
+					// than what fits available memory, tell the caller the safe
+					// maximum (HTTP 413) so it can lower ctx and retry, rather than
+					// surfacing an opaque 500 that stalls the conversation.
+					if maxCtx, cfgCtx, ok := pm.maxCtxForModel(modelID); ok && maxCtx > 0 && cfgCtx > maxCtx {
+						c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+							"error": gin.H{
+								"type":          "context_too_large",
+								"message":       fmt.Sprintf("model %q could not load with context %d; the maximum that fits available memory is %d", modelID, cfgCtx, maxCtx),
+								"max_ctx":       maxCtx,
+								"requested_ctx": cfgCtx,
+							},
+						})
+						return
+					}
 					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error swapping process group: %s", err.Error()))
 					return
 				}

@@ -502,6 +502,59 @@ func (pm *ProxyManager) apiContextRecommendation(c *gin.Context) {
 	})
 }
 
+// maxCtxForModel computes the largest context window that fits the model on
+// currently-available memory, along with the model's currently-configured ctx
+// (--ctx-size / -c). ok is false when it can't be determined (unknown model,
+// no GGUF, parse error, or no memory reading). Intended for the model-load
+// failure path, so the GGUF parse cost is not paid on the request hot path.
+func (pm *ProxyManager) maxCtxForModel(realModelName string) (maxCtx int, configuredCtx int, ok bool) {
+	modelConfig, exists := pm.config.Models[realModelName]
+	if !exists {
+		return 0, 0, false
+	}
+	if args, err := modelConfig.SanitizedCommand(); err == nil {
+		if c, found := commandFlagInt(args, "--ctx-size", "-c"); found {
+			configuredCtx = c
+		}
+	}
+
+	ggufPath := extractGGUFPath(modelConfig.Cmd)
+	if ggufPath == "" {
+		return 0, configuredCtx, false
+	}
+	g, err := gguf.ParseFile(ggufPath)
+	if err != nil {
+		return 0, configuredCtx, false
+	}
+
+	var freeBytes int64
+	if pm.perfMonitor != nil {
+		sysStats, gpuStats := pm.perfMonitor.Current()
+		if len(gpuStats) > 0 {
+			gg := gpuStats[0]
+			freeBytes = int64(gg.MemTotalMB-gg.MemUsedMB) << 20
+		} else if len(sysStats) > 0 {
+			freeBytes = int64(sysStats[len(sysStats)-1].MemFreeMB) << 20
+		}
+	}
+	if freeBytes <= 0 {
+		return 0, configuredCtx, false
+	}
+
+	m := int(g.MaxCtxSize(freeBytes))
+	if m <= 0 {
+		return 0, configuredCtx, false
+	}
+	if m > 262144 {
+		m = 262144
+	}
+	m = (m / 1024) * 1024
+	if m < 8192 {
+		m = 8192
+	}
+	return m, configuredCtx, true
+}
+
 // apiPSHandler implements GET /api/ps.
 // Returns only the models that are currently loaded (state == ready),
 // using an Ollama-compatible response envelope: {"models": [...]}.
