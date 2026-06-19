@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/androidand/opencode/dev/skein.schema.json",
+  "id": "llama-skein",
+  "name": "llama-skein",
+  "tagline": "Hot-swap local models behind one OpenAI-compatible API, with hardware-aware budgeting.",
+  "description": "An inference proxy that sits in front of llama.cpp (and other OpenAI-compatible engines) and exposes a single unified API with on-demand model hot-swapping, hardware/VRAM reporting, and LAN discovery. A single static Go binary, built for the skein ecosystem.",
+  "kind": "service",
+  "partOf": "skein",
+  "repo": "https://github.com/androidand/llama-skein",
+  "homepage": "https://tantonet.se/skein",
+  "install": {
+    "build": "make clean all",
+    "run": "llama-skein --config ./config.yaml --listen localhost:8080"
+  },
+  "features": [
+    {
+      "id": "model-hot-swap",
+      "title": "On-demand model hot-swapping",
+      "summary": "Detects the requested model per call and loads/unloads/swaps the running model automatically — no manual restart to change models.",
+      "status": "stable",
+      "tags": ["models", "lifecycle"]
+    },
+    {
+      "id": "openai-compatible-api",
+      "title": "Unified OpenAI-compatible API",
+      "summary": "Pass-through for /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/models and audio/image endpoints, so existing OpenAI clients work unchanged.",
+      "status": "stable",
+      "tags": ["api", "openai"]
+    },
+    {
+      "id": "hardware-monitoring",
+      "title": "Hardware & resource reporting",
+      "summary": "Reports GPU/VRAM usage, unified/system memory, loaded-model size and KV-cache estimates via /api/hardware — the data behind opencode-skein's live memory bars.",
+      "status": "stable",
+      "tags": ["hardware", "vram", "observability"]
+    },
+    {
+      "id": "offload-engine",
+      "title": "CPU/MoE offload recommendations",
+      "summary": "Analyzes available VRAM and recommends offloading compute or mixture-of-experts layers to CPU for large MoE models (/api/models/offload).",
+      "status": "beta",
+      "tags": ["performance", "moe", "offload"]
+    },
+    {
+      "id": "config-lifecycle",
+      "title": "Config-driven model lifecycle",
+      "summary": "YAML config with TTL auto-unload, model aliases, per-model env vars, and grouping/swap matrices for concurrent multi-model execution.",
+      "status": "stable",
+      "tags": ["config", "lifecycle"]
+    },
+    {
+      "id": "mdns-discovery",
+      "title": "mDNS LAN advertising",
+      "summary": "Advertises the instance over mDNS/zeroconf so opencode-skein and the skein supervisor discover and connect to it without hardcoded IPs.",
+      "status": "stable",
+      "tags": ["discovery", "mdns", "lan"]
+    },
+    {
+      "id": "control-plane-api",
+      "title": "Control-plane model & capability API",
+      "summary": "Skein-specific endpoints to query/patch model state, set a default model, set per-model context size (triggers a reload), and detect hardware backends (Metal/ROCm/CUDA/Vulkan).",
+      "status": "stable",
+      "tags": ["api", "control-plane"]
+    },
+    {
+      "id": "multi-engine",
+      "title": "Any OpenAI-compatible engine",
+      "summary": "Front llama.cpp, vLLM, tabbyAPI, stable-diffusion.cpp or Whisper; supports container backends with graceful SIGTERM shutdown.",
+      "status": "stable",
+      "tags": ["engines", "containers"]
+    }
+  ],
+  "links": {
+    "repo": "https://github.com/androidand/llama-skein",
+    "api": "contracts/llama-skein.openapi.json"
+  },
+  "updated": "2026-06-18"
+}
