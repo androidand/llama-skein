@@ -39,6 +39,13 @@ if [ "$SERVICE_SCOPE" != "user" ] && [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
 sc() { if [ "$SERVICE_SCOPE" = "user" ]; then systemctl --user "$@"; else $SUDO systemctl "$@"; fi; }
 as_root() { if [ "$SERVICE_SCOPE" = "user" ]; then "$@"; else $SUDO "$@"; fi; }
 
+# Make a standard Go install discoverable even from a minimal systemd PATH
+# (proxmox keeps go at /usr/local/go/bin, which isn't on the unit's default PATH).
+for godir in /usr/local/go/bin "$HOME/go/bin" /opt/go/bin; do
+  case ":$PATH:" in *":$godir:"*) ;; *) [ -x "$godir/go" ] && PATH="$godir:$PATH" ;; esac
+done
+export PATH
+
 command -v go >/dev/null 2>&1 || { log "no Go toolchain on this host — cannot self-build (cross-deploy from a Mac instead). Aborting."; exit 0; }
 command -v git >/dev/null 2>&1 || { log "git required. Aborting."; exit 1; }
 
@@ -61,7 +68,15 @@ fi
 
 log "building $NEW_REV …"
 TMPBIN="$WORKDIR/llama-skein.new"
-# Plain build, mirroring the proxmox deploy (go build -o … .). No build tags.
+# go:embed ui_dist needs the dir present; a fresh clone ships only a tracked
+# placeholder (the built UI is gitignored). Stub it like the canonical deploy so
+# the build never fails on a clean checkout.
+#
+# NOTE: this is a PLAIN build (no `make ui`, no ldflags) — it matches the fleet's
+# quick-deploy and therefore produces a binary WITHOUT the embedded web dashboard
+# and with placeholder version metadata (commit=abcd1234). If the dashboard is
+# wanted, switch this to `make` (requires Node on the host for `make ui`).
+mkdir -p proxy/ui_dist && [ -e proxy/ui_dist/index.html ] || : > proxy/ui_dist/index.html
 CGO_ENABLED=0 go build -o "$TMPBIN" .
 
 log "swapping binary $BIN (backup -> ${BIN}.bak) and restarting $SERVICE ($SERVICE_SCOPE)…"
