@@ -51,3 +51,7 @@ func taskkillProcessTree(cmd *exec.Cmd, force bool) error {
 	setProcAttributes(kill)
 	return kill.Run()
 }
+
+// reclaimStalePort is a no-op on Windows (llama-skein deploys are unix:
+// macOS + Linux). Stale-orphan port reclaim is handled on those platforms.
+func reclaimStalePort(hostPort string) int { return 0 }

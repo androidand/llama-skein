@@ -105,6 +105,12 @@ type ProcessCommand struct {
 	probeInterval time.Duration
 	probeTimeout  time.Duration
 
+	// skipPortReclaim disables the pre-start stale-orphan port reclaim. Set by
+	// tests, where the proxy target is a separate mock server on the proxy port
+	// (in production the model's own upstream binds it), so reclaiming would
+	// kill the test's mock.
+	skipPortReclaim bool
+
 	runCh       chan runReq
 	stopCh      chan stopReq
 	waitReadyCh chan waitReadyReq
@@ -517,6 +523,18 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
+
+	// Reclaim the model's assigned port from a stale orphan before starting.
+	// If a previous upstream survived (llama-skein was SIGKILLed — crash, OOM,
+	// or `launchctl kickstart -k` — so it could not reap its child), it still
+	// holds this port. The new process would fail to bind ("exited prematurely")
+	// while the reverse proxy forwards to the orphan's garbage. The port is ours
+	// (assigned from startPort) and localhost-only, so reclaiming it is safe.
+	if !p.skipPortReclaim {
+		if n := reclaimStalePort(proxyURL.Host); n > 0 {
+			p.proxyLogger.Warnf("<%s> reclaimed assigned port %s from %d stale process(es) before start", p.id, proxyURL.Host, n)
+		}
+	}
 
 	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.id, strings.Join(args, " "), strings.Join(p.config.Env, ", "))
 

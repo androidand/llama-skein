@@ -3,9 +3,49 @@
 package process
 
 import (
+	"net"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 )
+
+// reclaimStalePort SIGKILLs any process listening on the given host:port when
+// the host is loopback. Used before starting a model's upstream to clear a
+// stale orphan that survived a SIGKILL of llama-skein (which prevents reaping
+// children) and still holds the model's assigned port. Returns how many
+// processes were killed. No-op for non-loopback hosts so peer/remote proxy
+// URLs are never touched.
+func reclaimStalePort(hostPort string) int {
+	host, port, err := net.SplitHostPort(hostPort)
+	if err != nil || port == "" {
+		return 0
+	}
+	switch host {
+	case "", "localhost", "127.0.0.1", "::1":
+	default:
+		return 0
+	}
+	// lsof exits non-zero when nothing matches — that's the common case.
+	out, err := exec.Command("lsof", "-ti", "tcp:"+port, "-sTCP:LISTEN").Output()
+	if err != nil {
+		return 0
+	}
+	self := os.Getpid()
+	killed := 0
+	for _, f := range strings.Fields(string(out)) {
+		pid, convErr := strconv.Atoi(f)
+		if convErr != nil || pid <= 1 || pid == self {
+			continue // never SIGKILL ourselves (llama-skein, or the test binary
+			// hosting an in-process mock server on this port)
+		}
+		if syscall.Kill(pid, syscall.SIGKILL) == nil {
+			killed++
+		}
+	}
+	return killed
+}
 
 // setProcAttributes starts the upstream in its own process group (Setpgid) so
 // the entire process tree can be signalled at once via its negative PID. This

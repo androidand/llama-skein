@@ -33,6 +33,9 @@ func newProcessCommand(t *testing.T, conf config.ModelConfig) *ProcessCommand {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Tests run a mock proxy server on the proxy port (production has the model's
+	// own upstream there); don't let pre-start reclaim kill the mock.
+	p.skipPortReclaim = true
 	return p
 }
 
@@ -1011,4 +1014,19 @@ func TestProcessCommand_Readiness_WarmupSuccessReady(t *testing.T) {
 		t.Errorf("expected StateReady after successful warm-up, got %s", got)
 	}
 	_ = runErr
+}
+
+func TestReclaimStalePort_Guards(t *testing.T) {
+	// non-loopback host must never reclaim (don't touch remote/peer proxies)
+	if n := reclaimStalePort("192.168.1.50:5900"); n != 0 {
+		t.Errorf("non-loopback host must be a no-op, got %d", n)
+	}
+	// malformed input is a no-op
+	if n := reclaimStalePort("garbage"); n != 0 {
+		t.Errorf("malformed host:port must be a no-op, got %d", n)
+	}
+	// a free loopback port has nothing to reclaim
+	if n := reclaimStalePort("127.0.0.1:1"); n != 0 {
+		t.Errorf("free port must reclaim nothing, got %d", n)
+	}
 }
