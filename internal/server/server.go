@@ -274,6 +274,11 @@ func (s *Server) routes() {
 	// Models — lifecycle management.
 	mux.Handle("GET /api/models", apiChain.ThenFunc(s.handleAPIListModels))
 	mux.Handle("GET /api/models/context/{model...}", apiChain.ThenFunc(s.handleAPIContextRecommendation))
+
+	// Fit engine — per-host model fit + max-safe-context (the source of truth
+	// skein/opencode trim to). See internal/fit, add-model-fit-engine.
+	mux.Handle("GET /api/fit", apiChain.ThenFunc(s.handleAPIFitReport))
+	mux.Handle("GET /api/fit/{model...}", apiChain.ThenFunc(s.handleAPIModelFit))
 	mux.Handle("GET /api/models/offload/{model...}", apiChain.ThenFunc(s.handleAPIOffloadRecommendation))
 	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
 	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
