@@ -20,7 +20,14 @@ const (
 )
 
 const maxMetadataKeyBytes = 64 * 1024
-const maxMetadataArrayCount = 100000
+
+// maxMetadataArrayCount bounds metadata array sizes to reject malformed files
+// while accommodating real tokenizer vocabularies. Modern large-vocab models
+// (e.g. Qwen-class, ~248k tokens) exceeded the old 100k cap, which made
+// gguf.ParseFile fail on the tokenizer.ggml.tokens array and broke every
+// feature that reads GGUF metadata (fit, offload, /v1/models) for those models.
+// 4M covers any plausible vocabulary with headroom and stays memory-bounded.
+const maxMetadataArrayCount = 4_000_000
 
 // GGUFType identifies the type of a metadata value.
 type GGUFType uint32
