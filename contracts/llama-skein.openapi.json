@@ -426,6 +426,65 @@
           }
         }
       }
+    },
+    "/api/fit": {
+      "get": {
+        "operationId": "getFitReport",
+        "summary": "Fit report for every configured model on this host: fit level, max-safe context, throughput estimate. The per-host payload skein aggregates for fleet placement.",
+        "responses": {
+          "200": {
+            "description": "Per-host fit report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FitReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fit/{model}": {
+      "get": {
+        "operationId": "getModelFit",
+        "summary": "Fit of one model to this host. Optional ctx query scores a specific context size instead of computing the max-safe one.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Model ID or alias."
+          },
+          {
+            "name": "ctx",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Score this context size instead of computing max_safe_ctx."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fit result for the model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelFit"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1127,6 +1186,138 @@
           "ctx_size": {
             "type": "integer",
             "description": "Context length assumed for the KV-cache portion of the estimate."
+          }
+        }
+      },
+      "FitScore": {
+        "type": "object",
+        "description": "Per-dimension fit scores in [0,1], weighted by use-case (ported from llmfit fit.rs ScoreComponents).",
+        "properties": {
+          "quality": {
+            "type": "number",
+            "description": "Model quality score (benchmark-derived)."
+          },
+          "speed": {
+            "type": "number",
+            "description": "Speed score from estimated tokens/sec on this host."
+          },
+          "fit": {
+            "type": "number",
+            "description": "Memory-headroom score: how comfortably the model fits."
+          },
+          "context": {
+            "type": "number",
+            "description": "Context-capacity score: usable context vs the model's trained max."
+          },
+          "overall": {
+            "type": "number",
+            "description": "Weighted overall score."
+          }
+        }
+      },
+      "ModelFit": {
+        "type": "object",
+        "required": [
+          "model",
+          "backend",
+          "fit_level",
+          "max_safe_ctx"
+        ],
+        "description": "Fit of one model to THIS host: whether it runs, how well, and the max SAFE context (output- and overhead-reserved). Ported from llmfit fit.rs ModelFit.",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model ID."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ],
+            "description": "Inference backend."
+          },
+          "fit_level": {
+            "type": "string",
+            "enum": [
+              "perfect",
+              "good",
+              "tight",
+              "marginal",
+              "no"
+            ],
+            "description": "How well the model fits this host."
+          },
+          "run_mode": {
+            "type": "string",
+            "enum": [
+              "gpu",
+              "tensor_parallel",
+              "moe_offload",
+              "cpu_offload",
+              "cpu_only"
+            ],
+            "description": "How the model would run given memory."
+          },
+          "configured_ctx": {
+            "type": "integer",
+            "description": "Current --ctx-size in the model command (the KV allocation / hard n_ctx)."
+          },
+          "max_safe_ctx": {
+            "type": "integer",
+            "description": "Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx. THIS is the number opencode/skein should trim to, not configured_ctx."
+          },
+          "model_mb": {
+            "type": "integer",
+            "description": "Model weights resident size (MB)."
+          },
+          "kv_mb_at_max_safe_ctx": {
+            "type": "integer",
+            "description": "KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization."
+          },
+          "vram_total_mb": {
+            "type": "integer",
+            "description": "Total VRAM/unified memory pool (MB)."
+          },
+          "vram_required_mb": {
+            "type": "integer",
+            "description": "Estimated VRAM needed: weights + KV + compute buffers (MB)."
+          },
+          "est_tokens_per_sec": {
+            "type": "number",
+            "description": "Estimated generation throughput on this host (benchmark-derived)."
+          },
+          "score": {
+            "$ref": "#/components/schemas/FitScore"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable explanation of the fit verdict."
+          }
+        }
+      },
+      "FitReport": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "description": "Fit of every configured model to this host. Aggregated by skein across providers for fleet placement.",
+        "properties": {
+          "vram_total_mb": {
+            "type": "integer",
+            "description": "Total VRAM/unified pool (MB)."
+          },
+          "vram_free_mb": {
+            "type": "integer",
+            "description": "Currently free VRAM (MB)."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelFit"
+            },
+            "description": "Per-model fit results."
           }
         }
       }

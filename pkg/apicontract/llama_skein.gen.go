@@ -79,6 +79,81 @@ func (e ModelBackend) Valid() bool {
 	}
 }
 
+// Defines values for ModelFitBackend.
+const (
+	ModelFitBackendLlamacpp ModelFitBackend = "llamacpp"
+	ModelFitBackendMlx      ModelFitBackend = "mlx"
+	ModelFitBackendVllm     ModelFitBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the ModelFitBackend enum.
+func (e ModelFitBackend) Valid() bool {
+	switch e {
+	case ModelFitBackendLlamacpp:
+		return true
+	case ModelFitBackendMlx:
+		return true
+	case ModelFitBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelFitFitLevel.
+const (
+	Good     ModelFitFitLevel = "good"
+	Marginal ModelFitFitLevel = "marginal"
+	No       ModelFitFitLevel = "no"
+	Perfect  ModelFitFitLevel = "perfect"
+	Tight    ModelFitFitLevel = "tight"
+)
+
+// Valid indicates whether the value is a known member of the ModelFitFitLevel enum.
+func (e ModelFitFitLevel) Valid() bool {
+	switch e {
+	case Good:
+		return true
+	case Marginal:
+		return true
+	case No:
+		return true
+	case Perfect:
+		return true
+	case Tight:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelFitRunMode.
+const (
+	CpuOffload     ModelFitRunMode = "cpu_offload"
+	CpuOnly        ModelFitRunMode = "cpu_only"
+	Gpu            ModelFitRunMode = "gpu"
+	MoeOffload     ModelFitRunMode = "moe_offload"
+	TensorParallel ModelFitRunMode = "tensor_parallel"
+)
+
+// Valid indicates whether the value is a known member of the ModelFitRunMode enum.
+func (e ModelFitRunMode) Valid() bool {
+	switch e {
+	case CpuOffload:
+		return true
+	case CpuOnly:
+		return true
+	case Gpu:
+		return true
+	case MoeOffload:
+		return true
+	case TensorParallel:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ModelListObject.
 const (
 	List ModelListObject = "list"
@@ -96,19 +171,19 @@ func (e ModelListObject) Valid() bool {
 
 // Defines values for OffloadRecommendationBackend.
 const (
-	OffloadRecommendationBackendLlamacpp OffloadRecommendationBackend = "llamacpp"
-	OffloadRecommendationBackendMlx      OffloadRecommendationBackend = "mlx"
-	OffloadRecommendationBackendVllm     OffloadRecommendationBackend = "vllm"
+	Llamacpp OffloadRecommendationBackend = "llamacpp"
+	Mlx      OffloadRecommendationBackend = "mlx"
+	Vllm     OffloadRecommendationBackend = "vllm"
 )
 
 // Valid indicates whether the value is a known member of the OffloadRecommendationBackend enum.
 func (e OffloadRecommendationBackend) Valid() bool {
 	switch e {
-	case OffloadRecommendationBackendLlamacpp:
+	case Llamacpp:
 		return true
-	case OffloadRecommendationBackendMlx:
+	case Mlx:
 		return true
-	case OffloadRecommendationBackendVllm:
+	case Vllm:
 		return true
 	default:
 		return false
@@ -268,6 +343,36 @@ type ConfigModelResponse struct {
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 
+// FitReport Fit of every configured model to this host. Aggregated by skein across providers for fleet placement.
+type FitReport struct {
+	// Models Per-model fit results.
+	Models []ModelFit `json:"models"`
+
+	// VramFreeMb Currently free VRAM (MB).
+	VramFreeMb *int `json:"vram_free_mb,omitempty"`
+
+	// VramTotalMb Total VRAM/unified pool (MB).
+	VramTotalMb *int `json:"vram_total_mb,omitempty"`
+}
+
+// FitScore Per-dimension fit scores in [0,1], weighted by use-case (ported from llmfit fit.rs ScoreComponents).
+type FitScore struct {
+	// Context Context-capacity score: usable context vs the model's trained max.
+	Context *float32 `json:"context,omitempty"`
+
+	// Fit Memory-headroom score: how comfortably the model fits.
+	Fit *float32 `json:"fit,omitempty"`
+
+	// Overall Weighted overall score.
+	Overall *float32 `json:"overall,omitempty"`
+
+	// Quality Model quality score (benchmark-derived).
+	Quality *float32 `json:"quality,omitempty"`
+
+	// Speed Speed score from estimated tokens/sec on this host.
+	Speed *float32 `json:"speed,omitempty"`
+}
+
 // GPUSnapshot defines model for GPUSnapshot.
 type GPUSnapshot struct {
 	Id             *int     `json:"id,omitempty"`
@@ -338,6 +443,57 @@ type Model struct {
 
 // ModelBackend Inference backend type.
 type ModelBackend string
+
+// ModelFit Fit of one model to THIS host: whether it runs, how well, and the max SAFE context (output- and overhead-reserved). Ported from llmfit fit.rs ModelFit.
+type ModelFit struct {
+	// Backend Inference backend.
+	Backend ModelFitBackend `json:"backend"`
+
+	// ConfiguredCtx Current --ctx-size in the model command (the KV allocation / hard n_ctx).
+	ConfiguredCtx *int `json:"configured_ctx,omitempty"`
+
+	// EstTokensPerSec Estimated generation throughput on this host (benchmark-derived).
+	EstTokensPerSec *float32 `json:"est_tokens_per_sec,omitempty"`
+
+	// FitLevel How well the model fits this host.
+	FitLevel ModelFitFitLevel `json:"fit_level"`
+
+	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
+	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
+
+	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx. THIS is the number opencode/skein should trim to, not configured_ctx.
+	MaxSafeCtx int `json:"max_safe_ctx"`
+
+	// Model Model ID.
+	Model string `json:"model"`
+
+	// ModelMb Model weights resident size (MB).
+	ModelMb *int `json:"model_mb,omitempty"`
+
+	// Reason Human-readable explanation of the fit verdict.
+	Reason *string `json:"reason,omitempty"`
+
+	// RunMode How the model would run given memory.
+	RunMode *ModelFitRunMode `json:"run_mode,omitempty"`
+
+	// Score Per-dimension fit scores in [0,1], weighted by use-case (ported from llmfit fit.rs ScoreComponents).
+	Score *FitScore `json:"score,omitempty"`
+
+	// VramRequiredMb Estimated VRAM needed: weights + KV + compute buffers (MB).
+	VramRequiredMb *int `json:"vram_required_mb,omitempty"`
+
+	// VramTotalMb Total VRAM/unified memory pool (MB).
+	VramTotalMb *int `json:"vram_total_mb,omitempty"`
+}
+
+// ModelFitBackend Inference backend.
+type ModelFitBackend string
+
+// ModelFitFitLevel How well the model fits this host.
+type ModelFitFitLevel string
+
+// ModelFitRunMode How the model would run given memory.
+type ModelFitRunMode string
 
 // ModelList defines model for ModelList.
 type ModelList struct {
@@ -421,6 +577,12 @@ type VersionInfo struct {
 	RocmVersion   *string                `json:"rocm_version,omitempty"`
 	Runtime       map[string]interface{} `json:"runtime"`
 	Version       string                 `json:"version"`
+}
+
+// GetModelFitParams defines parameters for GetModelFit.
+type GetModelFitParams struct {
+	// Ctx Score this context size instead of computing max_safe_ctx.
+	Ctx *int `form:"ctx,omitempty" json:"ctx,omitempty"`
 }
 
 // SetDefaultModelJSONRequestBody defines body for SetDefaultModel for application/json ContentType.
@@ -545,6 +707,12 @@ type ClientInterface interface {
 
 	// ReloadConfig request
 	ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetFitReport request
+	GetFitReport(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetModelFit request
+	GetModelFit(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetHardware request
 	GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -720,6 +888,30 @@ func (c *Client) PatchConfigModel(ctx context.Context, id string, body PatchConf
 
 func (c *Client) ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReloadConfigRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetFitReport(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetFitReportRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetModelFit(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetModelFitRequest(c.Server, model, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1140,6 +1332,94 @@ func NewReloadConfigRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetFitReportRequest generates requests for GetFitReport
+func NewGetFitReportRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/fit")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetModelFitRequest generates requests for GetModelFit
+func NewGetModelFitRequest(server string, model string, params *GetModelFitParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "model", model, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/fit/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Ctx != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "ctx", *params.Ctx, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetHardwareRequest generates requests for GetHardware
 func NewGetHardwareRequest(server string) (*http.Request, error) {
 	var err error
@@ -1362,6 +1642,12 @@ type ClientWithResponsesInterface interface {
 
 	// ReloadConfigWithResponse request
 	ReloadConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReloadConfigResponse, error)
+
+	// GetFitReportWithResponse request
+	GetFitReportWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFitReportResponse, error)
+
+	// GetModelFitWithResponse request
+	GetModelFitWithResponse(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*GetModelFitResponse, error)
 
 	// GetHardwareWithResponse request
 	GetHardwareWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHardwareResponse, error)
@@ -1679,6 +1965,66 @@ func (r ReloadConfigResponse) ContentType() string {
 	return ""
 }
 
+type GetFitReportResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *FitReport
+}
+
+// Status returns HTTPResponse.Status
+func (r GetFitReportResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetFitReportResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetFitReportResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetModelFitResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ModelFit
+}
+
+// Status returns HTTPResponse.Status
+func (r GetModelFitResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetModelFitResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetModelFitResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetHardwareResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1949,6 +2295,24 @@ func (c *ClientWithResponses) ReloadConfigWithResponse(ctx context.Context, reqE
 		return nil, err
 	}
 	return ParseReloadConfigResponse(rsp)
+}
+
+// GetFitReportWithResponse request returning *GetFitReportResponse
+func (c *ClientWithResponses) GetFitReportWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFitReportResponse, error) {
+	rsp, err := c.GetFitReport(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetFitReportResponse(rsp)
+}
+
+// GetModelFitWithResponse request returning *GetModelFitResponse
+func (c *ClientWithResponses) GetModelFitWithResponse(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*GetModelFitResponse, error) {
+	rsp, err := c.GetModelFit(ctx, model, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetModelFitResponse(rsp)
 }
 
 // GetHardwareWithResponse request returning *GetHardwareResponse
@@ -2250,6 +2614,58 @@ func ParseReloadConfigResponse(rsp *http.Response) (*ReloadConfigResponse, error
 			return nil, err
 		}
 		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetFitReportResponse parses an HTTP response from a GetFitReportWithResponse call
+func ParseGetFitReportResponse(rsp *http.Response) (*GetFitReportResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetFitReportResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FitReport
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetModelFitResponse parses an HTTP response from a GetModelFitWithResponse call
+func ParseGetModelFitResponse(rsp *http.Response) (*GetModelFitResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetModelFitResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ModelFit
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	}
 
