@@ -87,6 +87,18 @@ type GGUF struct {
 	RopeFreqBase      float64
 	RopeScaling       RopeScaling
 
+	// Explicit attention head dimensions (Qwen3-family set these independently of
+	// embedding_length/head_count; e.g. head_dim 256 while embedding/head_count
+	// would imply 213). 0 = not stated, derive from embedding_length/head_count.
+	KeyLength   int64
+	ValueLength int64
+
+	// FullAttentionInterval > 1 marks a hybrid attention/SSM model (Qwen3-Next:
+	// one full-attention layer every N blocks; the rest are linear/SSM layers
+	// that keep a fixed recurrent state and hold NO growing KV cache). 0/1 = a
+	// dense transformer where every block carries KV.
+	FullAttentionInterval int64
+
 	// MoE fields (0 means not MoE).
 	ExpertCount                   int64
 	ExpertUsedCount               int64
@@ -339,6 +351,9 @@ func Parse(r io.Reader) (*GGUF, error) {
 	g.HeadCount, _ = getInt64(metadata, arch+".attention.head_count")
 	g.HeadCountKV, _ = getInt64(metadata, arch+".attention.head_count_kv")
 	g.HeadCountKVGroup, _ = getInt64(metadata, arch+".attention.key_head_count_kv_group")
+	g.KeyLength, _ = getInt64(metadata, arch+".attention.key_length")
+	g.ValueLength, _ = getInt64(metadata, arch+".attention.value_length")
+	g.FullAttentionInterval, _ = getInt64(metadata, arch+".full_attention_interval")
 	g.FeedForwardLength, _ = getInt64(metadata, arch+".feed_forward_length")
 	g.RopeFreqBase, _ = getFloat64(metadata, arch+".rope.freq_base")
 

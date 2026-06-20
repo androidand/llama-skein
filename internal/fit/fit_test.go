@@ -30,6 +30,41 @@ func TestKVBytesPerToken_CacheTypeScaling(t *testing.T) {
 	}
 }
 
+// Regression (qwopus-MTP): a Qwen3-Next-style HYBRID model — sparse full-attention
+// layers (full_attention_interval=4) interleaved with SSM layers, explicit
+// head_dim=256 — that runs fine at 86k on a 32 GB GPU must NOT be reported
+// fit_level:"no". The old math counted KV over all 65 blocks with head_dim
+// 5120/24=213, inflating VRAM to ~38.7 GB and discarding a model that fits.
+// Values are the live GGUF's (Qwopus3.6-27B-v2-MTP-Q8_0) with q8_0 KV.
+func TestAnalyze_Hybrid_Qwopus_NotDiscarded(t *testing.T) {
+	g := &gguf.GGUF{
+		Architecture: "qwen35", LayerCount: 65, HeadCount: 24, HeadCountKV: 4,
+		EmbeddingLength: 5120, KeyLength: 256, ValueLength: 256,
+		FullAttentionInterval: 4, ContextLength: 262144,
+		FileSize: 27701 * 1024 * 1024, // ~27.7 GB Q8 weights
+	}
+	res := Analyze(g, Params{
+		KCacheBits: BitsPerElement("q8_0"), VCacheBits: BitsPerElement("q8_0"),
+		ConfiguredCtx: 86016,
+		VRAMTotalMB:   32624,
+	})
+	if res.FitLevel == "no" {
+		t.Fatalf("hybrid model that runs at 86k on 32GB must not be discarded; got %q: %s", res.FitLevel, res.Reason)
+	}
+	// Prompt ceiling must sit just below the configured n_ctx — the value that
+	// actually prevents the 413 (≈ 86016*0.92 - 4096).
+	if res.MaxSafeCtx < 60000 || res.MaxSafeCtx >= 86016 {
+		t.Errorf("max_safe_ctx = %d, want in [60000, 86016)", res.MaxSafeCtx)
+	}
+	// Sanity: hybrid KV must be far below the all-65-layers @ head_dim 213 figure
+	// (~117k B/tok) that caused the false "no".
+	if res.KVBytesPerToken <= 0 || res.KVBytesPerToken > 80_000 {
+		t.Errorf("KV/tok = %d B, expected hybrid (attention-layers only) to be well below the dense count", res.KVBytesPerToken)
+	}
+	t.Logf("qwopus hybrid: fit=%s max_safe_ctx=%d kv/tok=%dB vram_req=%dMB",
+		res.FitLevel, res.MaxSafeCtx, res.KVBytesPerToken, res.VRAMRequiredMB)
+}
+
 // Calibration: a ~35B-A3B-class MoE at Q4 with q4_0 KV must reach the known-good
 // ~73k context on a 36 GB unified Mac — the M3 config that works in production.
 // Arch params approximate Qwen3-class 35B (exact values come from the live GGUF

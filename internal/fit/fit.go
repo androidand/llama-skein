@@ -78,14 +78,45 @@ func KVBytesPerToken(g *gguf.GGUF, kBits, vBits float64) int64 {
 	if g.LayerCount <= 0 || g.EmbeddingLength <= 0 {
 		return 0
 	}
-	kvDims := g.EmbeddingLength
-	if g.HeadCountKV > 0 && g.HeadCount > 0 {
-		headDim := g.EmbeddingLength / g.HeadCount
-		kvDims = headDim * g.HeadCountKV
+	// head_dim: prefer the model's explicit key/value_length. Qwen3-family models
+	// set head_dim independently of embedding_length/head_count (e.g. 256 vs the
+	// 213 the division would imply), so the classic ratio is only a fallback.
+	kHeadDim := g.KeyLength
+	vHeadDim := g.ValueLength
+	if kHeadDim <= 0 || vHeadDim <= 0 {
+		derived := g.EmbeddingLength
+		if g.HeadCount > 0 {
+			derived = g.EmbeddingLength / g.HeadCount
+		}
+		if kHeadDim <= 0 {
+			kHeadDim = derived
+		}
+		if vHeadDim <= 0 {
+			vHeadDim = derived
+		}
 	}
-	// per layer: kvDims K elements + kvDims V elements, at their bit widths.
-	bytesPerLayer := float64(kvDims) * (kBits + vBits) / 8.0
-	return int64(bytesPerLayer * float64(g.LayerCount))
+	kvHeads := g.HeadCountKV
+	if kvHeads <= 0 {
+		kvHeads = g.HeadCount
+	}
+	if kvHeads <= 0 {
+		return 0
+	}
+	// Only full-attention layers hold a growing KV cache. In a hybrid model
+	// (FullAttentionInterval > 1, e.g. Qwen3-Next) the other blocks are linear/SSM
+	// layers with a fixed recurrent state and no per-token KV — counting all
+	// block_count layers as attention overestimates KV by the interval factor and
+	// is what made a fitting model (qwopus-MTP) report fit_level:"no".
+	attnLayers := g.LayerCount
+	if g.FullAttentionInterval > 1 {
+		attnLayers = g.LayerCount / g.FullAttentionInterval
+		if attnLayers < 1 {
+			attnLayers = 1
+		}
+	}
+	// per attention layer per token: K (kvHeads*kHeadDim) + V (kvHeads*vHeadDim).
+	bytesPerLayer := (float64(kvHeads*kHeadDim)*kBits + float64(kvHeads*vHeadDim)*vBits) / 8.0
+	return int64(bytesPerLayer * float64(attnLayers))
 }
 
 // Analyze computes the fit of a model (parsed GGUF) on a host (Params).
@@ -145,11 +176,17 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 
 	// The hard n_ctx is the smaller of what's configured (or the model's trained
 	// max) and what VRAM allows.
+	configured := p.ConfiguredCtx > 0
 	hardCtx := p.ConfiguredCtx
 	if hardCtx <= 0 {
 		hardCtx = int(g.MinCtxSize()) // trained default
 	}
-	if vramMaxCtx > 0 && vramMaxCtx < hardCtx {
+	// Only second-guess the ctx against our VRAM estimate for a model that is NOT
+	// already deployed. A configured_ctx comes from the running command — the
+	// operator has proven it loads at that size — so capping it down from an
+	// estimate (which we can't compute exactly for hybrid/offloaded models) would
+	// understate the real ceiling.
+	if !configured && vramMaxCtx > 0 && vramMaxCtx < hardCtx {
 		hardCtx = vramMaxCtx
 	}
 
@@ -180,6 +217,16 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 	default:
 		res.FitLevel = "good"
 		res.Reason = "fits comfortably at this context"
+	}
+
+	// Safety net: a configured (deployed) model demonstrably loads at this ctx.
+	// Our VRAM estimate can still be conservative for architectures we don't model
+	// exactly (hybrid SSM/attention, MoE/CPU offload), so never DISCARD a running
+	// model as "no" — the worst a deployed model earns is "marginal". This is the
+	// guarantee that the engine never rejects a model that actually fits.
+	if configured && res.FitLevel == "no" {
+		res.FitLevel = "marginal"
+		res.Reason = "runs at the configured context; VRAM estimate exceeds budget (architecture not fully modeled or memory offloaded)"
 	}
 	return res
 }
