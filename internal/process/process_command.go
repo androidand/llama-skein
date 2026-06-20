@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
@@ -428,23 +426,6 @@ func (p *ProcessCommand) run() {
 	}
 }
 
-// isUpstreamUnreachable reports whether a reverse-proxy error means the
-// upstream process is down (connection refused / dial failure / no route), as
-// opposed to a mid-stream reset or a normal client disconnect.
-func isUpstreamUnreachable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return true
-	}
-	s := err.Error()
-	return strings.Contains(s, "connection refused") ||
-		strings.Contains(s, "no such host") ||
-		strings.Contains(s, "connect: ") ||
-		strings.Contains(s, "dial tcp")
-}
-
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {
 	if err := p.crashLoopError(); err != nil {
 		// Don't fail faster than the router's WaitReady call can register:
@@ -510,22 +491,6 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			}
 		}
 		return nil
-	}
-	// When the upstream is unreachable (connection refused/dial failure) but we
-	// believed the model was ready, the process died while state stayed ready
-	// (a crash, eviction, or external kill). Invalidate readiness so the NEXT
-	// request reloads the model with loading-state, instead of fast-path
-	// proxying to a dead upstream and 502ing forever. Only connection failures
-	// trigger this — mid-stream resets are left alone.
-	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if isUpstreamUnreachable(err) {
-			p.proxyLogger.Warnf("<%s> upstream unreachable (%v) — invalidating stale readiness so the next request reloads", p.id, err)
-			go p.Stop(5 * time.Second)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		p.proxyLogger.Debugf("<%s> proxy error: %v", p.id, err)
-		w.WriteHeader(http.StatusBadGateway)
 	}
 	// httputil.ReverseProxy panics with http.ErrAbortHandler when the upstream
 	// disconnects after response headers have been sent. Recover here so the
