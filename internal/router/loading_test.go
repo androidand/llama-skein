@@ -326,3 +326,20 @@ func extractStreamedContent(body string) string {
 	}
 	return result.String()
 }
+
+// TestLoadingWriter_MarksChunksSkeinLoading verifies every loading SSE chunk
+// carries the skein_loading marker so opencode-skein can render it live but
+// skip persisting it (loading themes must not bloat the session DB).
+func TestLoadingWriter_MarksChunksSkeinLoading(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.sendData("loading...")
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"skein_loading":true`) {
+		t.Errorf("loading chunk must carry skein_loading marker, got: %s", body)
+	}
+}

@@ -209,6 +209,13 @@ func (s *loadingWriter) sendData(data string) {
 	}
 	type SSEMessage struct {
 		Choices []Choice `json:"choices"`
+		// skein_loading marks this as a llama-skein loading-state chunk, not
+		// real model output. Clients (opencode-skein) should render it live as
+		// a progress indicator but NOT persist it — these themes are pure UI
+		// flavor and otherwise bloat the session store. Standard OpenAI clients
+		// ignore the unknown field and still show it as reasoning, so the
+		// marker is backward-compatible.
+		SkeinLoading bool `json:"skein_loading"`
 	}
 
 	msg := SSEMessage{
@@ -219,6 +226,7 @@ func (s *loadingWriter) sendData(data string) {
 				},
 			},
 		},
+		SkeinLoading: true,
 	}
 
 	jsonData, err := json.Marshal(msg)
