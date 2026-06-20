@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- llama-skein Mac-driven fleet auto-update.
+     Install on the build Mac (m3):
+       cp scripts/launchd/com.skein.llama-fleet-update.plist ~/Library/LaunchAgents/
+       launchctl load -w ~/Library/LaunchAgents/com.skein.llama-fleet-update.plist
+     Runs scripts/fleet-deploy.sh daily at 04:30 (off-hours so the service
+     restarts don't interrupt active sessions). Trigger now with:
+       launchctl kickstart -k gui/$(id -u)/com.skein.llama-fleet-update -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.skein.llama-fleet-update</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/andreas/dev/llama-skein/scripts/fleet-deploy.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>4</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/andreas/.cache/llama-skein-fleet/fleet-deploy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/andreas/.cache/llama-skein-fleet/fleet-deploy.log</string>
+</dict>
+</plist>
