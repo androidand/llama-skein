@@ -1,0 +1,12 @@
+# Runs the llama-skein self-update daily (with a randomized delay so fleet nodes
+# don't all rebuild at once). Install alongside llama-skein-update.service.
+[Unit]
+Description=Daily llama-skein source self-update
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
