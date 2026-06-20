@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1028,5 +1029,29 @@ func TestReclaimStalePort_Guards(t *testing.T) {
 	// a free loopback port has nothing to reclaim
 	if n := reclaimStalePort("127.0.0.1:1"); n != 0 {
 		t.Errorf("free port must reclaim nothing, got %d", n)
+	}
+}
+
+func TestIsUpstreamUnreachable(t *testing.T) {
+	down := []error{
+		errors.New("dial tcp 127.0.0.1:5900: connect: connection refused"),
+		syscall.ECONNREFUSED,
+		errors.New("dial tcp [::1]:5900: connect: connection refused"),
+	}
+	for _, e := range down {
+		if !isUpstreamUnreachable(e) {
+			t.Errorf("expected unreachable for: %v", e)
+		}
+	}
+	notDown := []error{
+		nil,
+		errors.New("context canceled"),
+		errors.New("unexpected EOF"),
+		http.ErrAbortHandler,
+	}
+	for _, e := range notDown {
+		if isUpstreamUnreachable(e) {
+			t.Errorf("expected NOT unreachable for: %v", e)
+		}
 	}
 }
