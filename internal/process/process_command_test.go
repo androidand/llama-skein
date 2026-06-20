@@ -930,3 +930,85 @@ func TestProcessCommand_CancelsBusySlotsOnDisconnect(t *testing.T) {
 		t.Fatal("no slot cancel received after client disconnect")
 	}
 }
+
+// TestProcessCommand_Readiness_WarmupGatesReady verifies that for a non-llamacpp
+// backend whose /health is 200 but whose inference (warm-up) fails, the process
+// does NOT reach StateReady — readiness must mean resident-and-serving, not just
+// a healthy HTTP server. Run must return an error rather than latch ready.
+func TestProcessCommand_Readiness_WarmupGatesReady(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	// /health is healthy, but the warm-up chat completion always fails — the
+	// "process up but model not resident" condition.
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			http.Error(w, "model not loaded", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+		Backend:            config.BackendMLX,
+		UseModelName:       "mlx-test",
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	err := p.Run(testStartTimeout)
+	if err == nil {
+		t.Fatal("Run must fail when warm-up (residency) fails; got nil")
+	}
+	if !strings.Contains(err.Error(), "warm-up failed") {
+		t.Errorf("expected warm-up failure error, got: %v", err)
+	}
+	if got := p.State(); got == StateReady {
+		t.Errorf("process must NOT be StateReady when warm-up failed, got %s", got)
+	}
+}
+
+// TestProcessCommand_Readiness_WarmupSuccessReady is the positive case: a backend
+// whose warm-up succeeds reaches StateReady normally.
+func TestProcessCommand_Readiness_WarmupSuccessReady(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mock.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	cfg := config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              mock.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+		Backend:            config.BackendMLX,
+		UseModelName:       "mlx-test",
+	}
+	if runtime.GOOS == "windows" {
+		cfg.CmdStop = "taskkill /f /t /pid ${PID}"
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	runErr := runAsync(t, p)
+	if got := p.State(); got != StateReady {
+		t.Errorf("expected StateReady after successful warm-up, got %s", got)
+	}
+	_ = runErr
+}

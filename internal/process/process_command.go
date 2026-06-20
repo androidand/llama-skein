@@ -606,18 +606,29 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 
-	// MLX and vLLM report /health OK before the model is loaded into memory.
-	// A warmup request blocks here until loading completes, preventing the first
-	// real client request from hitting a multi-minute load delay.
+	// MLX and vLLM answer /health 200 before the model is resident, so /health
+	// alone cannot mean "ready". A warm-up inference forces eager loading AND
+	// proves the model is actually serving. It GATES readiness: if warm-up
+	// fails, the process is up but not resident — abort rather than mark the
+	// model ready, so /running/v1/models never report a model that can't serve
+	// (which would make the next request cold-load for ~15s or hang). The start
+	// error reaches the caller; repeated failures trip the crash-loop breaker.
 	if !p.config.IsLlamaCpp() {
-		p.proxyLogger.Infof("<%s> Warming up model (triggering eager load for %s backend)", p.id, p.config.Backend)
+		p.proxyLogger.Infof("<%s> Warming up model (verifying residency for %s backend)", p.id, p.config.Backend)
 		warmupCtx, warmupCancel := context.WithTimeout(startCtx, 10*time.Minute)
 		defer warmupCancel()
 		if err := p.warmupModel(warmupCtx); err != nil {
-			p.proxyLogger.Warnf("<%s> Model warm-up failed: %v — model may still be loading on first request", p.id, err)
-		} else {
-			p.proxyLogger.Infof("<%s> Model warm-up complete", p.id)
+			if startCtx.Err() != nil {
+				return abort(ErrStartAborted) // stop/shutdown cancelled the warm-up
+			}
+			// A model that comes up but can't serve is a crash for breaker
+			// purposes: count it so repeated failures surface the explicit
+			// "refusing restart" error instead of a start+fail cycle per request.
+			crashes := p.recordUnexpectedExit()
+			p.proxyLogger.Warnf("<%s> verified-readiness warm-up failed (%d failure(s) in the last %v): %v", p.id, crashes, crashLoopWindow, err)
+			return abort(fmt.Errorf("model warm-up failed (process up but not serving): %w", err))
 		}
+		p.proxyLogger.Infof("<%s> Model warm-up complete (verified resident)", p.id)
 	}
 
 	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
