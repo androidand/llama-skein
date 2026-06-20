@@ -101,7 +101,14 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 	}
 
 	kvPerTok := KVBytesPerToken(g, p.KCacheBits, p.VCacheBits)
-	modelMB := int(g.WeightBytes() / mib)
+	// WeightBytes returns 0 when general.parameter_count is absent from the
+	// metadata; the GGUF file size is the resident weight size for llama.cpp
+	// (the whole file is mmap'd), so use it as the fallback.
+	modelBytes := g.WeightBytes()
+	if modelBytes <= 0 {
+		modelBytes = g.FileSize
+	}
+	modelMB := int(modelBytes / mib)
 
 	res := Result{
 		KVBytesPerToken: kvPerTok,
@@ -111,7 +118,15 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 	}
 	if kvPerTok <= 0 || modelMB <= 0 {
 		res.FitLevel = "no"
-		res.Reason = "insufficient model metadata to estimate fit"
+		res.Reason = "insufficient model metadata to estimate fit (missing layer/embedding counts or model size)"
+		return res
+	}
+	// Without a VRAM figure the fit is unknowable — report that rather than
+	// computing against a zero budget (which yields a nonsensical "exceeds
+	// VRAM" with a huge max_safe_ctx).
+	if p.VRAMTotalMB <= 0 && p.VRAMFreeMB <= 0 {
+		res.FitLevel = "no"
+		res.Reason = "host VRAM not yet available (performance monitor warming up)"
 		return res
 	}
 
