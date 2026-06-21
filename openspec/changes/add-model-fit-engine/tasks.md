@@ -49,26 +49,32 @@ Reference implementation: `~/dev/llmfit/llmfit-core/src/{fit,hardware,models}.rs
   - Validation: `make test-all`
 
 ## Phase 6 — MLX/safetensors fit
-- [ ] 11. Resolve a `backend: mlx` model's Hugging Face cache snapshot from `useModelName`
+- [x] 11. Resolve a `backend: mlx` model's Hugging Face cache snapshot from `useModelName`
   (`~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<rev>/`), parse `config.json`
   arch dims with nested/MoE fallbacks (`qwen3_5_moe` etc.), and sum `safetensors` blob
   sizes (follow the snapshot symlinks into `blobs/`) for resident weight bytes.
-  - Validation: `go test ./internal/fit -run MLX`
-- [ ] 12. Feed those into the existing KV math (attention dims only) so `Analyze` returns a
-  real `max_safe_ctx` for MLX; `fitForModel` in `apifit.go` no longer returns the
-  "GGUF only" stub for mlx.
-  - Validation: `go test ./internal/server -run Fit` + live `GET /api/fit/{mlx-model}` shows non-zero max_safe_ctx
+  - Done: `internal/fit/mlx.go` (ShapeFromMLXConfig) + `internal/server/apifit_mlx.go`
+    (resolveMLXShape/sumSafetensors). `go test ./internal/fit -run MLX` ✓
+- [x] 12. Feed those into the existing KV math (attention dims only) so `Analyze` returns a
+  real `max_safe_ctx` for MLX; `fitForModel` no longer returns the "GGUF only" stub.
+  - Done: engine refactored onto neutral `ModelShape`; MLX budgeted against the GPU wired
+    limit (`wiredlimit_darwin.go`). Live M3: mlx-qwen3-35b-a3b → max_safe_ctx=35004, tight.
 
 ## Phase 7 — Automatic context enforcement
-- [ ] 13. Pre-flight guard in the proxy hot path: estimate prompt tokens (conservative,
+- [x] 13. Pre-flight guard in the proxy hot path: estimate prompt tokens (conservative,
   fail-safe over-estimate), compare to the model's `max_safe_ctx`, and on exceed return
   `413` + `X-Skein-Max-Safe-Ctx` + structured body WITHOUT forwarding. Skip when
-  `max_safe_ctx == 0` (unknown). Buffer + re-inject the request body so forwarding is
-  unaffected on the allowed path.
-  - Validation: `go test ./internal/... -run PromptGuard` (over-limit → 413; under → forwarded; unknown → forwarded)
-- [ ] 14. Load-time cap: when a `llamacpp` model's command omits `--ctx-size`, inject
-  `--ctx-size = max_safe_ctx` at start. Never inject for mlx (stripped).
-  - Validation: `go test ./internal/... -run CtxCap`
-- [ ] 15. Build + deploy to M3/M5/proxmox; live-verify the MLX model no longer OOM-crashes
-  on an oversized prompt (gets a 413 instead) and recovers.
-  - Validation: live probe on M3 (oversized prompt → 413, normal prompt → 200)
+  `max_safe_ctx == 0` (unknown). Buffer + re-inject the request body.
+  - Done: `internal/server/promptguard.go` (CreatePromptGuardMiddleware). `go test
+    ./internal/server -run PromptGuard` ✓. This is the crash-prevention, both backends.
+- [~] 14. Load-time cap: when a `llamacpp` model's command omits `--ctx-size`, inject
+  `--ctx-size = max_safe_ctx`. DEFERRED / re-scoped: this is a ctx-tuning nicety, not
+  crash-prevention — llama-server already defaults an unset `--ctx-size` to a small value
+  (~4096), so it does not OOM at load, and the pre-flight 413 guard (task 13) covers the
+  per-request over-context crash for llama.cpp too. Clean implementation needs a
+  fit-aware command-transform hook at process start (perf VRAM is cold at server build),
+  so it is a focused follow-up rather than bundled here.
+- [x] 15. Build + deploy to M3/M5/proxmox; live-verify the MLX model no longer OOM-crashes
+  on an oversized prompt (gets a 413 instead).
+  - Done: live M3 — ~51k-token prompt → 413 in 0.01s (mlx never loaded/crashed); ~30k-token
+    and normal prompts → 200 and serve fine. Guard deployed to all three hosts.
