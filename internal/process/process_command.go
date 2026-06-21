@@ -492,6 +492,54 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 		return nil
 	}
+	// ErrorHandler fires when the upstream round-trip fails or the response
+	// body copy breaks — i.e. the backend process became unreachable mid
+	// request. The common cause on this fork is a backend that aborted while
+	// serving: mlx_lm in particular has no graceful out-of-memory path and
+	// SIGABRTs when a request's context exceeds the Metal allocation budget,
+	// so the connection is reset. Without a handler net/http returns a bare
+	// 502 with no detail; instead emit a clean, structured, retryable error
+	// so callers (opencode, skein) can surface a useful message and retry.
+	//
+	// Recovery itself is handled elsewhere: when the process exits, cmdDone
+	// fires and run() clears the handler + sets StateStopped, so the *next*
+	// request reloads with loading-state. We deliberately do NOT Stop() the
+	// process from here — an earlier self-heal ErrorHandler that did so caused
+	// an endless reload loop when a healthy IPv6/IPv4-mismatched upstream
+	// looked unreachable (since fixed by pinning the proxy to 127.0.0.1).
+	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		// Client disconnected: nothing to send, and writing races the torn-down
+		// connection. The mid-stream ErrAbortHandler case is recovered below.
+		if r.Context().Err() != nil {
+			return
+		}
+		p.proxyLogger.Warnf("<%s> upstream unreachable while serving request: %v", p.id, err)
+
+		msg := fmt.Sprintf("model backend %q became unreachable while handling this request (%v). It is being restarted — retry shortly.", p.id, err)
+		if !p.config.IsLlamaCpp() {
+			// mlx/vllm: most often an out-of-memory abort for the request size.
+			msg = fmt.Sprintf("model backend %q exited while handling this request — most often an out-of-memory abort for the request's context size. It is being restarted; retry shortly, ideally with a smaller prompt/context.", p.id)
+		}
+		body, _ := json.Marshal(struct {
+			Error struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		}{Error: struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		}{Message: msg, Type: "upstream_unavailable", Code: "backend_exited"}})
+
+		// If the upstream died mid-stream the headers are already sent and
+		// WriteHeader is a no-op; the JSON is appended as a terminal error
+		// frame, which still beats a silently truncated stream.
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(body)
+	}
 	// httputil.ReverseProxy panics with http.ErrAbortHandler when the upstream
 	// disconnects after response headers have been sent. Recover here so the
 	// streaming termination is treated as a normal client/upstream disconnect.

@@ -3,6 +3,7 @@ package process
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -401,6 +402,81 @@ func TestProcessCommand_ReverseProxyPanicIsRecovered(t *testing.T) {
 		time.Sleep(testLogPollInterval)
 	}
 	t.Errorf("expected proxy log to contain %q; got:\n%s", want, logBuf.String())
+}
+
+// TestProcessCommand_UpstreamUnreachableReturnsStructuredError drives the full
+// proxy path: the upstream is healthy on /health (so Run completes and the
+// process reaches Ready), then on the actual proxied request it closes the
+// connection before sending any response. That makes the reverse proxy's
+// round-trip fail, so our ErrorHandler fires before any headers are written
+// and must return a clean, retryable, structured 503 instead of a bare 502.
+func TestProcessCommand_UpstreamUnreachableReturnsStructuredError(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Simulate a backend that aborted (mlx OOM SIGABRT): accept the
+		// connection then close it without writing any response, so the
+		// reverse-proxy round-trip fails before headers are sent.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("upstream: hijack not supported")
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("upstream: hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(upstream.Close)
+
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              upstream.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	}, logmon.NewWriter(io.Discard), logmon.NewWriter(io.Discard))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	_ = runAsync(t, p)
+
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	resp, err := http.Get(front.URL + "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status: want 503, got %d", resp.StatusCode)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra == "" {
+		t.Errorf("expected Retry-After header on a retryable upstream failure")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("response body is not JSON (%v): %s", err, body)
+	}
+	if parsed.Error.Type != "upstream_unavailable" || parsed.Error.Code != "backend_exited" {
+		t.Errorf("error shape: want type=upstream_unavailable code=backend_exited, got %+v", parsed.Error)
+	}
 }
 
 // syncBuffer is a concurrent-safe bytes.Buffer for capturing logmon output.
