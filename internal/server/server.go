@@ -49,6 +49,11 @@ type Server struct {
 	configFile string
 	configMu   sync.Mutex
 	reloadFn   func()
+
+	// maxSafeCtxCache memoizes the fit engine's max_safe_ctx per real model id
+	// for the pre-flight prompt guard (computing it reads GGUF / the HF cache +
+	// the perf snapshot, too costly per request). Cleared on config reload.
+	maxSafeCtxCache sync.Map // map[string]int
 }
 
 // SetConfigFile stores the on-disk config path so the management API can write
@@ -225,6 +230,7 @@ func (s *Server) routes() {
 	modelChain := chain.New(
 		authMW,
 		CreateConcurrencyMiddleware(s.cfg),
+		s.CreatePromptGuardMiddleware(),
 		filterMW,
 		formFilterMW,
 		CreateInflightMiddleware(s.inflight),
