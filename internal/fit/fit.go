@@ -72,9 +72,52 @@ const (
 	mib                  = 1024 * 1024
 )
 
+// ModelShape is the backend-neutral set of dimensions the fit math needs. It
+// lets the engine score llama.cpp GGUF models and MLX/safetensors models with
+// the same code: GGUF fills it via ShapeFromGGUF, MLX via ShapeFromMLXConfig.
+type ModelShape struct {
+	LayerCount            int64
+	EmbeddingLength       int64
+	KeyLength             int64 // explicit K head_dim (0 = derive from embedding/heads)
+	ValueLength           int64 // explicit V head_dim (0 = derive)
+	HeadCount             int64
+	HeadCountKV           int64
+	FullAttentionInterval int64 // >1 = hybrid attention/SSM; only 1/interval layers hold KV
+	WeightBytes           int64 // resident weight bytes
+	TrainedCtx            int64 // max trained context (n_ctx_train / max_position_embeddings)
+}
+
+// ShapeFromGGUF projects a parsed GGUF onto the neutral shape. WeightBytes
+// already falls back to the file size for mmap'd weights; TrainedCtx is the
+// model's trained default.
+func ShapeFromGGUF(g *gguf.GGUF) ModelShape {
+	// WeightBytes returns 0 when general.parameter_count is absent; the GGUF
+	// file size is the resident weight size for mmap'd llama.cpp weights, so
+	// fall back to it.
+	weightBytes := g.WeightBytes()
+	if weightBytes <= 0 {
+		weightBytes = g.FileSize
+	}
+	return ModelShape{
+		LayerCount:            g.LayerCount,
+		EmbeddingLength:       g.EmbeddingLength,
+		KeyLength:             g.KeyLength,
+		ValueLength:           g.ValueLength,
+		HeadCount:             g.HeadCount,
+		HeadCountKV:           g.HeadCountKV,
+		FullAttentionInterval: g.FullAttentionInterval,
+		WeightBytes:           weightBytes,
+		TrainedCtx:            g.MinCtxSize(),
+	}
+}
+
 // KVBytesPerToken returns the KV-cache bytes consumed per context token, using
 // the model's real GQA/MQA dimensions and the configured cache-type bit widths.
 func KVBytesPerToken(g *gguf.GGUF, kBits, vBits float64) int64 {
+	return kvBytesPerShape(ShapeFromGGUF(g), kBits, vBits)
+}
+
+func kvBytesPerShape(g ModelShape, kBits, vBits float64) int64 {
 	if g.LayerCount <= 0 || g.EmbeddingLength <= 0 {
 		return 0
 	}
@@ -121,6 +164,13 @@ func KVBytesPerToken(g *gguf.GGUF, kBits, vBits float64) int64 {
 
 // Analyze computes the fit of a model (parsed GGUF) on a host (Params).
 func Analyze(g *gguf.GGUF, p Params) Result {
+	return AnalyzeShape(ShapeFromGGUF(g), p)
+}
+
+// AnalyzeShape computes the fit of a backend-neutral model shape on a host. It
+// is the real engine; Analyze adapts a GGUF onto it and the MLX path builds a
+// shape from the model's config.json + safetensors sizes.
+func AnalyzeShape(g ModelShape, p Params) Result {
 	if p.KCacheBits == 0 {
 		p.KCacheBits = 16
 	}
@@ -131,15 +181,11 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 		p.OutputReserve = defaultOutputReserve
 	}
 
-	kvPerTok := KVBytesPerToken(g, p.KCacheBits, p.VCacheBits)
-	// WeightBytes returns 0 when general.parameter_count is absent from the
-	// metadata; the GGUF file size is the resident weight size for llama.cpp
-	// (the whole file is mmap'd), so use it as the fallback.
-	modelBytes := g.WeightBytes()
-	if modelBytes <= 0 {
-		modelBytes = g.FileSize
-	}
-	modelMB := int(modelBytes / mib)
+	kvPerTok := kvBytesPerShape(g, p.KCacheBits, p.VCacheBits)
+	// WeightBytes is the resident weight size (GGUF file size for mmap'd
+	// llama.cpp weights, summed safetensors for MLX); the shape builder applies
+	// any fallback before we get here.
+	modelMB := int(g.WeightBytes / mib)
 
 	res := Result{
 		KVBytesPerToken: kvPerTok,
@@ -179,7 +225,7 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 	configured := p.ConfiguredCtx > 0
 	hardCtx := p.ConfiguredCtx
 	if hardCtx <= 0 {
-		hardCtx = int(g.MinCtxSize()) // trained default
+		hardCtx = int(g.TrainedCtx) // trained default
 	}
 	// Only second-guess the ctx against our VRAM estimate for a model that is NOT
 	// already deployed. A configured_ctx comes from the running command — the
@@ -211,7 +257,7 @@ func Analyze(g *gguf.GGUF, p Params) Result {
 	case res.VRAMRequiredMB > int(usableMB)*9/10:
 		res.FitLevel = "tight"
 		res.Reason = "fits with little headroom"
-	case vramMaxCtx >= int(g.MinCtxSize()):
+	case vramMaxCtx >= int(g.TrainedCtx):
 		res.FitLevel = "perfect"
 		res.Reason = "fits the full trained context with headroom"
 	default:

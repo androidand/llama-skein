@@ -47,3 +47,28 @@ Reference implementation: `~/dev/llmfit/llmfit-core/src/{fit,hardware,models}.rs
 - [ ] 10. `go build ./... && go test -short ./...`; update ECOSYSTEM.md fork-extensions list
   with the fit endpoints; attribute llmfit (MIT) in NOTICE/ATTRIBUTION.
   - Validation: `make test-all`
+
+## Phase 6 — MLX/safetensors fit
+- [ ] 11. Resolve a `backend: mlx` model's Hugging Face cache snapshot from `useModelName`
+  (`~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<rev>/`), parse `config.json`
+  arch dims with nested/MoE fallbacks (`qwen3_5_moe` etc.), and sum `safetensors` blob
+  sizes (follow the snapshot symlinks into `blobs/`) for resident weight bytes.
+  - Validation: `go test ./internal/fit -run MLX`
+- [ ] 12. Feed those into the existing KV math (attention dims only) so `Analyze` returns a
+  real `max_safe_ctx` for MLX; `fitForModel` in `apifit.go` no longer returns the
+  "GGUF only" stub for mlx.
+  - Validation: `go test ./internal/server -run Fit` + live `GET /api/fit/{mlx-model}` shows non-zero max_safe_ctx
+
+## Phase 7 — Automatic context enforcement
+- [ ] 13. Pre-flight guard in the proxy hot path: estimate prompt tokens (conservative,
+  fail-safe over-estimate), compare to the model's `max_safe_ctx`, and on exceed return
+  `413` + `X-Skein-Max-Safe-Ctx` + structured body WITHOUT forwarding. Skip when
+  `max_safe_ctx == 0` (unknown). Buffer + re-inject the request body so forwarding is
+  unaffected on the allowed path.
+  - Validation: `go test ./internal/... -run PromptGuard` (over-limit → 413; under → forwarded; unknown → forwarded)
+- [ ] 14. Load-time cap: when a `llamacpp` model's command omits `--ctx-size`, inject
+  `--ctx-size = max_safe_ctx` at start. Never inject for mlx (stripped).
+  - Validation: `go test ./internal/... -run CtxCap`
+- [ ] 15. Build + deploy to M3/M5/proxmox; live-verify the MLX model no longer OOM-crashes
+  on an oversized prompt (gets a 413 instead) and recovers.
+  - Validation: live probe on M3 (oversized prompt → 413, normal prompt → 200)
