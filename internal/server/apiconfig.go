@@ -523,14 +523,16 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 	if req.CacheTypeVDash != nil {
 		flags["--cache-type-v"] = *req.CacheTypeVDash
 	}
-	// mlx_lm.server rejects llama.cpp-only flags. A backend-unaware ctx-tuning
-	// caller was patching --ctx-size onto the MLX model; each PATCH rewrote the
-	// file and the reload aborted the running model. Refuse to write them.
-	if s.cfg.Models[id].Backend == config.BackendMLX {
+	// Non-llama.cpp engines (mlx_lm.server, vllm serve) reject llama.cpp-only
+	// flags. A backend-unaware ctx-tuning caller was patching --ctx-size onto
+	// the MLX model; each PATCH rewrote the file and the reload aborted the
+	// running model — and vllm serve fails the same way. Refuse to write them
+	// for any non-llama.cpp backend.
+	if mc := s.cfg.Models[id]; !mc.IsLlamaCpp() {
 		for f := range flags {
 			if config.IsMLXUnsupportedFlag(f) {
 				delete(flags, f)
-				warnings = append(warnings, fmt.Sprintf("ignored %s: backend mlx does not support it", f))
+				warnings = append(warnings, fmt.Sprintf("ignored %s: backend %q does not support llama.cpp flags", f, mc.Backend))
 			}
 		}
 	}
