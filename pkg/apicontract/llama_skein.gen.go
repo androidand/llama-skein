@@ -16,6 +16,39 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ConfigModelDetailMetadataMtpSource.
+const (
+	ConfigModelDetailMetadataMtpSourceCmd    ConfigModelDetailMetadataMtpSource = "cmd"
+	ConfigModelDetailMetadataMtpSourceConfig ConfigModelDetailMetadataMtpSource = "config"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelDetailMetadataMtpSource enum.
+func (e ConfigModelDetailMetadataMtpSource) Valid() bool {
+	switch e {
+	case ConfigModelDetailMetadataMtpSourceCmd:
+		return true
+	case ConfigModelDetailMetadataMtpSourceConfig:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigModelDetailMetadataMtpSpecType.
+const (
+	ConfigModelDetailMetadataMtpSpecTypeDraftMtp ConfigModelDetailMetadataMtpSpecType = "draft-mtp"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelDetailMetadataMtpSpecType enum.
+func (e ConfigModelDetailMetadataMtpSpecType) Valid() bool {
+	switch e {
+	case ConfigModelDetailMetadataMtpSpecTypeDraftMtp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConfigModelPatchRequestBackend.
 const (
 	ConfigModelPatchRequestBackendLlamacpp ConfigModelPatchRequestBackend = "llamacpp"
@@ -31,6 +64,39 @@ func (e ConfigModelPatchRequestBackend) Valid() bool {
 	case ConfigModelPatchRequestBackendMlx:
 		return true
 	case ConfigModelPatchRequestBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigModelPatchRequestMetadataMtpSource.
+const (
+	ConfigModelPatchRequestMetadataMtpSourceCmd    ConfigModelPatchRequestMetadataMtpSource = "cmd"
+	ConfigModelPatchRequestMetadataMtpSourceConfig ConfigModelPatchRequestMetadataMtpSource = "config"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelPatchRequestMetadataMtpSource enum.
+func (e ConfigModelPatchRequestMetadataMtpSource) Valid() bool {
+	switch e {
+	case ConfigModelPatchRequestMetadataMtpSourceCmd:
+		return true
+	case ConfigModelPatchRequestMetadataMtpSourceConfig:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigModelPatchRequestMetadataMtpSpecType.
+const (
+	ConfigModelPatchRequestMetadataMtpSpecTypeDraftMtp ConfigModelPatchRequestMetadataMtpSpecType = "draft-mtp"
+)
+
+// Valid indicates whether the value is a known member of the ConfigModelPatchRequestMetadataMtpSpecType enum.
+func (e ConfigModelPatchRequestMetadataMtpSpecType) Valid() bool {
+	switch e {
+	case ConfigModelPatchRequestMetadataMtpSpecTypeDraftMtp:
 		return true
 	default:
 		return false
@@ -73,6 +139,39 @@ func (e ModelBackend) Valid() bool {
 	case ModelBackendMlx:
 		return true
 	case ModelBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelMetadataMtpSource.
+const (
+	Cmd    ModelMetadataMtpSource = "cmd"
+	Config ModelMetadataMtpSource = "config"
+)
+
+// Valid indicates whether the value is a known member of the ModelMetadataMtpSource enum.
+func (e ModelMetadataMtpSource) Valid() bool {
+	switch e {
+	case Cmd:
+		return true
+	case Config:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelMetadataMtpSpecType.
+const (
+	DraftMtp ModelMetadataMtpSpecType = "draft-mtp"
+)
+
+// Valid indicates whether the value is a known member of the ModelMetadataMtpSpecType enum.
+func (e ModelMetadataMtpSpecType) Valid() bool {
+	switch e {
+	case DraftMtp:
 		return true
 	default:
 		return false
@@ -249,13 +348,50 @@ type ConfigModelDetail struct {
 	Description      *string   `json:"description,omitempty"`
 
 	// Flags All --flags parsed from the command, as raw string values.
-	Flags          *map[string]string `json:"flags,omitempty"`
-	Id             string             `json:"id"`
-	NCpuMoe        *int               `json:"n_cpu_moe,omitempty"`
-	NGpuLayers     *string            `json:"n_gpu_layers,omitempty"`
-	Name           *string            `json:"name,omitempty"`
-	OverrideTensor *string            `json:"override_tensor,omitempty"`
-	Ttl            *int               `json:"ttl,omitempty"`
+	Flags *map[string]string `json:"flags,omitempty"`
+	Id    string             `json:"id"`
+
+	// Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+	Metadata       *ConfigModelDetail_Metadata `json:"metadata,omitempty"`
+	NCpuMoe        *int                        `json:"n_cpu_moe,omitempty"`
+	NGpuLayers     *string                     `json:"n_gpu_layers,omitempty"`
+	Name           *string                     `json:"name,omitempty"`
+	OverrideTensor *string                     `json:"override_tensor,omitempty"`
+	Ttl            *int                        `json:"ttl,omitempty"`
+}
+
+// ConfigModelDetailMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+type ConfigModelDetailMetadataMtpSource string
+
+// ConfigModelDetailMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+type ConfigModelDetailMetadataMtpSpecType string
+
+// ConfigModelDetail_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+type ConfigModelDetail_Metadata struct {
+	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
+	Mtp *struct {
+		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
+		DraftNMax *int `json:"draft_n_max,omitempty"`
+
+		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
+		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
+
+		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
+		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
+
+		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
+		ModelDraft *string `json:"model_draft,omitempty"`
+
+		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+		Source *ConfigModelDetailMetadataMtpSource `json:"source,omitempty"`
+
+		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+		SpecType *ConfigModelDetailMetadataMtpSpecType `json:"spec_type,omitempty"`
+	} `json:"mtp,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // ConfigModelInfo defines model for ConfigModelInfo.
@@ -284,13 +420,16 @@ type ConfigModelPatchRequest struct {
 	CpuMoe *bool `json:"cpu_moe,omitempty"`
 
 	// CpuOffloadGb GiB of weights to offload to CPU per GPU (vLLM --cpu-offload-gb). 0 removes the flag. vllm only.
-	CpuOffloadGb   *int                    `json:"cpu_offload_gb,omitempty"`
-	CtxSizeDash    *int                    `json:"ctx-size,omitempty"`
-	CtxSize        *int                    `json:"ctx_size,omitempty"`
-	Description    *string                 `json:"description,omitempty"`
-	Flags          *map[string]interface{} `json:"flags,omitempty"`
-	NCpuMoeDash    *int                    `json:"n-cpu-moe,omitempty"`
-	NGPULayersDash *int                    `json:"n-gpu-layers,omitempty"`
+	CpuOffloadGb *int                    `json:"cpu_offload_gb,omitempty"`
+	CtxSizeDash  *int                    `json:"ctx-size,omitempty"`
+	CtxSize      *int                    `json:"ctx_size,omitempty"`
+	Description  *string                 `json:"description,omitempty"`
+	Flags        *map[string]interface{} `json:"flags,omitempty"`
+
+	// Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+	Metadata       *ConfigModelPatchRequest_Metadata `json:"metadata,omitempty"`
+	NCpuMoeDash    *int                              `json:"n-cpu-moe,omitempty"`
+	NGPULayersDash *int                              `json:"n-gpu-layers,omitempty"`
 
 	// NCpuMoe Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). 0 removes the flag. llamacpp only.
 	NCpuMoe            *int    `json:"n_cpu_moe,omitempty"`
@@ -305,6 +444,40 @@ type ConfigModelPatchRequest struct {
 
 // ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 type ConfigModelPatchRequestBackend string
+
+// ConfigModelPatchRequestMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+type ConfigModelPatchRequestMetadataMtpSource string
+
+// ConfigModelPatchRequestMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+type ConfigModelPatchRequestMetadataMtpSpecType string
+
+// ConfigModelPatchRequest_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+type ConfigModelPatchRequest_Metadata struct {
+	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
+	Mtp *struct {
+		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
+		DraftNMax *int `json:"draft_n_max,omitempty"`
+
+		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
+		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
+
+		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
+		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
+
+		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
+		ModelDraft *string `json:"model_draft,omitempty"`
+
+		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+		Source *ConfigModelPatchRequestMetadataMtpSource `json:"source,omitempty"`
+
+		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+		SpecType *ConfigModelPatchRequestMetadataMtpSpecType `json:"spec_type,omitempty"`
+	} `json:"mtp,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // ConfigModelRequest defines model for ConfigModelRequest.
 type ConfigModelRequest struct {
@@ -430,6 +603,9 @@ type Model struct {
 	Loaded          *bool   `json:"loaded,omitempty"`
 	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
 
+	// Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+	Metadata *Model_Metadata `json:"metadata,omitempty"`
+
 	// NCpuMoe Current --n-cpu-moe value parsed from the model command, when set (llama.cpp MoE expert CPU offload).
 	NCpuMoe *int    `json:"n_cpu_moe,omitempty"`
 	Name    *string `json:"name,omitempty"`
@@ -443,6 +619,40 @@ type Model struct {
 
 // ModelBackend Inference backend type.
 type ModelBackend string
+
+// ModelMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+type ModelMetadataMtpSource string
+
+// ModelMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+type ModelMetadataMtpSpecType string
+
+// Model_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
+type Model_Metadata struct {
+	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
+	Mtp *struct {
+		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
+		DraftNMax *int `json:"draft_n_max,omitempty"`
+
+		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
+		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
+
+		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
+		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
+
+		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
+		ModelDraft *string `json:"model_draft,omitempty"`
+
+		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+		Source *ModelMetadataMtpSource `json:"source,omitempty"`
+
+		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+		SpecType *ModelMetadataMtpSpecType `json:"spec_type,omitempty"`
+	} `json:"mtp,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // ModelFit Fit of one model to THIS host: whether it runs, how well, and the max SAFE context (output- and overhead-reserved). Ported from llmfit fit.rs ModelFit.
 type ModelFit struct {
@@ -596,6 +806,210 @@ type AddConfigModelJSONRequestBody = ConfigModelRequest
 
 // PatchConfigModelJSONRequestBody defines body for PatchConfigModel for application/json ContentType.
 type PatchConfigModelJSONRequestBody = ConfigModelPatchRequest
+
+// Getter for additional properties for ConfigModelDetail_Metadata. Returns the specified
+// element and whether it was found
+func (a ConfigModelDetail_Metadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ConfigModelDetail_Metadata
+func (a *ConfigModelDetail_Metadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ConfigModelDetail_Metadata to handle AdditionalProperties
+func (a *ConfigModelDetail_Metadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["mtp"]; found {
+		err = json.Unmarshal(raw, &a.Mtp)
+		if err != nil {
+			return fmt.Errorf("error reading 'mtp': %w", err)
+		}
+		delete(object, "mtp")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ConfigModelDetail_Metadata to handle AdditionalProperties
+func (a ConfigModelDetail_Metadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Mtp != nil {
+		object["mtp"], err = json.Marshal(a.Mtp)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'mtp': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ConfigModelPatchRequest_Metadata. Returns the specified
+// element and whether it was found
+func (a ConfigModelPatchRequest_Metadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ConfigModelPatchRequest_Metadata
+func (a *ConfigModelPatchRequest_Metadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ConfigModelPatchRequest_Metadata to handle AdditionalProperties
+func (a *ConfigModelPatchRequest_Metadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["mtp"]; found {
+		err = json.Unmarshal(raw, &a.Mtp)
+		if err != nil {
+			return fmt.Errorf("error reading 'mtp': %w", err)
+		}
+		delete(object, "mtp")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ConfigModelPatchRequest_Metadata to handle AdditionalProperties
+func (a ConfigModelPatchRequest_Metadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Mtp != nil {
+		object["mtp"], err = json.Marshal(a.Mtp)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'mtp': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for Model_Metadata. Returns the specified
+// element and whether it was found
+func (a Model_Metadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for Model_Metadata
+func (a *Model_Metadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for Model_Metadata to handle AdditionalProperties
+func (a *Model_Metadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["mtp"]; found {
+		err = json.Unmarshal(raw, &a.Mtp)
+		if err != nil {
+			return fmt.Errorf("error reading 'mtp': %w", err)
+		}
+		delete(object, "mtp")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for Model_Metadata to handle AdditionalProperties
+func (a Model_Metadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Mtp != nil {
+		object["mtp"], err = json.Marshal(a.Mtp)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'mtp': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
