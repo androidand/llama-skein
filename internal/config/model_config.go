@@ -70,6 +70,12 @@ type ModelConfig struct {
 
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
+
+	// MaxRequestTimeSecs is a hard cap on how long a single inference request
+	// may run end-to-end (wall clock). 0 = no limit. When the limit is
+	// exceeded, llama-skein cancels the upstream request and, if the backend
+	// fails to cancel gracefully, restarts it.
+	MaxRequestTimeSecs int `yaml:"maxRequestTimeSecs"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

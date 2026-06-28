@@ -737,18 +737,30 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Apply per-model hard request timeout. When MaxRequestTimeSecs > 0 and
+	// the limit is exceeded, the upstream request is cancelled regardless of
+	// whether the downstream client is still connected.
+	serveR := r
+	var hardCancel context.CancelFunc
+	if p.config.MaxRequestTimeSecs > 0 {
+		var hardCtx context.Context
+		hardCtx, hardCancel = context.WithTimeout(r.Context(), time.Duration(p.config.MaxRequestTimeSecs)*time.Second)
+		defer hardCancel()
+		serveR = r.WithContext(hardCtx)
+	}
+
 	if p.testHandler != nil {
-		p.testHandler.ServeHTTP(w, r)
+		p.testHandler.ServeHTTP(w, serveR)
 	} else if srw != nil {
-		p.reverseProxy.ServeHTTP(srw, r)
+		p.reverseProxy.ServeHTTP(srw, serveR)
 	} else {
-		p.reverseProxy.ServeHTTP(w, r)
+		p.reverseProxy.ServeHTTP(w, serveR)
 	}
 
 	// If the client disconnected mid-stream (context cancelled) and this is the
 	// only in-flight request, cancel orphaned inference slots. Only llama.cpp
 	// exposes the /slots endpoint needed for this.
-	if p.config.IsLlamaCpp() && r.Context().Err() != nil && p.inFlightRequestsCount.Load() <= 1 {
+	if p.config.IsLlamaCpp() && serveR.Context().Err() != nil && p.inFlightRequestsCount.Load() <= 1 {
 		go p.cancelBusySlots()
 	}
 
@@ -761,6 +773,10 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 // DELETE cancel request for every slot currently in the processing state.
 // Called when the downstream client disconnects mid-generation so orphaned
 // inference does not block subsequent requests.
+//
+// If the backend does not respond to GET /slots within 3 seconds it is
+// considered hung; the process is killed immediately so the next request
+// triggers a clean restart instead of queuing behind a frozen backend.
 func (p *Process) cancelBusySlots() {
 	base := strings.TrimRight(p.config.Proxy, "/")
 	if base == "" {
@@ -771,7 +787,11 @@ func (p *Process) cancelBusySlots() {
 
 	resp, err := client.Get(base + "/slots")
 	if err != nil {
-		p.proxyLogger.Debugf("<%s> cancelBusySlots: GET /slots: %v", p.ID, err)
+		// Backend is unresponsive — likely frozen under full GPU load.
+		// Kill it so the next request gets a fresh process instead of
+		// blocking indefinitely behind a hung backend.
+		p.proxyLogger.Warnf("<%s> cancelBusySlots: GET /slots failed (%v) — backend appears hung, restarting", p.ID, err)
+		p.StopImmediately()
 		return
 	}
 	defer resp.Body.Close()
@@ -785,6 +805,7 @@ func (p *Process) cancelBusySlots() {
 		return
 	}
 
+	cancelledAny := false
 	for _, slot := range slots {
 		if slot.State != 1 { // only cancel processing slots
 			continue
@@ -798,11 +819,17 @@ func (p *Process) cancelBusySlots() {
 		req.Header.Set("Content-Type", "application/json")
 		cancelResp, err := client.Do(req)
 		if err != nil {
-			p.proxyLogger.Debugf("<%s> cancelBusySlots: DELETE slot %d: %v", p.ID, slot.ID, err)
-			continue
+			p.proxyLogger.Warnf("<%s> cancelBusySlots: DELETE slot %d failed (%v) — restarting backend", p.ID, slot.ID, err)
+			p.StopImmediately()
+			return
 		}
 		cancelResp.Body.Close()
 		p.proxyLogger.Infof("<%s> cancelBusySlots: cancelled orphaned slot %d (client disconnected)", p.ID, slot.ID)
+		cancelledAny = true
+	}
+
+	if !cancelledAny {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: no processing slots found", p.ID)
 	}
 }
 
