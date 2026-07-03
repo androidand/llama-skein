@@ -184,7 +184,12 @@ func main() {
 	var reloading bool
 	var reloadMu sync.Mutex
 
-	reload := func() {
+	// Declared with var (not :=) because the body below references reload
+	// itself (newSrv.SetReloadFn(reload)) — a self-referencing closure needs
+	// its name in scope before the literal is assigned, which := does not
+	// provide (the LHS name's scope starts after the short-var statement).
+	var reload func()
+	reload = func() {
 		reloadMu.Lock()
 		if reloading {
 			reloadMu.Unlock()
@@ -220,6 +225,12 @@ func main() {
 			return
 		}
 		newSrv.SetConfigFile(configPath)
+		// Without this, only the very first reload ever works: newSrv's
+		// reloadFn stays nil forever after, so triggerReload()'s "if
+		// s.reloadFn != nil" silently no-ops on every PATCH/reload after the
+		// first one for the rest of the process's life. The config file gets
+		// rewritten correctly each time; nothing downstream ever picks it up.
+		newSrv.SetReloadFn(reload)
 
 		activeMu.Lock()
 		old := activeSrv
