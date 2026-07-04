@@ -16,39 +16,6 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for ConfigModelDetailMetadataMtpSource.
-const (
-	ConfigModelDetailMetadataMtpSourceCmd    ConfigModelDetailMetadataMtpSource = "cmd"
-	ConfigModelDetailMetadataMtpSourceConfig ConfigModelDetailMetadataMtpSource = "config"
-)
-
-// Valid indicates whether the value is a known member of the ConfigModelDetailMetadataMtpSource enum.
-func (e ConfigModelDetailMetadataMtpSource) Valid() bool {
-	switch e {
-	case ConfigModelDetailMetadataMtpSourceCmd:
-		return true
-	case ConfigModelDetailMetadataMtpSourceConfig:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ConfigModelDetailMetadataMtpSpecType.
-const (
-	ConfigModelDetailMetadataMtpSpecTypeDraftMtp ConfigModelDetailMetadataMtpSpecType = "draft-mtp"
-)
-
-// Valid indicates whether the value is a known member of the ConfigModelDetailMetadataMtpSpecType enum.
-func (e ConfigModelDetailMetadataMtpSpecType) Valid() bool {
-	switch e {
-	case ConfigModelDetailMetadataMtpSpecTypeDraftMtp:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ConfigModelPatchRequestBackend.
 const (
 	ConfigModelPatchRequestBackendLlamacpp ConfigModelPatchRequestBackend = "llamacpp"
@@ -64,39 +31,6 @@ func (e ConfigModelPatchRequestBackend) Valid() bool {
 	case ConfigModelPatchRequestBackendMlx:
 		return true
 	case ConfigModelPatchRequestBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ConfigModelPatchRequestMetadataMtpSource.
-const (
-	ConfigModelPatchRequestMetadataMtpSourceCmd    ConfigModelPatchRequestMetadataMtpSource = "cmd"
-	ConfigModelPatchRequestMetadataMtpSourceConfig ConfigModelPatchRequestMetadataMtpSource = "config"
-)
-
-// Valid indicates whether the value is a known member of the ConfigModelPatchRequestMetadataMtpSource enum.
-func (e ConfigModelPatchRequestMetadataMtpSource) Valid() bool {
-	switch e {
-	case ConfigModelPatchRequestMetadataMtpSourceCmd:
-		return true
-	case ConfigModelPatchRequestMetadataMtpSourceConfig:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ConfigModelPatchRequestMetadataMtpSpecType.
-const (
-	ConfigModelPatchRequestMetadataMtpSpecTypeDraftMtp ConfigModelPatchRequestMetadataMtpSpecType = "draft-mtp"
-)
-
-// Valid indicates whether the value is a known member of the ConfigModelPatchRequestMetadataMtpSpecType enum.
-func (e ConfigModelPatchRequestMetadataMtpSpecType) Valid() bool {
-	switch e {
-	case ConfigModelPatchRequestMetadataMtpSpecTypeDraftMtp:
 		return true
 	default:
 		return false
@@ -139,39 +73,6 @@ func (e ModelBackend) Valid() bool {
 	case ModelBackendMlx:
 		return true
 	case ModelBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ModelMetadataMtpSource.
-const (
-	Cmd    ModelMetadataMtpSource = "cmd"
-	Config ModelMetadataMtpSource = "config"
-)
-
-// Valid indicates whether the value is a known member of the ModelMetadataMtpSource enum.
-func (e ModelMetadataMtpSource) Valid() bool {
-	switch e {
-	case Cmd:
-		return true
-	case Config:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ModelMetadataMtpSpecType.
-const (
-	DraftMtp ModelMetadataMtpSpecType = "draft-mtp"
-)
-
-// Valid indicates whether the value is a known member of the ModelMetadataMtpSpecType enum.
-func (e ModelMetadataMtpSpecType) Valid() bool {
-	switch e {
-	case DraftMtp:
 		return true
 	default:
 		return false
@@ -262,6 +163,39 @@ const (
 func (e ModelListObject) Valid() bool {
 	switch e {
 	case List:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MtpMetadataSource.
+const (
+	Cmd    MtpMetadataSource = "cmd"
+	Config MtpMetadataSource = "config"
+)
+
+// Valid indicates whether the value is a known member of the MtpMetadataSource enum.
+func (e MtpMetadataSource) Valid() bool {
+	switch e {
+	case Cmd:
+		return true
+	case Config:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MtpMetadataSpecType.
+const (
+	DraftMtp MtpMetadataSpecType = "draft-mtp"
+)
+
+// Valid indicates whether the value is a known member of the MtpMetadataSpecType enum.
+func (e MtpMetadataSpecType) Valid() bool {
+	switch e {
+	case DraftMtp:
 		return true
 	default:
 		return false
@@ -360,37 +294,10 @@ type ConfigModelDetail struct {
 	Ttl            *int                        `json:"ttl,omitempty"`
 }
 
-// ConfigModelDetailMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-type ConfigModelDetailMetadataMtpSource string
-
-// ConfigModelDetailMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-type ConfigModelDetailMetadataMtpSpecType string
-
 // ConfigModelDetail_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 type ConfigModelDetail_Metadata struct {
 	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
-	Mtp *struct {
-		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
-		DraftNMax *int `json:"draft_n_max,omitempty"`
-
-		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
-		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
-
-		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
-		Enabled *bool `json:"enabled,omitempty"`
-
-		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
-		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
-
-		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
-		ModelDraft *string `json:"model_draft,omitempty"`
-
-		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-		Source *ConfigModelDetailMetadataMtpSource `json:"source,omitempty"`
-
-		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-		SpecType *ConfigModelDetailMetadataMtpSpecType `json:"spec_type,omitempty"`
-	} `json:"mtp,omitempty"`
+	Mtp                  *MtpMetadata           `json:"mtp,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -445,37 +352,10 @@ type ConfigModelPatchRequest struct {
 // ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
 type ConfigModelPatchRequestBackend string
 
-// ConfigModelPatchRequestMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-type ConfigModelPatchRequestMetadataMtpSource string
-
-// ConfigModelPatchRequestMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-type ConfigModelPatchRequestMetadataMtpSpecType string
-
 // ConfigModelPatchRequest_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 type ConfigModelPatchRequest_Metadata struct {
 	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
-	Mtp *struct {
-		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
-		DraftNMax *int `json:"draft_n_max,omitempty"`
-
-		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
-		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
-
-		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
-		Enabled *bool `json:"enabled,omitempty"`
-
-		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
-		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
-
-		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
-		ModelDraft *string `json:"model_draft,omitempty"`
-
-		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-		Source *ConfigModelPatchRequestMetadataMtpSource `json:"source,omitempty"`
-
-		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-		SpecType *ConfigModelPatchRequestMetadataMtpSpecType `json:"spec_type,omitempty"`
-	} `json:"mtp,omitempty"`
+	Mtp                  *MtpMetadata           `json:"mtp,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -620,37 +500,10 @@ type Model struct {
 // ModelBackend Inference backend type.
 type ModelBackend string
 
-// ModelMetadataMtpSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-type ModelMetadataMtpSource string
-
-// ModelMetadataMtpSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-type ModelMetadataMtpSpecType string
-
 // Model_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 type Model_Metadata struct {
 	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
-	Mtp *struct {
-		// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
-		DraftNMax *int `json:"draft_n_max,omitempty"`
-
-		// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
-		DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
-
-		// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
-		Enabled *bool `json:"enabled,omitempty"`
-
-		// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
-		MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
-
-		// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
-		ModelDraft *string `json:"model_draft,omitempty"`
-
-		// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
-		Source *ModelMetadataMtpSource `json:"source,omitempty"`
-
-		// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
-		SpecType *ModelMetadataMtpSpecType `json:"spec_type,omitempty"`
-	} `json:"mtp,omitempty"`
+	Mtp                  *MtpMetadata           `json:"mtp,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -713,6 +566,36 @@ type ModelList struct {
 
 // ModelListObject defines model for ModelList.Object.
 type ModelListObject string
+
+// MtpMetadata Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
+type MtpMetadata struct {
+	// DraftNMax Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models.
+	DraftNMax *int `json:"draft_n_max,omitempty"`
+
+	// DraftNTunable Optional list of tunable draft N values that were benchmarked on this model. If present, llama-skein will try values from this list when auto-tuning MTP.
+	DraftNTunable *[]int `json:"draft_n_tunable,omitempty"`
+
+	// Enabled Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MemoryOverheadMb Approximate additional memory overhead in MB when running this model with MTP enabled. Use this for capacity-aware scheduling.
+	MemoryOverheadMb *int `json:"memory_overhead_mb,omitempty"`
+
+	// ModelDraft Optional explicit path to the draft model GGUF file. If omitted, llama-skein will automatically download the draft model from Hugging Face when MTP is enabled.
+	ModelDraft *string `json:"model_draft,omitempty"`
+
+	// Source How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+	Source *MtpMetadataSource `json:"source,omitempty"`
+
+	// SpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+	SpecType *MtpMetadataSpecType `json:"spec_type,omitempty"`
+}
+
+// MtpMetadataSource How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string.
+type MtpMetadataSource string
+
+// MtpMetadataSpecType The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'.
+type MtpMetadataSpecType string
 
 // OffloadRecommendation defines model for OffloadRecommendation.
 type OffloadRecommendation struct {

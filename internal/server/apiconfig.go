@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/androidand/llama-skein/internal/config"
@@ -208,6 +209,40 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 	writeJSONStatus(w, http.StatusAccepted, resp)
 }
 
+// parseMTPFlags extracts MTP-related flags from a llama.cpp command string.
+// Returns nil unless --spec-type draft-mtp is present.
+func parseMTPFlags(parts []string) *apicontract.ConfigModelDetail_Metadata {
+	mtp := &apicontract.MtpMetadata{}
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "--spec-type":
+			if i+1 < len(parts) && parts[i+1] == "draft-mtp" {
+				mtp.SpecType = ptrOf(apicontract.DraftMtp)
+				mtp.Enabled = ptrOf(true)
+				i++
+			}
+		case "--spec-draft-n-max":
+			if i+1 < len(parts) {
+				if n, err := strconv.Atoi(parts[i+1]); err == nil {
+					mtp.DraftNMax = ptrOf(n)
+				}
+				i++
+			}
+		case "--model-draft":
+			if i+1 < len(parts) {
+				mtp.ModelDraft = ptrOf(parts[i+1])
+				i++
+			}
+		}
+	}
+
+	if mtp.Enabled == nil || !*mtp.Enabled {
+		return nil
+	}
+	mtp.Source = ptrOf(apicontract.Cmd)
+	return &apicontract.ConfigModelDetail_Metadata{Mtp: mtp}
+}
+
 // handleAPIConfigGetModel implements GET /api/config/models/{id}.
 func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -258,6 +293,14 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 	detail.CpuMoe = spec.CpuMoe
 	detail.CpuOffloadGb = spec.CpuOffloadGB
 	detail.OverrideTensor = spec.OverrideTensor
+
+	// Parse MTP flags for llama.cpp models.
+	if mc.Backend == "llamacpp" {
+		mtp := parseMTPFlags(parts)
+		if mtp != nil {
+			detail.Metadata = mtp
+		}
+	}
 
 	writeJSON(w, detail)
 }
