@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
@@ -345,6 +346,11 @@ func (pm *ProxyManager) apiPullModel(c *gin.Context) {
 		}
 	}
 
+	// Sync before close to flush data to FUSE/network filesystems (e.g. ntfs-3g)
+	// before the directory entry is committed. Ignore sync errors — Close will
+	// catch real write failures.
+	_ = f.Sync()
+
 	// Check close error before rename to avoid promoting a truncated file.
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
@@ -355,11 +361,23 @@ func (pm *ProxyManager) apiPullModel(c *gin.Context) {
 		return
 	}
 
-	if err := os.Rename(tmp, dest); err != nil {
+	// Rename with retry: on FUSE filesystems (ntfs-3g) the directory entry
+	// may not be visible immediately after Close, causing a spurious ENOENT.
+	var renameErr error
+	for i := range 3 {
+		renameErr = os.Rename(tmp, dest)
+		if renameErr == nil {
+			break
+		}
+		if i < 2 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	if renameErr != nil {
 		os.Remove(tmp)
-		sendJSON(pullProgress{Status: "error", Error: err.Error()})
+		sendJSON(pullProgress{Status: "error", Error: renameErr.Error()})
 		if !stream {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": renameErr.Error()})
 		}
 		return
 	}
