@@ -198,6 +198,35 @@ func (s *Server) handleAPIPullModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the file is already fully downloaded (size matches Content-Length),
+	// skip the download and return 409. Registration is still applied so that
+	// re-running pull idempotently registers a model that was pulled but never
+	// registered (e.g. after a crash between download and config write).
+	if cl := resp.ContentLength; cl > 0 {
+		if fi, statErr := os.Stat(dest); statErr == nil && fi.Size() == cl {
+			result := map[string]any{
+				"error":    "already_downloaded",
+				"filename": filename,
+				"path":     dest,
+				"size":     cl,
+			}
+			if req.Register != nil {
+				if regID, regErr := s.registerPulledModel(dest, filename, req.Register); regErr != nil {
+					result["register"] = "failed"
+					result["register_error"] = regErr.Error()
+				} else {
+					result["register"] = "ok"
+					result["register_id"] = regID
+					s.triggerReload()
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(result) //nolint:errcheck
+			return
+		}
+	}
+
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -270,35 +299,11 @@ func (s *Server) handleAPIPullModel(w http.ResponseWriter, r *http.Request) {
 	sendJSON(pullProgress{Status: "success", Filename: filename, Path: dest})
 
 	if req.Register != nil {
-		if s.configFile == "" {
-			sendJSON(pullProgress{Status: "register_failed", Error: "config file path not set; cannot auto-register"})
+		if regID, regErr := s.registerPulledModel(dest, filename, req.Register); regErr != nil {
+			sendJSON(pullProgress{Status: "register_failed", Error: regErr.Error()})
 		} else {
-			reg := req.Register
-			id := reg.ID
-			if id == "" {
-				base := filename
-				if strings.HasSuffix(base, ".gguf") {
-					base = base[:len(base)-5]
-				}
-				id = strings.ToLower(base)
-			}
-			cmd := s.buildCmd(dest, reg.Flags)
-			mc := config.ModelConfig{
-				Cmd:         cmd,
-				Proxy:       "http://localhost:${PORT}",
-				Name:        reg.Name,
-				Description: reg.Description,
-				UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
-			}
-			if reg.TTL != nil {
-				mc.UnloadAfter = *reg.TTL
-			}
-			if writeErr := s.writeModelToConfig(id, &mc); writeErr == nil {
-				sendJSON(pullProgress{Status: "registered", Filename: id, Path: dest})
-				s.triggerReload()
-			} else {
-				sendJSON(pullProgress{Status: "register_failed", Error: writeErr.Error()})
-			}
+			sendJSON(pullProgress{Status: "registered", Filename: regID, Path: dest})
+			s.triggerReload()
 		}
 	}
 
@@ -306,4 +311,28 @@ func (s *Server) handleAPIPullModel(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"status": "success", "filename": filename, "path": dest})
 	}
+}
+
+// registerPulledModel writes a model entry to config and returns the model ID.
+// The caller is responsible for calling s.triggerReload() on success.
+func (s *Server) registerPulledModel(dest, filename string, reg *pullRegister) (string, error) {
+	if s.configFile == "" {
+		return "", fmt.Errorf("config file path not set; cannot auto-register")
+	}
+	id := reg.ID
+	if id == "" {
+		id = strings.ToLower(strings.TrimSuffix(filename, ".gguf"))
+	}
+	cmd := s.buildCmd(dest, reg.Flags)
+	mc := config.ModelConfig{
+		Cmd:         cmd,
+		Proxy:       "http://localhost:${PORT}",
+		Name:        reg.Name,
+		Description: reg.Description,
+		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
+	}
+	if reg.TTL != nil {
+		mc.UnloadAfter = *reg.TTL
+	}
+	return id, s.writeModelToConfig(id, &mc)
 }
