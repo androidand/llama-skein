@@ -2,37 +2,84 @@ package server
 
 import (
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/fit"
+	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
 
-// vramMB returns the host's total and free VRAM in MB (free is GPU VRAM, or
-// system memory on unified/no-GPU hosts), mirroring freeVRAMBytes.
+// vramMB returns the host's total and free VRAM budget in MB for fit and
+// recommendation math. See hostVRAM for the platform semantics.
 func (s *Server) vramMB() (total, free int) {
 	if s.perf == nil {
 		return 0, 0
 	}
 	sysStats, gpuStats := s.perf.Current()
+	unified := runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+	return hostVRAM(sysStats, gpuStats, unified, gpuWiredLimitMB())
+}
+
+// hostVRAM computes the VRAM budget from perf snapshots. Pure so every
+// platform branch is unit-testable off-platform.
+//
+//   - Discrete GPUs: latest sample per GPU ID, summed across GPUs (llama.cpp
+//     splits layers across cards by default).
+//   - Unified memory (Apple Silicon): Metal will not wire the whole pool, so
+//     total is capped at the wired limit (iogpu.wired_limit_mb, else ~70% of
+//     RAM) and free at min(budget − GPU-used, MemAvailableMB) — a new model
+//     competes with everything else resident, not just prior GPU allocations.
+//   - No GPU: system RAM with MemAvailableMB as free (MemFreeMB is near zero
+//     on macOS even at rest and must not be used as a budget).
+func hostVRAM(sysStats []perf.SysStat, gpuStats []perf.GpuStat, unified bool, wiredLimitMB int) (total, free int) {
 	if len(sysStats) == 0 {
 		return 0, 0
 	}
-	if len(gpuStats) > 0 {
-		g := gpuStats[0]
-		return g.MemTotalMB, max0(g.MemTotalMB - g.MemUsedMB)
-	}
 	sys := sysStats[len(sysStats)-1]
-	// Unified memory: prefer available (reclaimable) over free for the budget.
-	f := sys.MemAvailableMB
-	if f == 0 {
-		f = sys.MemFreeMB
+	availableMB := sys.MemAvailableMB
+	if availableMB == 0 {
+		availableMB = sys.MemFreeMB
 	}
-	return sys.MemTotalMB, max0(f)
+
+	gpus := perf.LatestGPUs(gpuStats)
+	if len(gpus) == 0 {
+		if unified {
+			budget := unifiedBudgetMB(sys.MemTotalMB, wiredLimitMB)
+			return budget, max0(min(budget, availableMB))
+		}
+		return sys.MemTotalMB, max0(availableMB)
+	}
+
+	var totalMB, usedMB int
+	for _, g := range gpus {
+		totalMB += g.MemTotalMB
+		usedMB += g.MemUsedMB
+	}
+	if unified {
+		// GpuStat totals on Apple report the whole unified pool; used is the
+		// GPU-attributed slice (ioreg overlay).
+		budget := unifiedBudgetMB(totalMB, wiredLimitMB)
+		free = budget - usedMB
+		if availableMB > 0 && availableMB < free {
+			free = availableMB
+		}
+		return budget, max0(free)
+	}
+	return totalMB, max0(totalMB - usedMB)
+}
+
+// unifiedBudgetMB is the unified-memory ceiling Metal actually enforces: the
+// wired limit when set, else ~70% of RAM (the OS default working set).
+func unifiedBudgetMB(totalRAM, wiredLimitMB int) int {
+	if wiredLimitMB > 0 {
+		return wiredLimitMB
+	}
+	return totalRAM * 70 / 100
 }
 
 func max0(v int) int {
@@ -75,8 +122,8 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	}
 
 	// MLX: weights are safetensors in the HF cache, not GGUF. Resolve the cache
-	// snapshot from useModelName and budget against the GPU wired limit (the
-	// ceiling MLX actually crashes at), not total RAM.
+	// snapshot from useModelName. vramMB already caps unified hosts at the GPU
+	// wired limit (the ceiling MLX actually crashes at), not total RAM.
 	if backend == config.BackendMLX {
 		if mc.UseModelName == "" {
 			mf.Reason = ptrOf("MLX fit needs useModelName to locate the model in the Hugging Face cache")
@@ -88,8 +135,7 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 			return mf, true
 		}
 		p := fit.Params{} // MLX KV is f16 (no cache-type quantization)
-		total, _ := s.vramMB()
-		p.VRAMTotalMB = mlxVRAMBudgetMB(total)
+		p.VRAMTotalMB, _ = s.vramMB()
 		fillModelFit(&mf, fit.AnalyzeShape(shape, p))
 		return mf, true
 	}
@@ -140,17 +186,6 @@ func fillModelFit(mf *apicontract.ModelFit, r fit.Result) {
 		mf.VramTotalMb = ptrOf(r.VRAMTotalMB)
 	}
 	mf.Reason = ptrOf(r.Reason)
-}
-
-// mlxVRAMBudgetMB is the unified-memory budget the MLX fit scores against: the
-// GPU wired limit when set, else the Apple-Silicon default working set (~70% of
-// RAM). Using total RAM would overestimate the safe context and still let an
-// OOM-crashing prompt through.
-func mlxVRAMBudgetMB(totalRAM int) int {
-	if wl := gpuWiredLimitMB(); wl > 0 {
-		return wl
-	}
-	return totalRAM * 70 / 100
 }
 
 // handleAPIFitReport implements GET /api/fit — fit of every configured model

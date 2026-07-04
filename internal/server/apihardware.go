@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -100,33 +99,22 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		latest := make(map[int]perf.GpuStat)
-		for _, g := range gpuStats {
-			if prev, ok := latest[g.ID]; !ok || g.Timestamp.After(prev.Timestamp) {
-				latest[g.ID] = g
-			}
-		}
-		if len(latest) == 0 && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		gpus := perf.LatestGPUs(gpuStats)
+		if len(gpus) == 0 && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 			if len(sysStats) > 0 {
 				sys := sysStats[len(sysStats)-1]
-				latest[0] = perf.GpuStat{
+				gpus = []perf.GpuStat{{
 					ID:         0,
-					Name:       "Apple Silicon (unified)",
+					Name:       appleChipName() + " (unified)",
 					MemTotalMB: sys.MemTotalMB,
 					MemUsedMB:  sys.MemUsedMB,
-				}
+				}}
 			}
 		}
 
-		ids := make([]int, 0, len(latest))
-		for id := range latest {
-			ids = append(ids, id)
-		}
-		sort.Ints(ids)
-		gpuList := make([]map[string]any, 0, len(ids))
+		gpuList := make([]map[string]any, 0, len(gpus))
 		var vramTotalMB, vramUsedMB int
-		for _, id := range ids {
-			g := latest[id]
+		for _, g := range gpus {
 			gpuList = append(gpuList, map[string]any{
 				"id":              g.ID,
 				"name":            g.Name,

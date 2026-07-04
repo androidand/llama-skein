@@ -205,19 +205,7 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var freeBytes int64
-	if s.perf != nil {
-		sysStats, gpuStats := s.perf.Current()
-		if len(sysStats) > 0 {
-			sys := sysStats[len(sysStats)-1]
-			if len(gpuStats) > 0 {
-				gpu := gpuStats[0]
-				freeBytes = int64(gpu.MemTotalMB-gpu.MemUsedMB) << 20
-			} else {
-				freeBytes = int64(sys.MemFreeMB) << 20
-			}
-		}
-	}
+	freeBytes, _ := s.freeVRAMBytes()
 
 	if freeBytes <= 0 {
 		writeJSON(w, map[string]any{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
@@ -246,26 +234,12 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 	})
 }
 
-// freeVRAMBytes returns the free GPU VRAM (or system RAM when no GPU is
-// present) in bytes and megabytes, from the latest performance snapshot.
+// freeVRAMBytes returns the free VRAM budget in bytes and megabytes, from the
+// latest performance snapshot. Semantics (multi-GPU sum, unified wired-limit
+// cap, available-memory fallback) live in hostVRAM via vramMB.
 func (s *Server) freeVRAMBytes() (bytes int64, mb int) {
-	if s.perf == nil {
-		return 0, 0
-	}
-	sysStats, gpuStats := s.perf.Current()
-	if len(sysStats) == 0 {
-		return 0, 0
-	}
-	if len(gpuStats) > 0 {
-		gpu := gpuStats[0]
-		bytes = int64(gpu.MemTotalMB-gpu.MemUsedMB) << 20
-	} else {
-		bytes = int64(sysStats[len(sysStats)-1].MemFreeMB) << 20
-	}
-	if bytes < 0 {
-		bytes = 0
-	}
-	return bytes, int(bytes >> 20)
+	_, mb = s.vramMB()
+	return int64(mb) << 20, mb
 }
 
 // handleAPIOffloadRecommendation implements GET /api/models/offload/{model}.
