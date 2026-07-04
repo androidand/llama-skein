@@ -1043,7 +1043,7 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 			if pm.matrix != nil {
 				localHandler = pm.matrix.ProxyRequest
 			} else {
-				processGroup, err := pm.swapProcessGroup(modelID)
+			processGroup, err := pm.swapProcessGroup(modelID)
 				if err != nil {
 					// If the load failed because the configured context is larger
 					// than what fits available memory, tell the caller the safe
@@ -1061,6 +1061,10 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 						return
 					}
 					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error swapping process group: %s", err.Error()))
+					return
+				}
+				if diskErr := checkDiskSpaceForModel(pm.config.Models[modelID].Cmd); diskErr != nil {
+					pm.sendErrorResponse(c, http.StatusInsufficientStorage, diskErr.Error())
 					return
 				}
 				localHandler = processGroup.ProxyRequest

@@ -386,6 +386,10 @@ func (pm *ProxyManager) apiLoadSingleModelHandler(c *gin.Context) {
 			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error loading model: %s", swapErr.Error()))
 			return
 		}
+		if diskErr := checkDiskSpaceForModel(pm.config.Models[realModelName].Cmd); diskErr != nil {
+			pm.sendErrorResponse(c, http.StatusInsufficientStorage, diskErr.Error())
+			return
+		}
 		loadErr = processGroup.ProxyRequest(realModelName, dw, req)
 	}
 	if loadErr != nil {

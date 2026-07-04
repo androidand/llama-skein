@@ -512,7 +512,9 @@ func (p *Process) Shutdown() {
 }
 
 // stopCommand will send a SIGTERM to the process and wait for it to exit.
-// If it does not exit within 5 seconds, it will send a SIGKILL.
+// If it does not exit within the graceful timeout, the entire process group
+// is force-killed with SIGKILL to ensure child processes (e.g. MLX workers)
+// are also terminated.
 func (p *Process) stopCommand() {
 	stopStartTime := time.Now()
 	defer func() {
@@ -532,8 +534,21 @@ func (p *Process) stopCommand() {
 		return
 	}
 
+	// Start a goroutine that will force-kill the process group if it
+	// hasn't exited within the graceful stop timeout.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(p.gracefulStopTimeout):
+			p.proxyLogger.Warnf("<%s> graceful stop timeout expired, force-killing process group", p.ID)
+			killProcessGroup(p.cmd)
+		}
+	}()
+
 	cancelUpstream()
 	<-cmdWaitChan
+	close(done)
 }
 
 func (p *Process) checkHealthEndpoint(healthURL string) error {
@@ -904,7 +919,7 @@ func (p *Process) cmdStopUpstreamProcess() error {
 			return err
 		}
 	} else {
-		if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		if err := signalProcessGroup(p.cmd, syscall.SIGTERM); err != nil {
 			p.proxyLogger.Errorf("<%s> Failed to send SIGTERM to process: %v", p.ID, err)
 			return err
 		}
