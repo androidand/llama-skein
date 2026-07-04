@@ -4,7 +4,6 @@ package proxy
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"syscall"
 )
@@ -32,14 +31,4 @@ func killProcessGroup(cmd *exec.Cmd) {
 		return
 	}
 	cmd.Process.Kill()
-}
-
-// processExists checks if a process with the given PID is still running.
-func processExists(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
 }

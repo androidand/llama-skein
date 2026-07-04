@@ -1043,7 +1043,7 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 			if pm.matrix != nil {
 				localHandler = pm.matrix.ProxyRequest
 			} else {
-			processGroup, err := pm.swapProcessGroup(modelID)
+				processGroup, err := pm.swapProcessGroup(modelID)
 				if err != nil {
 					// If the load failed because the configured context is larger
 					// than what fits available memory, tell the caller the safe

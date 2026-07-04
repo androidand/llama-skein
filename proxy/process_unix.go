@@ -39,9 +39,3 @@ func killProcessGroup(cmd *exec.Cmd) {
 	}
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
-
-// processExists checks if a process with the given PID is still running.
-func processExists(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil
-}
