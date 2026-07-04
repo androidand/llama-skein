@@ -605,5 +605,7 @@ func TestProcess_CustomTimeouts(t *testing.T) {
 	assert.Equal(t, 15*time.Second, transport.TLSHandshakeTimeout)
 	assert.Equal(t, 2*time.Second, transport.ExpectContinueTimeout)
 	assert.Equal(t, 120*time.Second, transport.IdleConnTimeout)
-	assert.True(t, transport.ForceAttemptHTTP2)
+	// HTTP/2 to llama-server is deliberately off since the orphaned-slot
+	// cancellation fix (0eda21e); llama-server speaks HTTP/1.1.
+	assert.False(t, transport.ForceAttemptHTTP2)
 }

@@ -1450,11 +1450,11 @@ models:
 	// Ensure json response
 	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
 
-	// Check for attributes
-	response := map[string]string{}
+	// Check for attributes; the response also carries non-string fields (runtime).
+	response := map[string]any{}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	for key, value := range versionTest {
-		assert.Equal(t, value, response[key], "%s value %s should match response %s", key, value, response[key])
+		assert.Equal(t, value, response[key], "%s value %s should match response %v", key, value, response[key])
 	}
 }
 
