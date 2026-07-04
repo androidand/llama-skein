@@ -111,7 +111,7 @@ free_cloud_policy:
 #     graphify_auto_update: true  # rebuild knowledge graph after code changes
 #     context_auto_tune: true     # auto-adjust per-provider context window sizes
 #     coder_validate: true        # run build+test validation inside the coder step
-#     use_native_agent: false     # use skein's native LLM runner instead of opencode
+#     use_native_agent: false     # DEPRECATED — native Go runner is always used; this field is ignored
 
 # timing: stage timeout overrides — all values in seconds; 0 = built-in default
 # timing:
