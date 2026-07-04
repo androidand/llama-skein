@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fxamacker/cbor/v2"
-	"github.com/gin-gonic/gin"
-	"github.com/klauspost/compress/zstd"
 	"github.com/androidand/llama-skein/internal/cache"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/ring"
+	"github.com/fxamacker/cbor/v2"
+	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/tidwall/gjson"
 )
 
@@ -463,9 +463,12 @@ func (mp *metricsMonitor) wrapHandler(
 		capture = &ReqRespCapture{
 			ReqPath:     request.URL.Path,
 			ReqHeaders:  reqHeaders,
-			ReqBody:     reqBody,
 			RespHeaders: respHeaders,
 			RespBody:    respBody,
+		}
+		// reqBody is always read for include_usage detection; only capture it when asked.
+		if (captureFields & captureReqBody) != 0 {
+			capture.ReqBody = reqBody
 		}
 	}
 
@@ -702,8 +705,8 @@ func (w *responseBodyCopier) Write(b []byte) (int, error) {
 // may not include usage in the final chunk — we inject it after buffering.
 type sseBufferedWriter struct {
 	gin.ResponseWriter
-	body  *bytes.Buffer
-	start time.Time
+	body        *bytes.Buffer
+	start       time.Time
 	wroteHeader bool
 	statusCode  int
 }
@@ -835,9 +838,9 @@ func injectUsageIfNeeded(body []byte, logger *logmon.Monitor) []byte {
 	}
 
 	finalObj["usage"] = map[string]int{
-		"prompt_tokens":    inputTokens,
+		"prompt_tokens":     inputTokens,
 		"completion_tokens": outputTokens,
-		"total_tokens":     totalTokens,
+		"total_tokens":      totalTokens,
 	}
 
 	modifiedChunk, err := json.Marshal(finalObj)
