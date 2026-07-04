@@ -205,12 +205,19 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 	// cmake configure
 	s.sendUpgradeEvent(w, "configuring", "running cmake configure")
 	cmakeArgs := []string{"-B", buildDir, "-DBUILD_SHARED_LIBS=ON", "-DLLAMA_SERVER_SSL=OFF", "-DLLAMA_BUILD_UI=OFF", "-DLLAMA_BUILD_WEBUI=OFF"}
-	if s.detectROCm() {
-		cmakeArgs = append(cmakeArgs, "-DGGML_HIPBLAS=ON")
-		s.sendUpgradeEvent(w, "rocm", "ROCm detected — adding -DGGML_HIPBLAS=ON")
+	rocmRoot := s.detectROCmRoot()
+	if rocmRoot != "" {
+		// cmake requires the real clang compiler, not the hipcc wrapper
+		amdclang := filepath.Join(rocmRoot, "bin", "amdclang++")
+		cmakeArgs = append(cmakeArgs, "-DGGML_HIP=ON", "-DCMAKE_HIP_COMPILER="+amdclang)
+		s.sendUpgradeEvent(w, "rocm", fmt.Sprintf("ROCm detected at %s — adding -DGGML_HIP=ON", rocmRoot))
 	}
 	cmakeArgs = append(cmakeArgs, workspace)
 	cmd = exec.CommandContext(r.Context(), "cmake", cmakeArgs...)
+	// Ensure ROCm bin dir is on PATH for cmake's compiler detection
+	if rocmRoot != "" {
+		cmd.Env = append(os.Environ(), "PATH="+filepath.Join(rocmRoot, "bin")+":"+os.Getenv("PATH"))
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(workspace)
 		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("cmake configure failed — restoring backup:\n%s", string(out)))
@@ -307,15 +314,22 @@ func (s *Server) currentServerPath() (string, error) {
 	return "", fmt.Errorf("cannot determine llama-server path: no running process and ~/.local/lib/llama-cpp/llama-server not found")
 }
 
+// detectROCmRoot returns the ROCm installation root if found, or "".
+func (s *Server) detectROCmRoot() string {
+	// Check standard path first
+	if _, err := os.Stat("/opt/rocm/bin/hipcc"); err == nil {
+		return "/opt/rocm"
+	}
+	// Check if hipcc is on PATH and resolve its parent's parent
+	if p, err := exec.LookPath("hipcc"); err == nil {
+		return filepath.Dir(filepath.Dir(p))
+	}
+	return ""
+}
+
 // detectROCm returns true if ROCm appears to be installed on this host.
 func (s *Server) detectROCm() bool {
-	if _, err := os.Stat("/opt/rocm"); err == nil {
-		return true
-	}
-	if _, err := exec.LookPath("hipcc"); err == nil {
-		return true
-	}
-	return false
+	return s.detectROCmRoot() != ""
 }
 
 // copySharedLibs walks srcDir recursively and copies every .so file into dstDir.
