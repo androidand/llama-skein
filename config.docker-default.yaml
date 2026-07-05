@@ -1,14 +1,16 @@
 # Default runnable config for the bundled Docker image (see Dockerfile).
 # Unlike config.example.yaml (a reference covering every option), this is
-# meant to just work out of the box: no required env vars, one model
-# pointing at the auto-downloaded default GGUF (see docker-entrypoint.sh),
-# served by the llama-server binary built into this image (Vulkan backend
-# — see the Dockerfile's llama-cpp-builder stage).
+# meant to be a minimal, hardware-agnostic starting point: this image gets
+# deployed on arbitrary hardware, so there is no bundled model and no
+# assumption about available VRAM/RAM. The "default" model entry below
+# will fail to start until you either:
+#   - mount your own GGUF at /models/default.gguf, or
+#   - set LLAMA_SKEIN_MODEL_URL (docker-entrypoint.sh fetches it on first
+#     start) and adjust --ctx-size / -ngl for your hardware.
 #
-# To use a different model: mount your own GGUF at the path below (or set
-# LLAMA_SKEIN_MODEL_PATH / LLAMA_SKEIN_MODEL_URL for the entrypoint to
-# fetch a different one on first start), and update the model entry's
-# --model flag to match if the filename differs.
+# --ctx-size 8192 below is a conservative default sized for small/mid
+# models on modest hardware — raise it for larger-context use cases once
+# you know your actual model and available memory.
 
 healthCheckTimeout: 120
 logLevel: info
@@ -18,10 +20,10 @@ macros:
 
 models:
   "default":
-    name: "Qwen3.6 35B-A3B (Vulkan)"
-    description: "Bundled default model, served via the Vulkan-built llama-server in this image"
+    name: "Default model (configure me)"
+    description: "Set LLAMA_SKEIN_MODEL_URL or mount a GGUF at /models/default.gguf — see config.yaml comments"
     cmd: |
       ${llama-server}
       --model /models/default.gguf
-      --ctx-size 65536
+      --ctx-size 8192
       -ngl 999

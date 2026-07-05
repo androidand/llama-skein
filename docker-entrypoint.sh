@@ -1,8 +1,11 @@
 #!/bin/sh
-# Entrypoint for the bundled Docker image: downloads the default model on
-# first start (skipped if it's already present, e.g. on a persistent
-# rootfs/volume) so llama-skein is runnable with zero manual setup, then
-# execs llama-skein itself.
+# Entrypoint for the bundled Docker image. This image is generic and gets
+# deployed on arbitrary hardware (from a Raspberry Pi to a workstation GPU),
+# so it does NOT bundle or assume any particular model — there is no safe
+# universal default size/quant. Set LLAMA_SKEIN_MODEL_URL (and optionally
+# LLAMA_SKEIN_MODEL_PATH/_DIR) to have this entrypoint fetch a model on
+# first start; leave it unset to manage models yourself (mount a GGUF,
+# or edit config.yaml to point elsewhere).
 set -e
 
 # Some unmanaged/OCI-rootfs container setups don't populate /etc/hosts, so
@@ -18,14 +21,16 @@ fi
 
 MODEL_DIR="${LLAMA_SKEIN_MODEL_DIR:-/models}"
 MODEL_PATH="${LLAMA_SKEIN_MODEL_PATH:-${MODEL_DIR}/default.gguf}"
-MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q5_K_M.gguf}"
+MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-}"
 
-if [ ! -f "$MODEL_PATH" ]; then
-	echo "llama-skein: default model not found at ${MODEL_PATH}, downloading..."
+if [ -n "$MODEL_URL" ] && [ ! -f "$MODEL_PATH" ]; then
+	echo "llama-skein: LLAMA_SKEIN_MODEL_URL set and ${MODEL_PATH} not found, downloading..."
 	mkdir -p "$MODEL_DIR"
 	curl -fL --retry 3 -o "${MODEL_PATH}.partial" "$MODEL_URL"
 	mv "${MODEL_PATH}.partial" "$MODEL_PATH"
-	echo "llama-skein: default model downloaded to ${MODEL_PATH}"
+	echo "llama-skein: model downloaded to ${MODEL_PATH}"
+elif [ -z "$MODEL_URL" ] && [ ! -f "$MODEL_PATH" ]; then
+	echo "llama-skein: no model at ${MODEL_PATH} and LLAMA_SKEIN_MODEL_URL not set — starting anyway, but the bundled model entry in config.yaml will fail until you provide one."
 fi
 
 exec llama-skein "$@"
