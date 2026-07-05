@@ -93,6 +93,8 @@ type ActivityLogEntry struct {
 	Tokens          TokenMetrics `json:"tokens"`
 	DurationMs      int          `json:"duration_ms"`
 	HasCapture      bool         `json:"has_capture"`
+	// Skein companion: reservation ID from X-Skein-Reservation header (optional)
+	ReservationID string `json:"reservation_id,omitempty"`
 }
 
 type ReqRespCapture struct {

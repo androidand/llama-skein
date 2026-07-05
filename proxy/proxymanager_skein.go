@@ -19,6 +19,10 @@ type SkeinCapabilities struct {
 var currentSkeinFeatures = []string{
 	"capabilities",
 	"silent-mode",
+	"reserve",
+	"warmup",
+	"session-metrics",
+	"role-routing",
 }
 
 // addSkeinHandlers registers all /api/skein/* companion endpoints.
@@ -34,6 +38,13 @@ func addSkeinHandlers(pm *ProxyManager) {
 		skeinGroup.GET("/silent", pm.apiSkeinSilentGet)
 		skeinGroup.POST("/silent", pm.apiSkeinSilentEnable)
 		skeinGroup.DELETE("/silent", pm.apiSkeinSilentDisable)
+		// Reservation endpoints
+		skeinGroup.POST("/reserve", pm.apiSkeinReserve)
+		skeinGroup.DELETE("/reserve/:id", pm.apiSkeinReleaseReservation)
+		// Warmup endpoint
+		skeinGroup.POST("/warmup", pm.apiSkeinWarmup)
+		// Session metrics endpoint
+		skeinGroup.GET("/metrics/session/:reservation_id", pm.apiSkeinSessionMetrics)
 	}
 }
 
@@ -48,4 +59,57 @@ func (pm *ProxyManager) apiSkeinCapabilities(c *gin.Context) {
 		Version:  SkeinCapabilitiesVersion,
 		Features: currentSkeinFeatures,
 	})
+}
+
+// resolveSkeinRoleRouting checks X-Skein-Role and X-Skein-Tier headers when
+// the request body does not specify a model. If a loaded model's metadata
+// matches both role and tier, returns its model ID. Otherwise returns empty.
+//
+// Priority: explicit model name in body > reservation > role+tier hint > first loaded.
+func (pm *ProxyManager) resolveSkeinRoleRouting(c *gin.Context) string {
+	role := c.GetHeader("X-Skein-Role")
+	tier := c.GetHeader("X-Skein-Tier")
+	if role == "" && tier == "" {
+		return ""
+	}
+
+	for modelID, cfg := range pm.config.Models {
+		// Check if model is currently loaded/ready
+		state, loaded := pm.modelProcessState(modelID)
+		if !loaded || state != string(StateReady) {
+			continue
+		}
+
+		meta := cfg.Metadata
+		if meta == nil {
+			continue
+		}
+
+		modelRole, _ := meta["role"].(string)
+		modelTier, _ := meta["tier"].(string)
+
+		// Match role if provided, tier if provided
+		if role != "" && modelRole != role {
+			continue
+		}
+		if tier != "" && modelTier != tier {
+			continue
+		}
+
+		pm.proxyLogger.Infof("Skein role routing: model=%s matched role=%q tier=%q", modelID, role, tier)
+		return modelID
+	}
+
+	// Fallback: if only role or tier was provided and no match, return first loaded model
+	if role != "" || tier != "" {
+		for modelID := range pm.config.Models {
+			state, loaded := pm.modelProcessState(modelID)
+			if loaded && state == string(StateReady) {
+				pm.proxyLogger.Infof("Skein role routing: no exact match for role=%q tier=%q, falling back to first loaded model=%s", role, tier, modelID)
+				return modelID
+			}
+		}
+	}
+
+	return ""
 }

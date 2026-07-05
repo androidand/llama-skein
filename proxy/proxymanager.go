@@ -128,6 +128,12 @@ type ProxyManager struct {
 
 	// cache for parsed GGUF headers keyed by model ID
 	ggufCache sync.Map // string -> *gguf.GGUF
+
+	// Skein companion: reservation store to prevent model eviction mid-session
+	reservationStore *ReservationStore
+
+	// Skein companion: session metrics accumulator keyed by reservation ID
+	sessionMetricsStore *SessionMetricsStore
 }
 
 // SetConfigFile stores the path to the on-disk config YAML so that the
@@ -254,7 +260,21 @@ func New(proxyConfig config.Config) *ProxyManager {
 
 		peerProxy:  peerProxy,
 		silentMode: silentMgr,
+
+		// Skein companion: reservation store
+		reservationStore: NewReservationStore(shutdownCtx),
+
+		// Skein companion: session metrics store
+		sessionMetricsStore: NewSessionMetricsStore(),
 	}
+
+	// Skein companion: wire session metrics to ActivityLogEvent stream.
+	// Records metrics for any request with a ReservationID (from X-Skein-Reservation header).
+	event.On(func(e ActivityLogEvent) {
+		if e.Metrics.ReservationID != "" {
+			pm.sessionMetricsStore.Record(e.Metrics.ReservationID, e.Metrics)
+		}
+	})
 
 	// Start scheduled silent mode if configured.
 	if sched := proxyConfig.SilentMode.Schedule; sched != "" {
@@ -560,6 +580,10 @@ func (pm *ProxyManager) setupGinEngine() {
 	// see: proxymanager_api.go
 	// add API handler functions
 	addApiHandlers(pm)
+
+	// see: proxymanager_skein.go
+	// add Skein companion API handler functions
+	addSkeinHandlers(pm)
 
 	// Disable console color for testing
 	gin.DisableConsoleColor()
@@ -1029,6 +1053,17 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 		}
 
 		requestedModel := gjson.GetBytes(bodyBytes, "model").String()
+		if requestedModel == "" {
+			// Try Skein role-based routing when no model is explicitly specified.
+			if routed := pm.resolveSkeinRoleRouting(c); routed != "" {
+				requestedModel = routed
+				bodyBytes, err = sjson.SetBytes(bodyBytes, "model", routed)
+				if err != nil {
+					pm.sendErrorResponse(c, http.StatusInternalServerError, "error setting routed model in JSON")
+					return
+				}
+			}
+		}
 		if requestedModel == "" {
 			pm.sendErrorResponse(c, http.StatusBadRequest, "missing or invalid 'model' key")
 			return

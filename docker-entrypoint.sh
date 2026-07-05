@@ -1,0 +1,20 @@
+#!/bin/sh
+# Entrypoint for the bundled Docker image: downloads the default model on
+# first start (skipped if it's already present, e.g. on a persistent
+# rootfs/volume) so llama-skein is runnable with zero manual setup, then
+# execs llama-skein itself.
+set -e
+
+MODEL_DIR="${LLAMA_SKEIN_MODEL_DIR:-/models}"
+MODEL_PATH="${LLAMA_SKEIN_MODEL_PATH:-${MODEL_DIR}/default.gguf}"
+MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf}"
+
+if [ ! -f "$MODEL_PATH" ]; then
+	echo "llama-skein: default model not found at ${MODEL_PATH}, downloading..."
+	mkdir -p "$MODEL_DIR"
+	curl -fL --retry 3 -o "${MODEL_PATH}.partial" "$MODEL_URL"
+	mv "${MODEL_PATH}.partial" "$MODEL_PATH"
+	echo "llama-skein: default model downloaded to ${MODEL_PATH}"
+fi
+
+exec llama-skein "$@"

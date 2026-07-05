@@ -1,0 +1,27 @@
+# Default runnable config for the bundled Docker image (see Dockerfile).
+# Unlike config.example.yaml (a reference covering every option), this is
+# meant to just work out of the box: no required env vars, one model
+# pointing at the auto-downloaded default GGUF (see docker-entrypoint.sh),
+# served by the llama-server binary built into this image (Vulkan backend
+# — see the Dockerfile's llama-cpp-builder stage).
+#
+# To use a different model: mount your own GGUF at the path below (or set
+# LLAMA_SKEIN_MODEL_PATH / LLAMA_SKEIN_MODEL_URL for the entrypoint to
+# fetch a different one on first start), and update the model entry's
+# --model flag to match if the filename differs.
+
+healthCheckTimeout: 120
+logLevel: info
+
+macros:
+  "llama-server": "/usr/local/bin/llama-server --port ${PORT}"
+
+models:
+  "default":
+    name: "Qwen2.5 3B Instruct (Vulkan)"
+    description: "Bundled default model, served via the Vulkan-built llama-server in this image"
+    cmd: |
+      ${llama-server}
+      --model /models/default.gguf
+      --ctx-size 4096
+      -ngl 999
