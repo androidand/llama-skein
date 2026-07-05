@@ -14,8 +14,8 @@ macros:
 
 models:
   "default":
-    name: "Default model (configure me)"
-    description: "Set LLAMA_SKEIN_MODEL_URL or mount a GGUF at /models/default.gguf — see config.yaml comments"
+    name: "LLAMA_SKEIN_MODEL_NAME_PLACEHOLDER"
+    description: "LLAMA_SKEIN_MODEL_DESC_PLACEHOLDER"
     cmd: |
       ${llama-server}
       --model /models/default.gguf

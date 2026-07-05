@@ -27,4 +27,22 @@ elif [ -z "$MODEL_URL" ] && [ ! -f "$MODEL_PATH" ]; then
 	echo "llama-skein: no model at ${MODEL_PATH} and LLAMA_SKEIN_MODEL_URL not set — starting anyway, but the bundled model entry in config.yaml will fail until you provide one."
 fi
 
+# The name/description clients see via /v1/models (e.g. opencode-skein's
+# model picker) default to the GGUF filename so the served model is
+# identifiable without guessing. LLAMA_SKEIN_MODEL_NAME overrides it.
+if [ -n "$MODEL_URL" ]; then
+	DERIVED_NAME=$(basename "$MODEL_URL" .gguf)
+else
+	DERIVED_NAME=$(basename "$MODEL_PATH" .gguf)
+fi
+MODEL_NAME="${LLAMA_SKEIN_MODEL_NAME:-$DERIVED_NAME}"
+
+CONFIG_FILE="/etc/llama-skein/config.yaml"
+if [ -f "$CONFIG_FILE" ]; then
+	sed -i \
+		-e "s|LLAMA_SKEIN_MODEL_NAME_PLACEHOLDER|${MODEL_NAME}|" \
+		-e "s|LLAMA_SKEIN_MODEL_DESC_PLACEHOLDER|Serving ${MODEL_NAME} from ${MODEL_PATH}|" \
+		"$CONFIG_FILE"
+fi
+
 exec llama-skein "$@"
