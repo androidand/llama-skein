@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/model-state-and-lifecycle-api
+          ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -43,4 +43,4 @@ jobs:
 
       - name: Push
         if: ${{ !inputs.dry_run }}
-        run: git push --force-with-lease origin feat/model-state-and-lifecycle-api
+        run: git push --force-with-lease origin main
