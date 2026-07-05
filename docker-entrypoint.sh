@@ -1,17 +1,11 @@
 #!/bin/sh
-# Entrypoint for the bundled Docker image. This image is generic and gets
-# deployed on arbitrary hardware (from a Raspberry Pi to a workstation GPU),
-# so it does NOT bundle or assume any particular model — there is no safe
-# universal default size/quant. Set LLAMA_SKEIN_MODEL_URL (and optionally
-# LLAMA_SKEIN_MODEL_PATH/_DIR) to have this entrypoint fetch a model on
-# first start; leave it unset to manage models yourself (mount a GGUF,
-# or edit config.yaml to point elsewhere).
+# Entrypoint for the Docker image. No model is bundled or assumed — set
+# LLAMA_SKEIN_MODEL_URL (and optionally LLAMA_SKEIN_MODEL_PATH/_DIR) to
+# fetch one on first start, or mount/manage a GGUF yourself.
 set -e
 
-# Some unmanaged/OCI-rootfs container setups don't populate /etc/hosts, so
-# "localhost" (which llama-skein dials to reach the llama-server subprocess
-# it spawns) falls through to a real DNS lookup and fails. Ensure the
-# standard baseline entries are present before starting.
+# Some container runtimes don't populate /etc/hosts, breaking localhost
+# resolution for the llama-server subprocess llama-skein manages.
 if ! grep -q '^127\.0\.0\.1[[:space:]]' /etc/hosts 2>/dev/null; then
 	{
 		echo "127.0.0.1 localhost"

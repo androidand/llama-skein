@@ -1,16 +1,6 @@
-# Default runnable config for the bundled Docker image (see Dockerfile).
-# Unlike config.example.yaml (a reference covering every option), this is
-# meant to be a minimal, hardware-agnostic starting point: this image gets
-# deployed on arbitrary hardware, so there is no bundled model and no
-# assumption about available VRAM/RAM. The "default" model entry below
-# will fail to start until you either:
-#   - mount your own GGUF at /models/default.gguf, or
-#   - set LLAMA_SKEIN_MODEL_URL (docker-entrypoint.sh fetches it on first
-#     start) and adjust --ctx-size / -ngl for your hardware.
-#
-# --ctx-size 8192 below is a conservative default sized for small/mid
-# models on modest hardware — raise it for larger-context use cases once
-# you know your actual model and available memory.
+# Minimal config for the Docker image. No model is bundled — mount a GGUF
+# at /models/default.gguf, or set LLAMA_SKEIN_MODEL_URL (see
+# docker-entrypoint.sh) and adjust --ctx-size / -ngl for your hardware.
 
 healthCheckTimeout: 120
 logLevel: info

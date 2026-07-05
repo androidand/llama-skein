@@ -1,13 +1,6 @@
-# Production image for llama-skein, tailored for Tengil's git-source deploy
-# flow (internal/gitbuilder in the tengil repo): a git URL/branch is cloned
-# and built with `docker build .` at the repo root, and the resulting image
-# becomes the LXC container's rootfs. See tengil's docs/ for the git
-# install/upgrade flow this targets.
-#
-# One binary, one config file — matches llama-swap's own design goal, no
-# GPU/CUDA toolchain needed to build or run llama-skein itself (it proxies
-# to inference servers defined in config.yaml; those run as their own
-# subprocesses/containers per that config, independent of this image).
+# Production image for llama-skein: builds the llama-skein binary and a
+# Vulkan-enabled llama-server, and bundles them together so this image is
+# runnable without any separate model-server setup.
 
 # ---- UI build stage ---------------------------------------------------
 FROM node:20-slim AS ui-builder
@@ -35,39 +28,32 @@ RUN test -n "$BUILD_DATE" || BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
       -ldflags="-X main.commit=${COMMIT} -X main.SkeinVersion=${SKEIN_VERSION} -X main.UpstreamVersion=${UPSTREAM_VERSION} -X main.date=${BUILD_DATE}" \
       -o /out/llama-skein .
 
-# ---- llama.cpp build stage (Vulkan backend) --------------------------------
-# Builds llama-server from latest llama.cpp master with the Vulkan backend
-# (works on any Vulkan-capable GPU via Mesa RADV/ANV, no vendor SDK needed
-# — chosen over CUDA/ROCm since it needs no proprietary driver stack inside
-# the container, just the host's kernel driver + /dev/dri passthrough).
-# This is what makes the image runnable out of the box: no separate
-# "install llama.cpp" step for whoever deploys this.
-#
-# Must be ubuntu:24.04, matching the runtime stage below: llama.cpp's
-# Vulkan backend needs Vulkan-Hpp symbols newer than Debian bookworm's
-# libvulkan-dev ships (e.g. vk::LayerSettingsCreateInfoEXT), and the
-# built binary must run against a glibc at least as new as it was built
-# against (a debian:bookworm-slim runtime fails at startup with
-# "GLIBC_2.38 not found" against a binary built on ubuntu:24.04).
-FROM ubuntu:24.04 AS llama-cpp-builder
+# ---- llama.cpp build stage (ROCm/HIP backend) ------------------------------
+# Builds llama-server from latest llama.cpp master with the ROCm (HIP)
+# backend, targeting RDNA3 and RDNA4 (gfx1100, gfx1201) — extend
+# AMDGPU_TARGETS if deploying on other AMD GPU generations.
+FROM rocm/dev-ubuntu-24.04:7.2.4-complete AS llama-cpp-builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git ca-certificates \
-      libvulkan-dev glslang-tools spirv-tools vulkan-validationlayers glslc spirv-headers \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 RUN git clone --depth=1 https://github.com/ggml-org/llama.cpp.git .
 RUN cmake -B build \
-      -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DGGML_CUDA=OFF \
+      -DGGML_NATIVE=OFF -DGGML_HIP=ON -DGGML_VULKAN=OFF -DGGML_CUDA=OFF \
+      -DAMDGPU_TARGETS="gfx1100;gfx1201" \
+      -DGGML_HIP_NO_VMM=ON -DGGML_HIP_ROCWMMA_FATTN=ON \
       -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
     && cmake --build build --config Release -j"$(nproc)" --target llama-server
 
 # ---- Runtime stage --------------------------------------------------------
-# ubuntu:24.04 to match llama-cpp-builder's glibc (see comment there).
-FROM ubuntu:24.04 AS runtime
+# Same ROCm base as the builder: llama-server links against ROCm's runtime
+# libraries (rocBLAS, hipBLAS, etc.), which aren't part of a plain Ubuntu
+# image.
+FROM rocm/dev-ubuntu-24.04:7.2.4-complete AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl libvulkan1 mesa-vulkan-drivers libgomp1 \
+      ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
