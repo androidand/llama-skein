@@ -13,12 +13,7 @@
 FROM node:20-slim AS ui-builder
 WORKDIR /src/ui-svelte
 COPY ui-svelte/package.json ui-svelte/package-lock.json* ./
-# --legacy-peer-deps: the checked-in lockfile has an unresolved peer
-# conflict between vite@8 and @tailwindcss/vite@4.2.1 (which wants
-# vite ^5||^6||^7); this doesn't block local `npm install` with an older
-# npm/cache but does under a clean install. Worth fixing upstream in
-# ui-svelte/package.json separately; not this Dockerfile's job to pin it.
-RUN npm install --legacy-peer-deps
+RUN npm install
 COPY ui-svelte/ ./
 COPY internal/server/ui_dist /src/internal/server/ui_dist
 RUN npm run build
