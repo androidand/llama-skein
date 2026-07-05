@@ -1,6 +1,7 @@
 # Minimal config for the Docker image. No model is bundled — mount a GGUF
 # at /models/default.gguf, or set LLAMA_SKEIN_MODEL_URL (see
-# docker-entrypoint.sh) and adjust --ctx-size / -ngl for your hardware.
+# docker-entrypoint.sh). --ctx-size defaults to 32768 and is overridable via
+# LLAMA_SKEIN_CTX_SIZE; adjust -ngl below directly for your hardware.
 
 healthCheckTimeout: 120
 logLevel: info
@@ -15,5 +16,5 @@ models:
     cmd: |
       ${llama-server}
       --model /models/default.gguf
-      --ctx-size 8192
+      --ctx-size LLAMA_SKEIN_CTX_SIZE_PLACEHOLDER
       -ngl 999

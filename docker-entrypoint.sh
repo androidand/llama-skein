@@ -2,6 +2,7 @@
 # Entrypoint for the Docker image. No model is bundled or assumed — set
 # LLAMA_SKEIN_MODEL_URL (and optionally LLAMA_SKEIN_MODEL_PATH/_DIR) to
 # fetch one on first start, or mount/manage a GGUF yourself.
+# LLAMA_SKEIN_CTX_SIZE overrides the default --ctx-size (32768).
 set -e
 
 # Some container runtimes don't populate /etc/hosts, breaking localhost
@@ -16,6 +17,12 @@ fi
 MODEL_DIR="${LLAMA_SKEIN_MODEL_DIR:-/models}"
 MODEL_PATH="${LLAMA_SKEIN_MODEL_PATH:-${MODEL_DIR}/default.gguf}"
 MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-}"
+CTX_SIZE="${LLAMA_SKEIN_CTX_SIZE:-32768}"
+
+CONFIG_FILE="/etc/llama-skein/config.yaml"
+if [ -f "$CONFIG_FILE" ] && grep -q 'LLAMA_SKEIN_CTX_SIZE_PLACEHOLDER' "$CONFIG_FILE"; then
+	sed -i "s/LLAMA_SKEIN_CTX_SIZE_PLACEHOLDER/${CTX_SIZE}/" "$CONFIG_FILE"
+fi
 
 if [ -n "$MODEL_URL" ] && [ ! -f "$MODEL_PATH" ]; then
 	echo "llama-skein: LLAMA_SKEIN_MODEL_URL set and ${MODEL_PATH} not found, downloading..."
