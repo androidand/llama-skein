@@ -5,6 +5,17 @@
 # execs llama-skein itself.
 set -e
 
+# Some unmanaged/OCI-rootfs container setups don't populate /etc/hosts, so
+# "localhost" (which llama-skein dials to reach the llama-server subprocess
+# it spawns) falls through to a real DNS lookup and fails. Ensure the
+# standard baseline entries are present before starting.
+if ! grep -q '^127\.0\.0\.1[[:space:]]' /etc/hosts 2>/dev/null; then
+	{
+		echo "127.0.0.1 localhost"
+		echo "::1 localhost ip6-localhost ip6-loopback"
+	} >> /etc/hosts
+fi
+
 MODEL_DIR="${LLAMA_SKEIN_MODEL_DIR:-/models}"
 MODEL_PATH="${LLAMA_SKEIN_MODEL_PATH:-${MODEL_DIR}/default.gguf}"
 MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf}"
