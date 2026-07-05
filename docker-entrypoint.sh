@@ -18,7 +18,7 @@ fi
 
 MODEL_DIR="${LLAMA_SKEIN_MODEL_DIR:-/models}"
 MODEL_PATH="${LLAMA_SKEIN_MODEL_PATH:-${MODEL_DIR}/default.gguf}"
-MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf}"
+MODEL_URL="${LLAMA_SKEIN_MODEL_URL:-https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q5_K_M.gguf}"
 
 if [ ! -f "$MODEL_PATH" ]; then
 	echo "llama-skein: default model not found at ${MODEL_PATH}, downloading..."

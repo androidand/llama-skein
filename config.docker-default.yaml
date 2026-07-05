@@ -18,10 +18,10 @@ macros:
 
 models:
   "default":
-    name: "Qwen2.5 3B Instruct (Vulkan)"
+    name: "Qwen3.6 35B-A3B (Vulkan)"
     description: "Bundled default model, served via the Vulkan-built llama-server in this image"
     cmd: |
       ${llama-server}
       --model /models/default.gguf
-      --ctx-size 4096
+      --ctx-size 65536
       -ngl 999
