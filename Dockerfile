@@ -78,9 +78,13 @@ FROM llama-cpp-builder-base-${BACKEND} AS llama-cpp-builder
 ARG BACKEND
 # CUDA_ARCHITECTURES only matters for BACKEND=cuda; ignored otherwise.
 ARG CUDA_ARCHITECTURES="60;61;75;86;89"
-# AMDGPU_TARGETS only matters for BACKEND=rocm; ignored otherwise. Extend
-# this list for other AMD GPU generations (gfx1100=RDNA3, gfx1201=RDNA4).
-ARG AMDGPU_TARGETS="gfx1100;gfx1201"
+# AMDGPU_TARGETS only matters for BACKEND=rocm; ignored otherwise. Must match
+# your actual GPU(s) — there is no safe generic default. Find yours with:
+#   rocminfo | grep gfx | head -1 | awk '{print $2}'
+# then pass it explicitly, e.g. --build-arg AMDGPU_TARGETS=gfx1100. Leaving
+# this unset lets cmake/HIP fall back to their own (broad, slower-to-compile)
+# default rather than silently targeting the wrong architecture.
+ARG AMDGPU_TARGETS=""
 RUN set -e; \
     case "$BACKEND" in \
       cpu) \
@@ -90,7 +94,8 @@ RUN set -e; \
       cuda) \
         CMAKE_FLAGS="-DGGML_VULKAN=OFF -DGGML_CUDA=ON -DGGML_HIP=OFF -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}" ;; \
       rocm) \
-        CMAKE_FLAGS="-DGGML_VULKAN=OFF -DGGML_CUDA=OFF -DGGML_HIP=ON -DAMDGPU_TARGETS=${AMDGPU_TARGETS} -DGGML_HIP_NO_VMM=ON -DGGML_HIP_ROCWMMA_FATTN=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON" ;; \
+        CMAKE_FLAGS="-DGGML_VULKAN=OFF -DGGML_CUDA=OFF -DGGML_HIP=ON -DGGML_HIP_NO_VMM=ON -DGGML_HIP_ROCWMMA_FATTN=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON"; \
+        if [ -n "$AMDGPU_TARGETS" ]; then CMAKE_FLAGS="$CMAKE_FLAGS -DAMDGPU_TARGETS=${AMDGPU_TARGETS}"; fi ;; \
       *) \
         echo "unknown BACKEND: $BACKEND" >&2; exit 1 ;; \
     esac; \
