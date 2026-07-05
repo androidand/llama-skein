@@ -1,6 +1,6 @@
 # llama-skein — Ecosystem Context
 
-> **Canonical:** `/Users/andreas/dev/skein/docs/ECOSYSTEM.md` — full ecosystem map,
+> **Canonical:** `~/dev/skein/docs/ECOSYSTEM.md` (sibling checkout) — full ecosystem map,
 > cross-repo dependencies, inspiration repos. This stub covers what agents need locally.
 
 ## What this repo is
@@ -27,7 +27,7 @@ Fork extensions over upstream:
 ## Upstream sync
 
 **Upstream:** `https://github.com/mostlygeek/llama-swap` (remote alias: `upstream`, fetch-only)
-**Our branch:** `feat/model-state-and-lifecycle-api`
+**Our branch:** `main`
 **Current gap:** check with `git log --oneline HEAD..upstream/main | wc -l`
 
 Prefer `git rebase upstream/main` (gap is usually <30 commits).
@@ -37,7 +37,7 @@ git fetch upstream
 git log --oneline HEAD..upstream/main      # what upstream has that we don't
 git rebase upstream/main
 GOWORK=off go build ./... && make test-all
-git push --force-with-lease origin feat/model-state-and-lifecycle-api
+git push --force-with-lease origin main
 ```
 
 **Take:** GPU fixes, routing/process fixes, new model formats, ROCm improvements, llama.cpp parser fixes.

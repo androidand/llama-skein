@@ -5,7 +5,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 ## Tech stack
 
 - golang
-- typescript, vite and svelt5 for UI (located in ui/)
+- typescript, vite and svelt5 for UI (located in ui-svelte/)
 
 ## Workflow Tasks
 
@@ -32,7 +32,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - The llama-skein control API is design-first. `contracts/llama-skein.openapi.json` is the source of truth.
 - Before changing public API handlers, clients, response fields, request fields, status codes, or error shapes, read `docs/openapi-contract.md`.
 - Regenerate Go with `go generate ./pkg/apicontract` after every spec change.
-- opencode's TypeScript client is generated from this repo's spec with `bun run build:llama-skein-client` from `/Users/andreas/dev/opencode/packages/opencode`.
+- opencode's TypeScript client is generated from this repo's spec with `bun run build:llama-skein-client` from `~/dev/opencode/packages/opencode` (sibling checkout).
 - Skein consumes the generated Go package `github.com/androidand/llama-skein/pkg/apicontract`; do not hand-copy schema structs into Skein.
 - Do not hand-write duplicate public API structs when generated `pkg/apicontract` types already exist.
 

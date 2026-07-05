@@ -24,7 +24,7 @@
 
 ## Generate Go for llama-swap
 
-From `/Users/andreas/dev/llama-swap`:
+From this repo root (`~/dev/llama-skein`, sibling checkout notation used throughout this doc):
 
 ```bash
 go generate ./pkg/apicontract
@@ -65,7 +65,7 @@ Skein depends on the llama-swap/llama-skein module and currently has a local dev
 import "github.com/androidand/llama-skein/pkg/apicontract"
 ```
 
-For local development from `/Users/andreas/dev/skein`, the existing replace makes the sibling checkout authoritative:
+For local development from `~/dev/skein` (sibling checkout), the existing replace makes the sibling checkout authoritative:
 
 ```bash
 GOWORK=off go test ./internal/provider/... ./internal/providers/... ./internal/llm/...
@@ -82,7 +82,7 @@ Do not generate a second, divergent copy of the Go client inside Skein unless th
 
 ## Generate TypeScript for opencode
 
-opencode already contains the llama-skein TS generation script. From `/Users/andreas/dev/opencode/packages/opencode`:
+opencode already contains the llama-skein TS generation script. From `~/dev/opencode/packages/opencode` (sibling checkout):
 
 ```bash
 bun run build:llama-skein-client
@@ -97,7 +97,7 @@ bun run script/build-llama-skein-client.ts
 The script reads:
 
 ```text
-/Users/andreas/dev/llama-swap/contracts/llama-skein.openapi.json
+~/dev/llama-skein/contracts/llama-skein.openapi.json
 ```
 
 Generated output:
@@ -113,13 +113,13 @@ The script uses `@hey-api/openapi-ts` from opencode's SDK workspace dependency a
 Run the narrow generation checks first:
 
 ```bash
-cd /Users/andreas/dev/llama-swap
+cd ~/dev/llama-skein
 go generate ./pkg/apicontract
 go test -v ./internal/server
 ```
 
 ```bash
-cd /Users/andreas/dev/opencode/packages/opencode
+cd ~/dev/opencode/packages/opencode
 bun run build:llama-skein-client
 bun typecheck
 ```
@@ -127,7 +127,7 @@ bun typecheck
 For Skein callers that use the contract:
 
 ```bash
-cd /Users/andreas/dev/skein
+cd ~/dev/skein
 GOWORK=off go test ./internal/provider/... ./internal/providers/... ./internal/llm/...
 ```
 
@@ -138,17 +138,17 @@ Then run the broader repo-specific gates required by each repo's `AGENTS.md` bef
 Before committing, inspect drift in all three repos:
 
 ```bash
-cd /Users/andreas/dev/llama-swap
+cd ~/dev/llama-skein
 git diff -- contracts/llama-skein.openapi.json pkg/apicontract/llama_skein.gen.go
 ```
 
 ```bash
-cd /Users/andreas/dev/opencode
+cd ~/dev/opencode
 git diff -- packages/opencode/src/local/llama-skein/gen
 ```
 
 ```bash
-cd /Users/andreas/dev/skein
+cd ~/dev/skein
 git diff -- go.mod go.sum internal
 ```
 

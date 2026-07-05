@@ -13,3 +13,7 @@ bin/
 Makefile.bak
 logs/
 *.log
+
+# Private companion repo (deploy topology docs) — must never be committable
+# from inside this working tree.
+docs-skein/
