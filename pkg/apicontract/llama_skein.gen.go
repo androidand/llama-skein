@@ -443,7 +443,7 @@ type LoadedModelInfo struct {
 	// Id Model ID as defined in config.
 	Id *string `json:"id,omitempty"`
 
-	// KvEstimateMb Estimated KV cache MB: max(0, vram.used_mb - model_mb).
+	// KvEstimateMb Estimated KV cache MB. On GPU hosts: max(0, vram.used_mb - model_mb). When that yields 0 (CPU-only inference, no GPU telemetry), falls back to the fit engine's GGUF-derived KV size at the model's usable context.
 	KvEstimateMb *int `json:"kv_estimate_mb,omitempty"`
 
 	// ModelMb Model weight file size in MB (disk proxy for VRAM used by weights).

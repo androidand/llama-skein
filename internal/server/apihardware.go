@@ -149,6 +149,16 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 		if kvEst < 0 {
 			kvEst = 0
 		}
+		// The VRAM delta measures nothing on CPU-only hosts (no GPU telemetry,
+		// vram.used_mb = 0) and for CPU-offloaded models, so it reports 0 there.
+		// Fall back to the fit engine's GGUF-derived KV size at the model's
+		// usable context — mmap'd weights hide in Linux page cache, so system
+		// memory counters can't recover this number either.
+		if kvEst == 0 {
+			if mf, ok := s.fitForModel(modelID); ok && mf.KvMbAtMaxSafeCtx != nil && *mf.KvMbAtMaxSafeCtx > 0 {
+				kvEst = int64(*mf.KvMbAtMaxSafeCtx)
+			}
+		}
 		resp["loaded_model"] = map[string]any{
 			"id":             modelID,
 			"model_mb":       modelMB,
