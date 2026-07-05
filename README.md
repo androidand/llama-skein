@@ -1,21 +1,41 @@
 > **llama-skein** — fork of [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap) for the [Skein](https://github.com/androidand/local-ai) ecosystem.
 > Adds: `/api/resources`, `/api/storage`, model lifecycle API, mDNS registration, ROCm targets, slot-cancel on disconnect, autoUnload.
-> Private deploy docs: `~/dev/docs-skein/` · Ecosystem map: `~/dev/skein/docs/ECOSYSTEM.md`
+> Ecosystem map: `ECOSYSTEM.md` (this repo) · `~/dev/skein/docs/ECOSYSTEM.md` (sibling checkout, if present)
 
 ---
 
 ![llama-swap header image](docs/assets/hero3.webp)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/mostlygeek/llama-swap/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/mostlygeek/llama-swap)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/androidand/llama-skein/go-ci.yml)
+![GitHub Repo stars](https://img.shields.io/github/stars/androidand/llama-skein)
 
-# llama-swap
+# llama-skein
 
-Run multiple generative AI models on your machine and hot-swap between them on demand. llama-swap works with any OpenAI and Anthropic API compatible server and is used by thousands of people to power their local AI workflows.
+llama-skein is the LLM inference proxy for the [Skein](https://github.com/androidand/local-ai) ecosystem: a single static Go binary that fronts llama.cpp (and other OpenAI-compatible engines), hot-swaps models on demand, and exposes hardware-aware resource/storage/lifecycle APIs plus mDNS discovery so the rest of the ecosystem can find it on the LAN without hardcoded addresses. It is a fork of [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap) — everything llama-swap does, this repo does too, plus the extensions below.
 
-Built in Go for performance and simplicity, llama-swap has zero dependencies and is incredibly easy to set up. Get started in minutes - just one binary and one configuration file.
+## Divergence from upstream
 
-## Features:
+llama-skein tracks `mostlygeek/llama-swap` via `make upstream-check` / rebase (see `ECOSYSTEM.md`) and adds:
+
+- `GET /api/resources` — unified GPU/CPU/RAM snapshot
+- `GET /api/storage` — model dir disk usage
+- `POST /api/models/pull` — HuggingFace model download with streaming progress
+- `DELETE /api/models/:id` — unload + delete weight file
+- `PATCH /api/config/models/:id` — live model config patch (ctx-size, n_gpu_layers)
+- `POST`/`DELETE /api/config/models` — add/remove models at runtime
+- `GET /api/config/info` — config path + file existence
+- mDNS registration (`_llamaswap._tcp.local.`) on startup
+- Ollama-compat endpoints
+- HTTP 413 on context size exceeded
+- `context_length` / `max_output_tokens` in `/v1/models`
+- `autoUnload` config for model groups
+- Slot-cancel on client disconnect (prevents zombie GPU allocations)
+- ROCm build targets for AMD GPUs on inference hosts
+
+See `ECOSYSTEM.md` for the full ecosystem map and upstream-sync workflow, and `contracts/llama-skein.openapi.json` for the control-plane API contract (design-first source of truth; not duplicated here).
+
+Everything below this point is inherited from upstream llama-swap and describes functionality both projects share.
+
+## Features (inherited from llama-swap):
 
 - ✅ Easy to deploy and configure: one binary, one configuration file. no external dependencies
 - ✅ On-demand model switching
@@ -43,7 +63,7 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - `/sdapi/v1/txt2img`
   - `/sdapi/v1/img2img`
   - `/sdapi/v1/loras` - requires `model` in request body to fetch the correct loras
-- ✅ llama-swap API
+- ✅ llama-swap API (inherited; llama-skein adds its own control-plane API on top, see Divergence above)
   - `/ui` - web UI
   - `/upstream/:model_id` - direct access to upstream server ([demo](https://github.com/mostlygeek/llama-swap/pull/31))
   - `/running` - list currently running models ([#61](https://github.com/mostlygeek/llama-swap/issues/61))
@@ -91,99 +111,23 @@ Real time log streaming:
 
 ## Installation
 
-llama-swap can be installed in multiple ways
+llama-skein is a fork and does not publish to upstream's Docker/Homebrew/WinGet channels — those install **upstream llama-swap**, which does not have the fork extensions listed above. The supported way to run llama-skein is building from source.
 
-1. Docker
-2. Homebrew (OSX and Linux)
-3. WinGet
-4. From release binaries
-5. From source
+### Building from source (primary install path)
 
-### Docker Install ([download images](https://github.com/mostlygeek/llama-swap/pkgs/container/llama-swap))
+1. Building requires Go and Node.js (for the UI, in `ui-svelte/`).
+1. `git clone https://github.com/androidand/llama-skein.git`
+1. `cd llama-skein && make clean all`
+1. look in the `build/` subdirectory for the `llama-skein` binary
 
-Two types of container images are built nightly for llama-swap:
+### Upstream channels (llama-swap, not this fork)
 
-1. A unified container with llama-server, ik-llama-server, stable-diffusion.cpp, whisper.cpp and llama-swap built from source. This is only available for cuda and vulkan but has more capabilities. This one is recommended for use.
-2. A legacy image that is based on llama.cpp's images and llama-swap copied into the container. Use this one if you prefer to stay close to llama.cpp's container images.
+The channels below install **mostlygeek/llama-swap**, not llama-skein. They do not contain `/api/resources`, `/api/storage`, the model lifecycle API, mDNS registration, ROCm targets, or any other fork extension. Listed here only so it's clear what they are, in case you land on this README while looking for upstream:
 
-#### Unified container (Recommended)
-
-```shell
-$ docker pull ghcr.io/mostlygeek/llama-swap:unified-cuda
-
-# run with a custom configuration and models directory
-$ docker run -it --rm --runtime nvidia -p 9292:8080 \
- -v /path/to/models:/models \
- -v /path/to/custom/config.yaml:/etc/llama-swap/config/config.yaml \
- ghcr.io/mostlygeek/llama-swap:unified-cuda
-```
-
-#### Legacy container
-
-```shell
-$ docker pull ghcr.io/mostlygeek/llama-swap:cuda
-
-# run with a custom configuration and models directory
-$ docker run -it --rm --runtime nvidia -p 9292:8080 \
- -v /path/to/models:/models \
- -v /path/to/custom/config.yaml:/app/config.yaml \
- ghcr.io/mostlygeek/llama-swap:cuda
-```
-
-<details>
-<summary>
-more examples
-</summary>
-
-```shell
-# pull latest images per platform
-docker pull ghcr.io/mostlygeek/llama-swap:cpu
-docker pull ghcr.io/mostlygeek/llama-swap:cuda
-docker pull ghcr.io/mostlygeek/llama-swap:vulkan
-docker pull ghcr.io/mostlygeek/llama-swap:intel
-docker pull ghcr.io/mostlygeek/llama-swap:musa
-
-# tagged llama-swap, platform and llama-server version images
-docker pull ghcr.io/mostlygeek/llama-swap:v166-cuda-b6795
-
-# non-root cuda
-docker pull ghcr.io/mostlygeek/llama-swap:cuda-non-root
-
-```
-
-</details>
-
-### Homebrew Install (macOS/Linux)
-
-```shell
-brew tap mostlygeek/llama-swap
-brew install llama-swap
-llama-swap --config path/to/config.yaml --listen localhost:8080
-```
-
-### WinGet Install (Windows)
-
-> [!NOTE]
-> WinGet is maintained by community contributor [Dvd-Znf](https://github.com/Dvd-Znf) ([#327](https://github.com/mostlygeek/llama-swap/issues/327)). It is not an official part of llama-swap.
-
-```shell
-# install
-C:\> winget install llama-swap
-
-# upgrade
-C:\> winget upgrade llama-swap
-```
-
-### Pre-built Binaries
-
-Binaries are available on the [release](https://github.com/mostlygeek/llama-swap/releases) page for Linux, Mac, Windows and FreeBSD.
-
-### Building from source
-
-1. Building requires Go and Node.js (for UI).
-1. `git clone https://github.com/mostlygeek/llama-swap.git`
-1. `make clean all`
-1. look in the `build/` subdirectory for the llama-swap binary
+- Docker: `ghcr.io/mostlygeek/llama-swap` ([images](https://github.com/mostlygeek/llama-swap/pkgs/container/llama-swap))
+- Homebrew: `brew tap mostlygeek/llama-swap && brew install llama-swap`
+- WinGet: `winget install llama-swap` (community-maintained, not official)
+- Pre-built binaries: [mostlygeek/llama-swap releases](https://github.com/mostlygeek/llama-swap/releases)
 
 ## Configuration
 
@@ -219,35 +163,35 @@ Almost all configuration settings are optional and can be added one step at a ti
 
 See the [configuration documentation](docs/configuration.md) for all options.
 
-## How does llama-swap work?
+## How does llama-skein work?
 
-When a request is made to an OpenAI compatible endpoint, llama-swap will extract the `model` value and load the appropriate server configuration to serve it. If the wrong upstream server is running, it will be replaced with the correct one. This is where the "swap" part comes in. The upstream server is automatically swapped to handle the request correctly.
+When a request is made to an OpenAI compatible endpoint, llama-skein will extract the `model` value and load the appropriate server configuration to serve it. If the wrong upstream server is running, it will be replaced with the correct one. This is where the "swap" part comes in (inherited from llama-swap). The upstream server is automatically swapped to handle the request correctly.
 
-In the most basic configuration llama-swap handles one model at a time. For more advanced use cases, using a `matrix` allows multiple models to be loaded at the same time. You have complete control over how your system resources are used.
+In the most basic configuration llama-skein handles one model at a time. For more advanced use cases, using a `matrix` allows multiple models to be loaded at the same time. You have complete control over how your system resources are used.
 
 ## Reverse Proxy Configuration (nginx)
 
-If you deploy llama-swap behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion. ([#236](https://github.com/mostlygeek/llama-swap/issues/236))
+If you deploy llama-skein behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion. ([mostlygeek/llama-swap#236](https://github.com/mostlygeek/llama-swap/issues/236))
 
 Recommended nginx configuration snippets:
 
 ```nginx
 # SSE for UI events/logs
 location /api/events {
-    proxy_pass http://your-llama-swap-backend;
+    proxy_pass http://your-llama-skein-backend;
     proxy_buffering off;
     proxy_cache off;
 }
 
 # Streaming chat completions (stream=true)
 location /v1/chat/completions {
-    proxy_pass http://your-llama-swap-backend;
+    proxy_pass http://your-llama-skein-backend;
     proxy_buffering off;
     proxy_cache off;
 }
 ```
 
-As a safeguard, llama-swap also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
+As a safeguard, llama-skein also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
 
 ## Monitoring Logs on the CLI
 
@@ -258,10 +202,10 @@ $ curl http://host/logs
 # streams combined logs
 curl -Ns http://host/logs/stream
 
-# stream llama-swap's proxy status logs
+# stream llama-skein's proxy status logs
 curl -Ns http://host/logs/stream/proxy
 
-# stream logs from upstream processes that llama-swap loads
+# stream logs from upstream processes that llama-skein loads
 curl -Ns http://host/logs/stream/upstream
 
 # stream logs only from a specific model
@@ -276,13 +220,10 @@ curl -Ns 'http://host/logs/stream?no-history'
 
 ## Do I need to use llama.cpp's server (llama-server)?
 
-Any OpenAI compatible server would work. llama-swap was originally designed for llama-server and it is the best supported.
+Any OpenAI compatible server would work. llama-swap (and this fork) was originally designed for llama-server and it is the best supported.
 
 For Python based inference servers like vllm or tabbyAPI it is recommended to run them via podman or docker. This provides clean environment isolation as well as responding correctly to `SIGTERM` signals for proper shutdown.
 
-## Star History
+## Credit
 
-> [!NOTE]
-> Thank you to everyone who has given this project a ⭐️!
-
-[![Star History Chart](https://api.star-history.com/svg?repos=mostlygeek/llama-swap&type=Date)](https://www.star-history.com/#mostlygeek/llama-swap&Date)
+llama-skein is a fork of [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap) by Benson Wong. All credit for the original design and the majority of the codebase goes to the upstream project and its contributors. If you don't need the Skein-specific extensions, use upstream llama-swap directly — it's the more widely used, more broadly supported project.
