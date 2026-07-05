@@ -42,6 +42,13 @@ RUN test -n "$BUILD_DATE" || BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
 # the container, just the host's kernel driver + /dev/dri passthrough).
 # This is what makes the image runnable out of the box: no separate
 # "install llama.cpp" step for whoever deploys this.
+#
+# Must be ubuntu:24.04, matching the runtime stage below: llama.cpp's
+# Vulkan backend needs Vulkan-Hpp symbols newer than Debian bookworm's
+# libvulkan-dev ships (e.g. vk::LayerSettingsCreateInfoEXT), and the
+# built binary must run against a glibc at least as new as it was built
+# against (a debian:bookworm-slim runtime fails at startup with
+# "GLIBC_2.38 not found" against a binary built on ubuntu:24.04).
 FROM ubuntu:24.04 AS llama-cpp-builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -57,7 +64,8 @@ RUN cmake -B build \
     && cmake --build build --config Release -j"$(nproc)" --target llama-server
 
 # ---- Runtime stage --------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+# ubuntu:24.04 to match llama-cpp-builder's glibc (see comment there).
+FROM ubuntu:24.04 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl libvulkan1 mesa-vulkan-drivers libgomp1 \
     && rm -rf /var/lib/apt/lists/*
