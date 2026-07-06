@@ -113,3 +113,38 @@ func TestAnalyze_InsufficientMetadata(t *testing.T) {
 		t.Errorf("expected fit=no with no arch metadata, got %q", res.FitLevel)
 	}
 }
+
+// llama-server divides n_ctx across --parallel slots; max_safe_ctx must
+// reflect the per-request share while VRAM sizing keeps the full allocation.
+func TestAnalyze_ParallelSlotsDividePerRequestCtx(t *testing.T) {
+	shape := ModelShape{
+		LayerCount:      48,
+		EmbeddingLength: 4096,
+		HeadCount:       32,
+		HeadCountKV:     8,
+		WeightBytes:     8 << 30, // 8 GiB
+		TrainedCtx:      262144,
+	}
+	base := Params{ConfiguredCtx: 262144, VRAMTotalMB: 64 << 10, VRAMFreeMB: 48 << 10}
+
+	solo := AnalyzeShape(shape, base)
+
+	quad := base
+	quad.ParallelSlots = 4
+	split := AnalyzeShape(shape, quad)
+
+	if solo.MaxSafeCtx <= 0 || split.MaxSafeCtx <= 0 {
+		t.Fatalf("expected positive max_safe_ctx, got solo=%d split=%d", solo.MaxSafeCtx, split.MaxSafeCtx)
+	}
+	// Per-request budget shrinks by the slot count (margins/reserve make it
+	// slightly non-linear; assert the divided ceiling drives the result).
+	wantCeil := 262144/4*92/100 + 1
+	if split.MaxSafeCtx >= solo.MaxSafeCtx/2 || split.MaxSafeCtx > wantCeil {
+		t.Fatalf("split.MaxSafeCtx = %d, want well below solo (%d) and <= per-slot ceiling %d",
+			split.MaxSafeCtx, solo.MaxSafeCtx, wantCeil)
+	}
+	// The KV allocation (VRAM requirement) is for the FULL n_ctx: unchanged.
+	if split.VRAMRequiredMB != solo.VRAMRequiredMB {
+		t.Fatalf("VRAMRequiredMB changed with slots: %d vs %d", split.VRAMRequiredMB, solo.VRAMRequiredMB)
+	}
+}

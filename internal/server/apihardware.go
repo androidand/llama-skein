@@ -24,11 +24,12 @@ func modelFilePath(cmd string) string {
 	return ""
 }
 
-// loadedModelInfo returns the first running model's file size (MB) and ID,
-// or zeros if nothing is loaded or the file cannot be stat'd.
+// loadedModelInfo returns the dominant running model's ID and file size (MB),
+// or zeros if nothing is loaded or no file can be stat'd. With several models
+// loaded the largest weights win (ties: smallest ID) — map iteration order
+// must not decide what a memory meter reports.
 func (s *Server) loadedModelInfo() (id string, modelMB int64) {
-	running := s.local.RunningModels()
-	for mid := range running {
+	for mid := range s.local.RunningModels() {
 		mc, ok := s.cfg.Models[mid]
 		if !ok {
 			continue
@@ -41,9 +42,12 @@ func (s *Server) loadedModelInfo() (id string, modelMB int64) {
 		if err != nil {
 			continue
 		}
-		return mid, info.Size() / (1024 * 1024)
+		sizeMB := info.Size() / (1024 * 1024)
+		if sizeMB > modelMB || (sizeMB == modelMB && (id == "" || mid < id)) {
+			id, modelMB = mid, sizeMB
+		}
 	}
-	return "", 0
+	return id, modelMB
 }
 
 // handleAPIHardware implements GET /api/hardware.

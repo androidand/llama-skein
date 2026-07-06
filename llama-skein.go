@@ -179,17 +179,21 @@ func main() {
 		}),
 	}
 
-	// reload guards against overlapping reloads triggered by concurrent signals
-	// or file-watcher callbacks.
+	// reloadPass guards against overlapping reloads triggered by concurrent
+	// signals or file-watcher callbacks. (Redundant once wrapped by the
+	// coalescing runner below, kept as belt-and-braces.)
 	var reloading bool
 	var reloadMu sync.Mutex
 
-	// Declared with var (not :=) because the body below references reload
-	// itself (newSrv.SetReloadFn(reload)) — a self-referencing closure needs
-	// its name in scope before the literal is assigned, which := does not
-	// provide (the LHS name's scope starts after the short-var statement).
+	// Declared with var (not :=) because reloadPass references reload
+	// itself (newSrv.SetReloadFn(reload)) — the self-reference needs the name
+	// in scope before the wrapper is assigned. reload is the ONLY function
+	// that may be handed out (SetReloadFn, watcher, SIGHUP): it coalesces
+	// triggers that arrive mid-reload into a follow-up pass, so a config
+	// PATCH landing after an in-flight reload's config read is never lost.
+	// Handing out reloadPass directly would silently drop those triggers.
 	var reload func()
-	reload = func() {
+	reloadPass := func() {
 		reloadMu.Lock()
 		if reloading {
 			reloadMu.Unlock()
@@ -250,6 +254,7 @@ func main() {
 
 		proxyLog.Info("configuration reloaded")
 	}
+	reload = server.NewCoalescingRunner(reloadPass)
 
 	// Wire reload callback and mDNS for the initial server.
 	initialSrv.SetReloadFn(reload)

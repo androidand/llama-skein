@@ -54,6 +54,11 @@ type Server struct {
 	// for the pre-flight prompt guard (computing it reads GGUF / the HF cache +
 	// the perf snapshot, too costly per request). Cleared on config reload.
 	maxSafeCtxCache sync.Map // map[string]int
+
+	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
+	// mtime — /api/hardware's KV fallback would otherwise re-read the header
+	// every poll from every client. Dies with the Server on config reload.
+	ggufCache sync.Map // map[string]cachedGGUF
 }
 
 // SetConfigFile stores the on-disk config path so the management API can write

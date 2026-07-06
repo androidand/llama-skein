@@ -2,9 +2,11 @@ package server
 
 import (
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/fit"
@@ -104,6 +106,32 @@ func commandFlagString(args []string, names ...string) (string, bool) {
 	return "", false
 }
 
+type cachedGGUF struct {
+	mtime time.Time
+	g     *gguf.GGUF
+}
+
+// parseGGUFCached is gguf.ParseFile behind a per-Server (path, mtime) cache.
+// A weight file only changes when it is re-downloaded or replaced, which
+// bumps mtime; everything else is repeat polls of an identical header.
+func (s *Server) parseGGUFCached(path string) (*gguf.GGUF, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := s.ggufCache.Load(path); ok {
+		if c := v.(cachedGGUF); c.mtime.Equal(info.ModTime()) {
+			return c.g, nil
+		}
+	}
+	g, err := gguf.ParseFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s.ggufCache.Store(path, cachedGGUF{mtime: info.ModTime(), g: g})
+	return g, nil
+}
+
 // fitForModel computes the fit of one configured model to this host. ok is
 // false only when the model ID is unknown.
 func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
@@ -147,7 +175,7 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 		mf.Reason = ptrOf("fit estimate is currently computed for llamacpp GGUF and MLX safetensors models only")
 		return mf, true
 	}
-	g, err := gguf.ParseFile(ggufPath)
+	g, err := s.parseGGUFCached(ggufPath)
 	if err != nil {
 		mf.Reason = ptrOf("could not read GGUF metadata: " + err.Error())
 		return mf, true
@@ -163,6 +191,9 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	}
 	if v, ok := commandFlagInt(args, "--ctx-size", "-c"); ok {
 		p.ConfiguredCtx = v
+	}
+	if v, ok := commandFlagInt(args, "--parallel", "-np"); ok {
+		p.ParallelSlots = v
 	}
 	if v, ok := commandFlagInt(args, "--n-predict", "-n"); ok && v > 0 {
 		p.OutputReserve = v

@@ -586,7 +586,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Model ID as defined in config."
+            "description": "Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls."
           },
           "model_mb": {
             "type": "integer",
@@ -1335,7 +1335,7 @@
           },
           "max_safe_ctx": {
             "type": "integer",
-            "description": "Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx. THIS is the number opencode/skein should trim to, not configured_ctx."
+            "description": "Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx, and accounts for llama-server dividing n_ctx across --parallel slots (per-request share). THIS is the number opencode/skein should trim to, not configured_ctx."
           },
           "model_mb": {
             "type": "integer",

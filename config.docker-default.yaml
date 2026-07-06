@@ -1,10 +1,14 @@
 # Minimal config for the Docker image. No model is bundled — mount a GGUF
 # at /models/default.gguf, or set LLAMA_SKEIN_MODEL_URL (see
-# docker-entrypoint.sh). --ctx-size is intentionally not set here: llama-server
-# defaults to each model's own trained context length. To cap it lower (e.g.
-# for a memory-constrained deployment), set LLAMA_ARG_CTX_SIZE — llama-server
-# reads it natively, no llama-skein-specific plumbing needed. Adjust -ngl
-# below directly for your hardware.
+# docker-entrypoint.sh).
+#
+# --parallel 1 is set explicitly: llama-server divides n_ctx across parallel
+# slots, and its defaults for both n_ctx and slot count are version-dependent
+# (observed b-a410713: 4 slots x 65k with no flags, n_ctx 4096 with
+# --parallel 1). One agent per host is this image's use case; explicit flags
+# keep the advertised context truthful. Set LLAMA_ARG_CTX_SIZE to cap n_ctx
+# (llama-server reads it natively) — do not rely on the built-in default.
+# Adjust -ngl below directly for your hardware.
 
 healthCheckTimeout: 120
 logLevel: info
@@ -20,3 +24,4 @@ models:
       ${llama-server}
       --model /models/default.gguf
       -ngl 999
+      --parallel 1

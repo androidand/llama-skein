@@ -440,7 +440,7 @@ type GPUSnapshot struct {
 
 // LoadedModelInfo defines model for LoadedModelInfo.
 type LoadedModelInfo struct {
-	// Id Model ID as defined in config.
+	// Id Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls.
 	Id *string `json:"id,omitempty"`
 
 	// KvEstimateMb Estimated KV cache MB. On GPU hosts: max(0, vram.used_mb - model_mb). When that yields 0 (CPU-only inference, no GPU telemetry), falls back to the fit engine's GGUF-derived KV size at the model's usable context.
@@ -524,7 +524,7 @@ type ModelFit struct {
 	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
 	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
 
-	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx. THIS is the number opencode/skein should trim to, not configured_ctx.
+	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx, and accounts for llama-server dividing n_ctx across --parallel slots (per-request share). THIS is the number opencode/skein should trim to, not configured_ctx.
 	MaxSafeCtx int `json:"max_safe_ctx"`
 
 	// Model Model ID.

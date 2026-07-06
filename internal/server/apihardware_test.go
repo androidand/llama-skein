@@ -11,6 +11,38 @@ import (
 	"github.com/androidand/llama-skein/internal/process"
 )
 
+// With several models running, loaded_model must be deterministic — the
+// largest weights win — not whatever Go map iteration happens to yield.
+func TestServer_Hardware_LoadedModelPicksLargestDeterministically(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "small.gguf")
+	large := filepath.Join(dir, "large.gguf")
+	if err := os.WriteFile(small, make([]byte, 1*1024*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(large, make([]byte, 3*1024*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"zz-small": {Cmd: "llama-server --model " + small},
+		"aa-large": {Cmd: "llama-server --model " + large},
+	}}
+	local := newStubRouter([]string{"zz-small", "aa-large"}, "")
+	local.running = map[string]process.ProcessState{
+		"zz-small": process.StateReady,
+		"aa-large": process.StateReady,
+	}
+	s := newTestServerWithConfig(cfg, local, newStubRouter(nil, ""))
+
+	for i := 0; i < 25; i++ {
+		id, mb := s.loadedModelInfo()
+		if id != "aa-large" || mb != 3 {
+			t.Fatalf("iteration %d: loadedModelInfo() = (%q, %d), want (aa-large, 3)", i, id, mb)
+		}
+	}
+}
+
 // A loaded model on a host without perf telemetry (and whose GGUF the fit
 // engine cannot parse) must still serve /api/hardware with kv_estimate_mb 0 —
 // the fit fallback is best-effort and must never break the endpoint.

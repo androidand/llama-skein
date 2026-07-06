@@ -40,6 +40,7 @@ type Params struct {
 	OutputReserve int     // tokens to keep free for generation (e.g. --n-predict); default applied if 0
 	VRAMTotalMB   int     // total VRAM / unified pool
 	VRAMFreeMB    int     // currently free VRAM (for a live max-ctx estimate)
+	ParallelSlots int     // --parallel/-np in the command; llama-server divides n_ctx across slots. 0/1 = no division
 }
 
 // Result is the computed fit. It mirrors the apicontract.ModelFit fields the
@@ -236,9 +237,20 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		hardCtx = vramMaxCtx
 	}
 
-	// max_safe_ctx: prompt budget below hardCtx, reserving output room and a
-	// tokenizer-mismatch margin so a caller never ships a prompt that 413s.
-	safe := int(float64(hardCtx)*promptMarginFrac) - p.OutputReserve
+	// llama-server splits n_ctx across --parallel slots: KV is allocated for
+	// the full n_ctx (hardCtx, used for VRAM sizing below), but a single
+	// request only ever gets n_ctx/slots. Advertising the undivided figure
+	// made clients trim prompts to ~232k that a 4-slot server rejected at
+	// 65k (z4, 2026-07-06).
+	perReqCtx := hardCtx
+	if p.ParallelSlots > 1 {
+		perReqCtx /= p.ParallelSlots
+	}
+
+	// max_safe_ctx: prompt budget below the per-request ceiling, reserving
+	// output room and a tokenizer-mismatch margin so a caller never ships a
+	// prompt that 413s.
+	safe := int(float64(perReqCtx)*promptMarginFrac) - p.OutputReserve
 	if safe < 0 {
 		safe = 0
 	}
