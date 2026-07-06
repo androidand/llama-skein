@@ -21,6 +21,16 @@
 healthCheckTimeout: 120
 logLevel: info
 
+# Dedicated inference appliance: keep the model resident. ttl defaults to 0
+# (never auto-unload — the idle-unload timer is only armed for ttl > 0), so a
+# loaded model stays in VRAM until the next reload. Preload it at startup so
+# the FIRST request after a (re)start doesn't pay the cold-load cost of moving
+# tens of GB into VRAM. Remove the hook if you'd rather load lazily.
+hooks:
+  on_startup:
+    preload:
+      - default
+
 macros:
   "llama-server": "/usr/local/bin/llama-server --port ${PORT}"
 

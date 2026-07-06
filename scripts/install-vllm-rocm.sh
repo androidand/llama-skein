@@ -32,8 +32,13 @@ $PYTHON -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip -q
 
 # Detect ROCm version to pick the right PyTorch wheel.
-# PyTorch pre-built ROCm wheels currently top out at rocm6.3.
-# For ROCm 7.x systems, rocm6.3 wheels work via HSA_OVERRIDE_GFX_VERSION.
+# PyTorch pre-built ROCm wheels currently top out at rocm6.3, so a ROCm 7.x
+# system still installs the rocm6.3 torch wheel. Whether that wheel runs on
+# your GPU depends on the KERNELS COMPILED INTO THE WHEEL, not your system
+# ROCm — a separate concern from llama.cpp (which llama-skein builds for your
+# exact gfx and needs no override). gfx1100/gfx1030 are in the rocm6.3 wheel;
+# only a very new arch (e.g. gfx1201/RDNA4) might be missing and need an
+# HSA_OVERRIDE_GFX_VERSION masquerade — try WITHOUT it first.
 ROCM_VERSION=$(cat /opt/rocm/.info/version 2>/dev/null | cut -d. -f1,2 || echo "")
 if [[ -z "$ROCM_VERSION" ]]; then
   echo "WARNING: Could not detect ROCm version — defaulting to rocm6.3 PyTorch wheel"
@@ -41,8 +46,7 @@ if [[ -z "$ROCM_VERSION" ]]; then
 else
   MAJOR=$(echo "$ROCM_VERSION" | cut -d. -f1)
   if [[ "$MAJOR" -ge 7 ]]; then
-    # ROCm 7.x: no native PyTorch wheel yet — use rocm6.3 with GFX override
-    echo "ROCm $ROCM_VERSION detected (7.x) — using torch+rocm6.3 wheel (HSA_OVERRIDE_GFX_VERSION needed for new GPUs)"
+    echo "ROCm $ROCM_VERSION detected (7.x) — using torch+rocm6.3 wheel (no native 7.x wheel yet)"
     TORCH_ROCM="rocm6.3"
   else
     TORCH_ROCM="rocm${ROCM_VERSION}"
@@ -68,6 +72,9 @@ echo "    backend: vllm"
 echo "    cmd: $VENV/bin/vllm serve Qwen/Qwen3-8B --host 127.0.0.1 --port \${PORT} --max-model-len 32768"
 echo "    env:"
 echo "      - HIP_VISIBLE_DEVICES=0"
-echo "      - HSA_OVERRIDE_GFX_VERSION=11.0.0  # remove if gfx1201 works natively"
+echo "      # HSA_OVERRIDE_GFX_VERSION is NOT needed for gfx1030/gfx1100/gfx1201"
+echo "      # on modern ROCm. Only add it (masquerading as a supported sibling,"
+echo "      # e.g. =11.0.0) if the rocm6.3 torch wheel lacks kernels for your GPU"
+echo "      # and vllm fails to start. Try without it first."
 echo ""
-echo "For NVIDIA CUDA, remove the HIP/HSA env vars and use CUDA_VISIBLE_DEVICES instead."
+echo "For NVIDIA CUDA, remove the HIP env var and use CUDA_VISIBLE_DEVICES instead."
