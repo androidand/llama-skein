@@ -133,7 +133,9 @@ func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, pr
 				resp.Body = io.NopCloser(bytes.NewReader(body)) // always restore
 				if err == nil {
 					var errBody struct {
-						Error struct{ Type string `json:"type"` } `json:"error"`
+						Error struct {
+							Type string `json:"type"`
+						} `json:"error"`
 					}
 					if json.Unmarshal(body, &errBody) == nil &&
 						errBody.Error.Type == "exceed_context_size_error" {
@@ -845,7 +847,55 @@ func (p *Process) cancelBusySlots() {
 
 	if !cancelledAny {
 		p.proxyLogger.Debugf("<%s> cancelBusySlots: no processing slots found", p.ID)
+		return
 	}
+
+	// A 200 from DELETE does not prove the generation actually stopped: a
+	// backend wedged in a GPU kernel keeps the slot in the processing state
+	// (GPU pinned at 100%) while its HTTP control plane still answers. Verify
+	// the slot released; if it is still processing after a short grace period
+	// AND no new request has taken over the slot, the cancel was ineffective —
+	// the backend is wedged, so restart it rather than leaving the GPU pinned
+	// on orphaned work indefinitely.
+	for attempt := 0; attempt < 3; attempt++ {
+		time.Sleep(2 * time.Second)
+		if p.inFlightRequestsCount.Load() > 0 {
+			return // a new request legitimately owns a slot again
+		}
+		busy, err := p.hasProcessingSlot(base, client)
+		if err != nil {
+			p.proxyLogger.Warnf("<%s> cancelBusySlots: backend unresponsive after cancel (%v) — restarting", p.ID, err)
+			p.StopImmediately()
+			return
+		}
+		if !busy {
+			return // cancel took effect, slot released
+		}
+	}
+	p.proxyLogger.Warnf("<%s> cancelBusySlots: slot still processing ~6s after cancel with no client — backend wedged, restarting", p.ID)
+	p.StopImmediately()
+}
+
+// hasProcessingSlot reports whether any llama.cpp slot is in the processing
+// state (1). Used to verify a slot-cancel actually released the slot.
+func (p *Process) hasProcessingSlot(base string, client *http.Client) (bool, error) {
+	resp, err := client.Get(base + "/slots")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var slots []struct {
+		State int `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		return false, err
+	}
+	for _, s := range slots {
+		if s.State == 1 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // waitForCmd waits for the command to exit and handles exit conditions depending on current state

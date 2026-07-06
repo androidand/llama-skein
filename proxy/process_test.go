@@ -609,3 +609,40 @@ func TestProcess_CustomTimeouts(t *testing.T) {
 	// cancellation fix (0eda21e); llama-server speaks HTTP/1.1.
 	assert.False(t, transport.ForceAttemptHTTP2)
 }
+
+// hasProcessingSlot backs the wedge-detection in cancelBusySlots: after a
+// slot-cancel, a slot still reporting state==1 means the cancel was ineffective
+// (backend wedged in a GPU kernel) and the process must be restarted.
+func TestProcess_hasProcessingSlot(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"processing", `[{"id":0,"state":1}]`, true},
+		{"idle", `[{"id":0,"state":0}]`, false},
+		{"mixed", `[{"id":0,"state":0},{"id":1,"state":1}]`, true},
+		{"empty", `[]`, false},
+	}
+	p := &Process{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			busy, err := p.hasProcessingSlot(srv.URL, &http.Client{Timeout: 2 * time.Second})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if busy != tc.want {
+				t.Errorf("hasProcessingSlot(%s) = %v, want %v", tc.body, busy, tc.want)
+			}
+		})
+	}
+	t.Run("unreachable_is_error", func(t *testing.T) {
+		if _, err := p.hasProcessingSlot("http://127.0.0.1:1", &http.Client{Timeout: 500 * time.Millisecond}); err == nil {
+			t.Error("expected error from unreachable backend (drives restart)")
+		}
+	})
+}
