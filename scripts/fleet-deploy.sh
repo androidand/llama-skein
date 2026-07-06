@@ -11,7 +11,9 @@
 #
 # Fleet (verified profiles — edit if topology changes):
 #   m3       local Mac      /Users/andreas/bin/llama-swap-local   launchd com.llamaswap.m3      health :11435
+#   m5       ssh Mac        ~/bin/llama-skein                     launchd se.embeddedsolutions.llama-swap  health :11435
 #   proxmox  ssh + pct 1016 /usr/local/bin/llama-skein            systemd  llama-swap (system)  health :8080
+#   z4       ssh + pct 102  /usr/local/bin/llama-skein            LXC entrypoint (pct reboot)   health 192.168.1.81:8080
 #   rocky    ssh            ~/.local/bin/llama-skein              systemd  --user llama-skein    health :11435
 #
 # Why Mac-driven (not on-host self-build): proxmox/rocky have no Node, so they
@@ -68,7 +70,7 @@ deploy_proxmox() {
     cp -f /usr/local/bin/llama-skein /usr/local/bin/llama-skein.bak 2>/dev/null || true
     install -m 0755 /usr/local/bin/llama-skein.new /usr/local/bin/llama-skein
     systemctl restart llama-swap'"
-  if ssh proxmox "pct exec 1016 -- bash -c 'for i in 1 2 3 4 5; do sleep 2; curl -fsS --max-time 4 http://127.0.0.1:8080/v1/models >/dev/null && exit 0; done; exit 1'"; then
+  if ssh proxmox "pct exec 1016 -- bash -c 'for i in \$(seq 1 15); do sleep 2; curl -fsS --max-time 4 http://127.0.0.1:8080/v1/models >/dev/null && exit 0; done; exit 1'"; then
     mark_done proxmox; log "proxmox → $REV OK"
   else
     log "proxmox health FAILED — rolling back"
@@ -85,16 +87,51 @@ deploy_rocky() {
   ssh rocky 'cp -f ~/.local/bin/llama-skein ~/.local/bin/llama-skein.bak 2>/dev/null || true
     install -m 0755 ~/.local/bin/llama-skein.new ~/.local/bin/llama-skein
     systemctl --user restart llama-skein
-    for i in 1 2 3 4 5; do sleep 2; curl -fsS --max-time 4 http://127.0.0.1:11435/v1/models >/dev/null && exit 0; done
+    for i in $(seq 1 15); do sleep 2; curl -fsS --max-time 4 http://127.0.0.1:11435/v1/models >/dev/null && exit 0; done
     echo "rollback"; install -m 0755 ~/.local/bin/llama-skein.bak ~/.local/bin/llama-skein; systemctl --user restart llama-skein; exit 1' \
     && { mark_done rocky; log "rocky → $REV OK"; } || { log "rocky health FAILED — rolled back"; return 1; }
 }
 
-health_local() { for _ in 1 2 3 4 5; do sleep 2; curl -fsS --max-time 4 "$1" >/dev/null 2>&1 && return 0; done; return 1; }
+# ---------------------------------- m5 (remote Mac) ------------------------------
+deploy_m5() {
+  needs_update m5 || { log "m5 already at $REV"; return 0; }
+  reachable m5 || { log "m5 unreachable — skip"; return 0; }
+  log "m5: pushing $REV"
+  scp -q "$MAC_BIN" m5:bin/llama-skein.new
+  ssh m5 'cp -f ~/bin/llama-skein ~/bin/llama-skein.bak 2>/dev/null || true
+    install -m 0755 ~/bin/llama-skein.new ~/bin/llama-skein
+    launchctl kickstart -k "gui/$(id -u)/se.embeddedsolutions.llama-swap"
+    for i in $(seq 1 15); do sleep 2; curl -fsS --max-time 4 http://127.0.0.1:11435/v1/models >/dev/null 2>&1 && exit 0; done
+    echo "rollback"; install -m 0755 ~/bin/llama-skein.bak ~/bin/llama-skein; launchctl kickstart -k "gui/$(id -u)/se.embeddedsolutions.llama-swap"; exit 1' \
+    && { mark_done m5; log "m5 → $REV OK"; } || { log "m5 health FAILED — rolled back"; return 1; }
+}
+
+# ---------------------------------- z4 (LXC 102) ---------------------------------
+deploy_z4() {
+  needs_update z4 || { log "z4 already at $REV"; return 0; }
+  reachable z4 || { log "z4 unreachable — skip"; return 0; }
+  log "z4: pushing $REV to LXC 102"
+  scp -q "$LINUX_BIN" z4:/tmp/llama-skein.new
+  ssh z4 "pct push 102 /tmp/llama-skein.new /usr/local/bin/llama-skein.new && pct exec 102 -- sh -c '
+    cp -f /usr/local/bin/llama-skein /usr/local/bin/llama-skein.bak 2>/dev/null || true
+    install -m 0755 /usr/local/bin/llama-skein.new /usr/local/bin/llama-skein' && pct reboot 102"
+  if ssh z4 'for i in $(seq 1 15); do sleep 2; curl -fsS --max-time 4 http://192.168.1.81:8080/v1/models >/dev/null 2>&1 && exit 0; done; exit 1'; then
+    mark_done z4; log "z4 → $REV OK"
+  else
+    log "z4 health FAILED — rolling back"
+    ssh z4 "pct exec 102 -- sh -c 'install -m 0755 /usr/local/bin/llama-skein.bak /usr/local/bin/llama-skein' && pct reboot 102"; return 1
+  fi
+}
+
+# 30s window: boot-time model preload can hold off /v1/models well past the old
+# 10s (a healthy m3 start answered at 12s and got needlessly rolled back).
+health_local() { for _ in $(seq 1 15); do sleep 2; curl -fsS --max-time 4 "$1" >/dev/null 2>&1 && return 0; done; return 1; }
 
 rc=0
 deploy_m3      || rc=1
+deploy_m5      || rc=1
 deploy_proxmox || rc=1
+deploy_z4      || rc=1
 deploy_rocky   || rc=1
 log "done (rev $REV, exit $rc)"
 exit $rc
