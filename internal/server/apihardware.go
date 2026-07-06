@@ -170,6 +170,33 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Live inference load — the exact busy signal for schedulers (opencode
+	// subagent placement, skein fleet routing). GPU utilization is sampled
+	// over a window and reads low between tokens; in-flight vs slots does not.
+	slots := 0
+	for mid := range s.local.RunningModels() {
+		mc, ok := s.cfg.Models[mid]
+		if !ok {
+			continue
+		}
+		n := 1
+		if args, err := mc.SanitizedCommand(); err == nil {
+			if v, ok := commandFlagInt(args, "--parallel", "-np"); ok && v > 0 {
+				n = v
+			}
+		}
+		slots += n
+	}
+	inFlight := int(s.inflight.Current())
+	resp["inference"] = map[string]any{
+		"in_flight":   inFlight,
+		"slots_total": slots,
+		// busy means a new request would queue rather than run: every slot of
+		// every running model is occupied. False with no model running — the
+		// host is idle, it just needs a swap-in.
+		"busy": slots > 0 && inFlight >= slots,
+	}
+
 	writeJSON(w, resp)
 }
 

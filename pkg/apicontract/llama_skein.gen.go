@@ -459,6 +459,18 @@ type GPUSnapshot struct {
 	VramUsedMb     *int     `json:"vram_used_mb,omitempty"`
 }
 
+// InferenceInfo Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
+type InferenceInfo struct {
+	// Busy True when every slot of every running model is occupied (in_flight >= slots_total > 0) — a new request would queue. False when no model is running: the host is idle, it just needs a swap-in.
+	Busy *bool `json:"busy,omitempty"`
+
+	// InFlight Model-dispatched HTTP requests currently being served, including any queued behind a model load or a busy slot.
+	InFlight *int `json:"in_flight,omitempty"`
+
+	// SlotsTotal Total serving slots across running models (--parallel/-np per model command, default 1 each). 0 when no model is running.
+	SlotsTotal *int `json:"slots_total,omitempty"`
+}
+
 // LoadedModelInfo defines model for LoadedModelInfo.
 type LoadedModelInfo struct {
 	// Id Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls.
@@ -655,8 +667,11 @@ type ReloadResponse struct {
 
 // ResourceSnapshot defines model for ResourceSnapshot.
 type ResourceSnapshot struct {
-	Cpu         *CPUInfo         `json:"cpu,omitempty"`
-	Gpus        *[]GPUSnapshot   `json:"gpus,omitempty"`
+	Cpu  *CPUInfo       `json:"cpu,omitempty"`
+	Gpus *[]GPUSnapshot `json:"gpus,omitempty"`
+
+	// Inference Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
+	Inference   *InferenceInfo   `json:"inference,omitempty"`
 	LoadedModel *LoadedModelInfo `json:"loaded_model,omitempty"`
 	Memory      *MemoryInfo      `json:"memory,omitempty"`
 	Storage     *StorageInfo     `json:"storage,omitempty"`
