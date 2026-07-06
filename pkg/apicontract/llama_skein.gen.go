@@ -223,6 +223,24 @@ func (e OffloadRecommendationBackend) Valid() bool {
 	}
 }
 
+// Defines values for TuningStatusProvenance.
+const (
+	Override    TuningStatusProvenance = "override"
+	Recommended TuningStatusProvenance = "recommended"
+)
+
+// Valid indicates whether the value is a known member of the TuningStatusProvenance enum.
+func (e TuningStatusProvenance) Valid() bool {
+	switch e {
+	case Override:
+		return true
+	case Recommended:
+		return true
+	default:
+		return false
+	}
+}
+
 // CPUInfo defines model for CPUInfo.
 type CPUInfo struct {
 	Cores       *int       `json:"cores,omitempty"`
@@ -280,6 +298,9 @@ type ConfigModelDetail struct {
 	CpuOffloadGb     *int      `json:"cpu_offload_gb,omitempty"`
 	CtxSize          *string   `json:"ctx_size,omitempty"`
 	Description      *string   `json:"description,omitempty"`
+
+	// EffectiveFlags Read-only: the launch command after GPU-tuning profile injection. The stored `cmd` is unchanged; compare the two to see what the profile added.
+	EffectiveFlags *string `json:"effective_flags,omitempty"`
 
 	// Flags All --flags parsed from the command, as raw string values.
 	Flags *map[string]string `json:"flags,omitempty"`
@@ -650,6 +671,100 @@ type StorageInfo struct {
 	UsedBytes      *int    `json:"used_bytes,omitempty"`
 }
 
+// TuningFlags Additive, safe-to-inject llama-server flags. Omitted fields are not set.
+type TuningFlags struct {
+	// FlashAttn Inject --flash-attn on/off.
+	FlashAttn *bool `json:"flash_attn,omitempty"`
+
+	// Parallel Inject --parallel N (server slots).
+	Parallel *int `json:"parallel,omitempty"`
+}
+
+// TuningMTP MTP speculative-decoding flags, applied only to MTP-capable models.
+type TuningMTP struct {
+	ApplyToMtpModels *bool `json:"apply_to_mtp_models,omitempty"`
+
+	// DraftNMax --spec-draft-n-max
+	DraftNMax *int `json:"draft_n_max,omitempty"`
+
+	// DraftPMin --draft-p-min
+	DraftPMin *float32 `json:"draft_p_min,omitempty"`
+}
+
+// TuningPatchRequest Partial per-host tuning override. A set field forces that value (including disabling a recommendation); a null field resets it to the built-in recommendation. Profiles are never forced.
+type TuningPatchRequest struct {
+	// Enabled Master switch for auto-injection.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// ExtraArgs Arbitrary extra flags the curated profile does not model.
+	ExtraArgs *[]string `json:"extra_args,omitempty"`
+	FlashAttn *bool     `json:"flash_attn,omitempty"`
+
+	// GfxTarget Override GPU detection.
+	GfxTarget *string `json:"gfx_target,omitempty"`
+
+	// Mtp Force MTP on/off regardless of the profile.
+	Mtp      *bool `json:"mtp,omitempty"`
+	Parallel *int  `json:"parallel,omitempty"`
+}
+
+// TuningProfile One (gfx, use-case) entry in the tuning database: recommended defaults + provenance notes.
+type TuningProfile struct {
+	DeviceIds *[]string `json:"device_ids,omitempty"`
+
+	// Flags Additive, safe-to-inject llama-server flags. Omitted fields are not set.
+	Flags *TuningFlags `json:"flags,omitempty"`
+
+	// Gfx gfx target, e.g. gfx1201.
+	Gfx string `json:"gfx"`
+
+	// Mtp MTP speculative-decoding flags, applied only to MTP-capable models.
+	Mtp     *TuningMTP `json:"mtp,omitempty"`
+	Notes   *string    `json:"notes,omitempty"`
+	Sources *[]string  `json:"sources,omitempty"`
+
+	// Usecase Tuning scenario, e.g. agentic-single.
+	Usecase string `json:"usecase"`
+
+	// Verified True only if measured in-repo on this arch.
+	Verified   bool    `json:"verified"`
+	VerifiedOn *string `json:"verified_on,omitempty"`
+}
+
+// TuningProfilesResponse defines model for TuningProfilesResponse.
+type TuningProfilesResponse struct {
+	Profiles []TuningProfile `json:"profiles"`
+	Usecases *map[string]struct {
+		Default     *bool   `json:"default,omitempty"`
+		Description *string `json:"description,omitempty"`
+	} `json:"usecases,omitempty"`
+}
+
+// TuningStatus Effective GPU tuning for this host: detected arch, whether enabled, the resolved profile after user overrides, and per-value provenance. Profiles are recommendations the operator can override or disable.
+type TuningStatus struct {
+	// DetectedGfx Empty when no known AMD GPU is detected.
+	DetectedGfx *string `json:"detected_gfx,omitempty"`
+
+	// DeviceId PCI device ID, e.g. 0x7551.
+	DeviceId *string `json:"device_id,omitempty"`
+
+	// Enabled False disables all auto-injection; the model cmd launches verbatim.
+	Enabled bool `json:"enabled"`
+
+	// ExtraArgs User-supplied flags appended at launch.
+	ExtraArgs *[]string `json:"extra_args,omitempty"`
+
+	// Profile One (gfx, use-case) entry in the tuning database: recommended defaults + provenance notes.
+	Profile *TuningProfile `json:"profile,omitempty"`
+
+	// Provenance Per-field origin: 'recommended' (from the profile) or 'override' (set by the user).
+	Provenance *map[string]TuningStatusProvenance `json:"provenance,omitempty"`
+	Usecase    string                             `json:"usecase"`
+}
+
+// TuningStatusProvenance defines model for TuningStatus.Provenance.
+type TuningStatusProvenance string
+
 // VRAMInfo defines model for VRAMInfo.
 type VRAMInfo struct {
 	FreeMb  *int `json:"free_mb,omitempty"`
@@ -689,6 +804,9 @@ type AddConfigModelJSONRequestBody = ConfigModelRequest
 
 // PatchConfigModelJSONRequestBody defines body for PatchConfigModel for application/json ContentType.
 type PatchConfigModelJSONRequestBody = ConfigModelPatchRequest
+
+// PatchTuningJSONRequestBody defines body for PatchTuning for application/json ContentType.
+type PatchTuningJSONRequestBody = TuningPatchRequest
 
 // Getter for additional properties for ConfigModelDetail_Metadata. Returns the specified
 // element and whether it was found
@@ -1023,6 +1141,17 @@ type ClientInterface interface {
 	// GetSystemVersion request
 	GetSystemVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetTuning request
+	GetTuning(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PatchTuningWithBody request with any body
+	PatchTuningWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PatchTuning(ctx context.Context, body PatchTuningJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListTuningProfiles request
+	ListTuningProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListModels request
 	ListModels(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
@@ -1257,6 +1386,54 @@ func (c *Client) GetSystemCapabilities(ctx context.Context, reqEditors ...Reques
 
 func (c *Client) GetSystemVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetSystemVersionRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetTuning(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetTuningRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchTuningWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchTuningRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchTuning(ctx context.Context, body PatchTuningJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchTuningRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListTuningProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListTuningProfilesRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -1832,6 +2009,100 @@ func NewGetSystemVersionRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetTuningRequest generates requests for GetTuning
+func NewGetTuningRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/tuning")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPatchTuningRequest calls the generic PatchTuning builder with application/json body
+func NewPatchTuningRequest(server string, body PatchTuningJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchTuningRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPatchTuningRequestWithBody generates requests for PatchTuning with any type of body
+func NewPatchTuningRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/tuning")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewListTuningProfilesRequest generates requests for ListTuningProfiles
+func NewListTuningProfilesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/tuning/profiles")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListModelsRequest generates requests for ListModels
 func NewListModelsRequest(server string) (*http.Request, error) {
 	var err error
@@ -1957,6 +2228,17 @@ type ClientWithResponsesInterface interface {
 
 	// GetSystemVersionWithResponse request
 	GetSystemVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetSystemVersionResponse, error)
+
+	// GetTuningWithResponse request
+	GetTuningWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetTuningResponse, error)
+
+	// PatchTuningWithBodyWithResponse request with any body
+	PatchTuningWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchTuningResponse, error)
+
+	PatchTuningWithResponse(ctx context.Context, body PatchTuningJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchTuningResponse, error)
+
+	// ListTuningProfilesWithResponse request
+	ListTuningProfilesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListTuningProfilesResponse, error)
 
 	// ListModelsWithResponse request
 	ListModelsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelsResponse, error)
@@ -2442,6 +2724,96 @@ func (r GetSystemVersionResponse) ContentType() string {
 	return ""
 }
 
+type GetTuningResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TuningStatus
+}
+
+// Status returns HTTPResponse.Status
+func (r GetTuningResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetTuningResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetTuningResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PatchTuningResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TuningStatus
+}
+
+// Status returns HTTPResponse.Status
+func (r PatchTuningResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchTuningResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PatchTuningResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListTuningProfilesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TuningProfilesResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r ListTuningProfilesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListTuningProfilesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListTuningProfilesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListModelsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2646,6 +3018,41 @@ func (c *ClientWithResponses) GetSystemVersionWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseGetSystemVersionResponse(rsp)
+}
+
+// GetTuningWithResponse request returning *GetTuningResponse
+func (c *ClientWithResponses) GetTuningWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetTuningResponse, error) {
+	rsp, err := c.GetTuning(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetTuningResponse(rsp)
+}
+
+// PatchTuningWithBodyWithResponse request with arbitrary body returning *PatchTuningResponse
+func (c *ClientWithResponses) PatchTuningWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchTuningResponse, error) {
+	rsp, err := c.PatchTuningWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchTuningResponse(rsp)
+}
+
+func (c *ClientWithResponses) PatchTuningWithResponse(ctx context.Context, body PatchTuningJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchTuningResponse, error) {
+	rsp, err := c.PatchTuning(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchTuningResponse(rsp)
+}
+
+// ListTuningProfilesWithResponse request returning *ListTuningProfilesResponse
+func (c *ClientWithResponses) ListTuningProfilesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListTuningProfilesResponse, error) {
+	rsp, err := c.ListTuningProfiles(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListTuningProfilesResponse(rsp)
 }
 
 // ListModelsWithResponse request returning *ListModelsResponse
@@ -3063,6 +3470,84 @@ func ParseGetSystemVersionResponse(rsp *http.Response) (*GetSystemVersionRespons
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest VersionInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetTuningResponse parses an HTTP response from a GetTuningWithResponse call
+func ParseGetTuningResponse(rsp *http.Response) (*GetTuningResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetTuningResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TuningStatus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePatchTuningResponse parses an HTTP response from a PatchTuningWithResponse call
+func ParsePatchTuningResponse(rsp *http.Response) (*PatchTuningResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchTuningResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TuningStatus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListTuningProfilesResponse parses an HTTP response from a ListTuningProfilesWithResponse call
+func ParseListTuningProfilesResponse(rsp *http.Response) (*ListTuningProfilesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListTuningProfilesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TuningProfilesResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

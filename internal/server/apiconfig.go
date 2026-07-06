@@ -267,9 +267,16 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// storedCmd is the command as the operator wrote it; mc.Cmd may carry
+	// GPU-tuning-profile flags injected at load. Report the original as `cmd`
+	// and the launched command as `effective_flags` so the delta is visible.
+	storedCmd := mc.Cmd
+	if mc.TuningOriginalCmd != "" {
+		storedCmd = mc.TuningOriginalCmd
+	}
 	detail := apicontract.ConfigModelDetail{
 		Id:               realID,
-		Cmd:              mc.Cmd,
+		Cmd:              storedCmd,
 		Ttl:              ptrOf(mc.UnloadAfter),
 		ConcurrencyLimit: ptrOf(mc.ConcurrencyLimit),
 		CtxSize:          ptrOf(flags["--ctx-size"]),
@@ -277,6 +284,9 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 		CacheTypeK:       ptrOf(flags["--cache-type-k"]),
 		CacheTypeV:       ptrOf(flags["--cache-type-v"]),
 		Flags:            &flags,
+	}
+	if mc.TuningOriginalCmd != "" && mc.Cmd != mc.TuningOriginalCmd {
+		detail.EffectiveFlags = ptrOf(mc.Cmd)
 	}
 	if mc.Name != "" {
 		detail.Name = ptrOf(mc.Name)

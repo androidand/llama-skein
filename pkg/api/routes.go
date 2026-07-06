@@ -12,4 +12,6 @@ const (
 	RouteSystemCaptures      = "/api/system/captures/{id}"
 	RouteSystemUpgrade       = "/api/system/upgrade"
 	RouteSystemProvider      = "/api/system/provider"
+	RouteTuning              = "/api/tuning"
+	RouteTuningProfiles      = "/api/tuning/profiles"
 )

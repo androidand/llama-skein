@@ -9,6 +9,14 @@
 # keep the advertised context truthful. Set LLAMA_ARG_CTX_SIZE to cap n_ctx
 # (llama-server reads it natively) — do not rely on the built-in default.
 # Adjust -ngl below directly for your hardware.
+#
+# GPU tuning: on AMD GPUs llama-skein auto-detects the gfx arch and injects
+# verified flags (flash attention, and MTP for MTP models) from its tuning
+# database — see internal/tuning/profiles.yaml and GET /api/tuning. Anything
+# set explicitly here always wins; disable injection with `tuning: {enabled:
+# false}` or tweak it via PATCH /api/tuning. The --parallel 1 above is
+# therefore redundant on a recognized GPU but harmless (and still correct on
+# CPU-only or unrecognized hosts, where no profile applies).
 
 healthCheckTimeout: 120
 logLevel: info

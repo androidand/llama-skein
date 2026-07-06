@@ -22,6 +22,7 @@ import (
 	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/server"
 	"github.com/androidand/llama-skein/internal/shared"
+	"github.com/androidand/llama-skein/internal/tuning"
 	"github.com/androidand/llama-skein/internal/watcher"
 )
 
@@ -97,6 +98,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// GPU tuning: detect the host arch once and load the tuning database, then
+	// inject verified per-GPU flags into each llamacpp model's command. Done
+	// here (fork-owned main), before the config reaches the server and proxy,
+	// so the launch path (proxy/process.go) needs no change. Detection and the
+	// database are cheap and stable; recomputed on reload for config overrides.
+	tuningDB, tErr := tuning.LoadProfiles(filepath.Dir(configPath))
+	if tErr != nil {
+		slog.Warn("tuning: failed to load profiles, GPU tuning disabled", "error", tErr)
+	}
+	tunedGfx, tunedDev, tunedOK := tuning.DetectGfx("/sys")
+	if tuningDB != nil {
+		if tunedOK {
+			slog.Info("tuning: detected GPU", "gfx", tunedGfx, "device_id", fmt.Sprintf("0x%04x", tunedDev))
+		}
+		cfg = tuningDB.ApplyToConfig(cfg, tunedGfx)
+	}
+
 	// Loggers are wired per cfg.LogToStdout: proxy/upstream feed muxLog, which
 	// owns the combined history served by /logs. They outlive config reloads,
 	// so a LogToStdout change requires a restart to take effect.
@@ -164,6 +182,9 @@ func main() {
 		os.Exit(1)
 	}
 	initialSrv.SetConfigFile(configPath)
+	if tuningDB != nil {
+		initialSrv.SetTuning(tuningDB, tunedGfx, tunedDev)
+	}
 
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
@@ -214,6 +235,9 @@ func main() {
 			proxyLog.Warnf("failed to reload config: %v", err)
 			return
 		}
+		if tuningDB != nil {
+			newCfg = tuningDB.ApplyToConfig(newCfg, tunedGfx)
+		}
 
 		if len(newCfg.Profiles) > 0 {
 			proxyLog.Warn("Profile functionality has been removed in favor of Groups. See the README for more information.")
@@ -229,6 +253,9 @@ func main() {
 			return
 		}
 		newSrv.SetConfigFile(configPath)
+		if tuningDB != nil {
+			newSrv.SetTuning(tuningDB, tunedGfx, tunedDev)
+		}
 		// Without this, only the very first reload ever works: newSrv's
 		// reloadFn stays nil forever after, so triggerReload()'s "if
 		// s.reloadFn != nil" silently no-ops on every PATCH/reload after the

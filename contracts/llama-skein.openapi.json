@@ -485,6 +485,68 @@
           }
         }
       }
+    },
+    "/api/tuning": {
+      "get": {
+        "operationId": "getTuning",
+        "summary": "Effective GPU tuning for this host (detected arch, enabled state, resolved profile, provenance).",
+        "responses": {
+          "200": {
+            "description": "Tuning status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchTuning",
+        "summary": "Override or disable the recommended tuning for this host (persisted; applied on next model reload).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TuningPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated tuning status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tuning/profiles": {
+      "get": {
+        "operationId": "listTuningProfiles",
+        "summary": "The full tuning database (all gfx x use-case profiles) for client pickers.",
+        "responses": {
+          "200": {
+            "description": "Tuning database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningProfilesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -586,7 +648,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls."
+            "description": "Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) \u2014 selection is deterministic across calls."
           },
           "model_mb": {
             "type": "integer",
@@ -1134,6 +1196,10 @@
               }
             },
             "additionalProperties": true
+          },
+          "effective_flags": {
+            "type": "string",
+            "description": "Read-only: the launch command after GPU-tuning profile injection. The stored `cmd` is unchanged; compare the two to see what the profile added."
           }
         }
       },
@@ -1183,7 +1249,9 @@
           },
           "spec_type": {
             "type": "string",
-            "enum": ["draft-mtp"],
+            "enum": [
+              "draft-mtp"
+            ],
             "description": "The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'."
           },
           "draft_n_max": {
@@ -1207,7 +1275,10 @@
           },
           "source": {
             "type": "string",
-            "enum": ["config", "cmd"],
+            "enum": [
+              "config",
+              "cmd"
+            ],
             "description": "How this metadata was derived: 'config' for explicitly set metadata, 'cmd' for parsed values from the llama-server command string."
           }
         }
@@ -1387,6 +1458,195 @@
               "$ref": "#/components/schemas/ModelFit"
             },
             "description": "Per-model fit results."
+          }
+        }
+      },
+      "TuningFlags": {
+        "type": "object",
+        "description": "Additive, safe-to-inject llama-server flags. Omitted fields are not set.",
+        "properties": {
+          "flash_attn": {
+            "type": "boolean",
+            "description": "Inject --flash-attn on/off."
+          },
+          "parallel": {
+            "type": "integer",
+            "description": "Inject --parallel N (server slots)."
+          }
+        }
+      },
+      "TuningMTP": {
+        "type": "object",
+        "description": "MTP speculative-decoding flags, applied only to MTP-capable models.",
+        "properties": {
+          "apply_to_mtp_models": {
+            "type": "boolean"
+          },
+          "draft_n_max": {
+            "type": "integer",
+            "description": "--spec-draft-n-max"
+          },
+          "draft_p_min": {
+            "type": "number",
+            "description": "--draft-p-min"
+          }
+        }
+      },
+      "TuningProfile": {
+        "type": "object",
+        "description": "One (gfx, use-case) entry in the tuning database: recommended defaults + provenance notes.",
+        "required": [
+          "gfx",
+          "usecase",
+          "verified"
+        ],
+        "properties": {
+          "gfx": {
+            "type": "string",
+            "description": "gfx target, e.g. gfx1201."
+          },
+          "usecase": {
+            "type": "string",
+            "description": "Tuning scenario, e.g. agentic-single."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "True only if measured in-repo on this arch."
+          },
+          "verified_on": {
+            "type": "string"
+          },
+          "flags": {
+            "$ref": "#/components/schemas/TuningFlags"
+          },
+          "mtp": {
+            "$ref": "#/components/schemas/TuningMTP"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TuningStatus": {
+        "type": "object",
+        "description": "Effective GPU tuning for this host: detected arch, whether enabled, the resolved profile after user overrides, and per-value provenance. Profiles are recommendations the operator can override or disable.",
+        "required": [
+          "enabled",
+          "usecase"
+        ],
+        "properties": {
+          "detected_gfx": {
+            "type": "string",
+            "description": "Empty when no known AMD GPU is detected."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "PCI device ID, e.g. 0x7551."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "False disables all auto-injection; the model cmd launches verbatim."
+          },
+          "usecase": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/TuningProfile"
+          },
+          "provenance": {
+            "type": "object",
+            "description": "Per-field origin: 'recommended' (from the profile) or 'override' (set by the user).",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "recommended",
+                "override"
+              ]
+            }
+          },
+          "extra_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User-supplied flags appended at launch."
+          }
+        }
+      },
+      "TuningProfilesResponse": {
+        "type": "object",
+        "required": [
+          "profiles"
+        ],
+        "properties": {
+          "usecases": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "default": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TuningProfile"
+            }
+          }
+        }
+      },
+      "TuningPatchRequest": {
+        "type": "object",
+        "description": "Partial per-host tuning override. A set field forces that value (including disabling a recommendation); a null field resets it to the built-in recommendation. Profiles are never forced.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Master switch for auto-injection."
+          },
+          "flash_attn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "parallel": {
+            "type": "integer",
+            "nullable": true
+          },
+          "mtp": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Force MTP on/off regardless of the profile."
+          },
+          "extra_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "Arbitrary extra flags the curated profile does not model."
+          },
+          "gfx_target": {
+            "type": "string",
+            "nullable": true,
+            "description": "Override GPU detection."
           }
         }
       }

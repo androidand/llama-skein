@@ -132,6 +132,7 @@ type Config struct {
 	GlobalTTL          int                    `yaml:"globalTTL"`
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
 	Profiles           map[string][]string    `yaml:"profiles"`
+	Tuning             *TuningConfig          `yaml:"tuning"` /* per-host GPU tuning override */
 	Groups             map[string]GroupConfig `yaml:"groups"` /* key is group ID */
 
 	// swap matrix: solver-based alternative to groups
@@ -879,4 +880,21 @@ func sanitizeEnvValueForYAML(value, varName string) (string, error) {
 	value = strings.ReplaceAll(value, `"`, `\"`)
 
 	return value, nil
+}
+
+// TuningConfig is the per-host GPU-tuning override, persisted under the
+// top-level `tuning:` key. It is the "recommended, never forced" layer over
+// the built-in tuning database (see internal/tuning): a set field forces that
+// value (including disabling a recommendation), a nil pointer defers to the
+// profile, and Enabled=false disables all auto-injection. Kept as plain
+// fields here (no import of internal/tuning) so the config package stays
+// dependency-free; internal/tuning converts this into its Override type.
+type TuningConfig struct {
+	UseCase   string   `yaml:"usecase,omitempty"`
+	Enabled   *bool    `yaml:"enabled,omitempty"`
+	FlashAttn *bool    `yaml:"flash_attn,omitempty"`
+	Parallel  *int     `yaml:"parallel,omitempty"`
+	MTP       *bool    `yaml:"mtp,omitempty"`
+	ExtraArgs []string `yaml:"extra_args,omitempty"`
+	GfxTarget string   `yaml:"gfx_target,omitempty"`
 }

@@ -1,0 +1,76 @@
+# llama-skein GPU tuning database
+#
+# An open, curated collection of recommended llama-server settings per GPU
+# architecture (gfx target) and use-case. These are DEFAULTS the operator can
+# override or disable at runtime (see /api/tuning) — never forced.
+#
+# How to contribute: add or refine a profile, set `verified: true` only if you
+# measured it, and cite a `sources:` entry (a benchmark, a Reddit/GitHub
+# thread, or "measured in-repo <date>"). Users can also drop a same-schema
+# file at <configdir>/tuning-profiles.yaml to extend/override without a PR.
+#
+# Boolean flags MUST be true/false (yaml.v3 treats on/off as strings).
+
+version: 1
+
+usecases:
+  agentic-single:
+    description: One request at a time, latency-sensitive (opencode / coding agents)
+    default: true
+
+profiles:
+  # ── RDNA4 ────────────────────────────────────────────────────────────────
+  - gfx: gfx1201            # R9700, RX 9070 / 9070 XT
+    usecase: agentic-single
+    verified: true
+    verified_on: "R9700 32GB @ proxmox, 2026-07-06"
+    flags:
+      flash_attn: true
+      parallel: 1
+    mtp:
+      apply_to_mtp_models: true
+      draft_n_max: 3
+      draft_p_min: 0.5
+    device_ids: ["0x7550", "0x7551", "0x7448", "0x7449"]
+    notes: >-
+      MTP gave 2.4x decode (19->45 t/s) on the qwopus 27B Q8 MTP model; the
+      narrow memory bus makes dense decode bandwidth-bound, so MTP is the main
+      lever. q8_0/q8_0 KV verified fine (RDNA4 is INT4/INT8-optimized; do NOT
+      switch to f16). Flash attention is needed for quantized-KV perf.
+      Combining ngram-mod with draft-mtp HURT on a single GPU (45->39 t/s).
+    sources:
+      - measured in-repo 2026-07-06
+      - https://github.com/ggml-org/llama.cpp/discussions/21043
+      - https://github.com/ggml-org/llama.cpp/discussions/21526
+
+  # ── RDNA3 ────────────────────────────────────────────────────────────────
+  - gfx: gfx1100            # W7800 / W7900, RX 7900 XTX / XT, RX 7800 XT
+    usecase: agentic-single
+    verified: false
+    flags:
+      flash_attn: true
+      parallel: 1
+    device_ids: ["0x744c", "0x7448", "0x7449", "0x747e"]
+    notes: >-
+      Conservative defaults, not yet benchmarked in-repo. RDNA3 has WMMA;
+      a rocWMMA-FATTN build (-DGGML_HIP_ROCWMMA_FATTN=ON) reportedly boosts
+      prefill. MTP untested here — enable and verify before marking. Quantized
+      KV (q8_0/q4_0) recommended over f16.
+    sources:
+      - https://github.com/ggml-org/llama.cpp/discussions/21043
+
+  # ── RDNA2 ────────────────────────────────────────────────────────────────
+  - gfx: gfx1030            # RX 6800 / 6800 XT / 6900 XT
+    usecase: agentic-single
+    verified: false
+    flags:
+      flash_attn: true
+      parallel: 1
+    device_ids: ["0x73bf", "0x73a5", "0x73af"]
+    notes: >-
+      Conservative. RDNA2 lacks WMMA matrix units; community reports the
+      Vulkan backend often beats ROCm for LLM here, and that recent llama.cpp
+      master gives large gains over older builds. Flash attention works but is
+      less impactful than on RDNA3/4.
+    sources:
+      - "r/ROCm 'Easy ROCm + llama.cpp build script' thread, 2026-07"

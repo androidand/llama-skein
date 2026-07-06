@@ -16,6 +16,7 @@ import (
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/thermal"
+	"github.com/androidand/llama-skein/internal/tuning"
 	"github.com/androidand/llama-skein/pkg/api"
 )
 
@@ -59,6 +60,21 @@ type Server struct {
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
 	// every poll from every client. Dies with the Server on config reload.
 	ggufCache sync.Map // map[string]cachedGGUF
+
+	// GPU tuning: the loaded database and the detected host arch, used by the
+	// /api/tuning routes to report and edit the effective profile. Set once
+	// after New() via SetTuning.
+	tuningDB      *tuning.Database
+	tunedGfx      string
+	tunedDeviceID uint32
+}
+
+// SetTuning wires the loaded tuning database and detected GPU into the server
+// so the /api/tuning routes can report and edit the effective profile.
+func (s *Server) SetTuning(db *tuning.Database, gfx string, deviceID uint32) {
+	s.tuningDB = db
+	s.tunedGfx = gfx
+	s.tunedDeviceID = deviceID
 }
 
 // SetConfigFile stores the on-disk config path so the management API can write
@@ -309,6 +325,11 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
 	mux.Handle("PUT /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
 	mux.Handle("DELETE /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))
+
+	// GPU tuning — detected profile + per-host override.
+	mux.Handle("GET "+api.RouteTuning, apiChain.ThenFunc(s.handleGetTuning))
+	mux.Handle("PATCH "+api.RouteTuning, apiChain.ThenFunc(s.handlePatchTuning))
+	mux.Handle("GET "+api.RouteTuningProfiles, apiChain.ThenFunc(s.handleListTuningProfiles))
 
 	// Hardware — resources, storage, performance, GPU power.
 	mux.Handle("GET "+api.RouteHardware, apiChain.ThenFunc(s.handleAPIHardware))

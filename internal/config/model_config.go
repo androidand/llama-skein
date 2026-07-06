@@ -76,6 +76,12 @@ type ModelConfig struct {
 	// exceeded, llama-skein cancels the upstream request and, if the backend
 	// fails to cancel gracefully, restarts it.
 	MaxRequestTimeSecs int `yaml:"maxRequestTimeSecs"`
+
+	// TuningOriginalCmd holds Cmd as written before GPU-tuning-profile flags
+	// were injected (see internal/tuning). Empty when no injection happened.
+	// The config API reports this as the stored `cmd` and Cmd as the effective
+	// launch command. Not serialized.
+	TuningOriginalCmd string `yaml:"-"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
