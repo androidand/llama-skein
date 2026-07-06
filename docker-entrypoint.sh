@@ -4,6 +4,13 @@
 # fetch one on first start, or mount/manage a GGUF yourself.
 set -e
 
+# When this image is run as a Proxmox LXC (via pct), the Dockerfile's ENV PATH
+# is not applied, so the daemon can inherit an empty PATH — llama-skein then
+# can't find rocm-smi for GPU telemetry (inference still works via the llama
+# libs' RPATH, but the VRAM meter / fit engine go blind). Export a sane PATH
+# and the ROCm bin dir so tooling resolves regardless of the launch context.
+export PATH="/opt/rocm/bin:$(ls -d /opt/rocm-*/bin 2>/dev/null | head -1):/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:${PATH}"
+
 # Some container runtimes don't populate /etc/hosts, breaking localhost
 # resolution for the llama-server subprocess llama-skein manages.
 if ! grep -q '^127\.0\.0\.1[[:space:]]' /etc/hosts 2>/dev/null; then

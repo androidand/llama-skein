@@ -3,6 +3,8 @@
 package perf
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -23,5 +25,31 @@ func TestParseROCmSmiJSON_SetsTimestampAndValues(t *testing.T) {
 	}
 	if g.MemTotalMB <= 0 || g.MemUsedMB <= 0 {
 		t.Fatalf("unexpected memory stats total=%d used=%d", g.MemTotalMB, g.MemUsedMB)
+	}
+}
+
+// resolveTool must find a binary via absolute fallback even when PATH is empty
+// — the z4 case where the OCI-launched daemon had no PATH and GPU telemetry
+// silently vanished.
+func TestResolveTool_AbsoluteFallbackWithEmptyPath(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "faketool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "") // simulate the empty-PATH daemon environment
+
+	if _, ok := resolveTool("faketool"); ok {
+		t.Fatal("expected LookPath to fail with empty PATH and no fallback")
+	}
+	got, ok := resolveTool("faketool", filepath.Join(dir, "*tool"))
+	if !ok || got != tool {
+		t.Fatalf("resolveTool fallback = (%q,%v), want (%q,true)", got, ok, tool)
+	}
+	// A non-executable match must be rejected.
+	noexec := filepath.Join(dir, "plain")
+	os.WriteFile(noexec, []byte("x"), 0o644)
+	if _, ok := resolveTool("plain", noexec); ok {
+		t.Error("non-executable file must not resolve")
 	}
 }

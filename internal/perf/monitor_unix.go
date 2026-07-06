@@ -23,6 +23,36 @@ import (
 	psnet "github.com/shirou/gopsutil/v4/net"
 )
 
+// resolveTool finds an executable by name, falling back to well-known
+// absolute locations (which may be globs) when it is not on PATH. Containers
+// frequently launch the daemon with a minimal or empty PATH, so LookPath alone
+// is unreliable — e.g. rocm-smi exists at /usr/bin but the OCI entrypoint left
+// PATH unset, so GPU telemetry silently disappeared while inference (which
+// finds its libs via RPATH) kept working.
+func resolveTool(name string, fallbacks ...string) (string, bool) {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, true
+	}
+	for _, f := range fallbacks {
+		matches, _ := filepath.Glob(f)
+		for _, m := range matches {
+			if info, err := os.Stat(m); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+				return m, true
+			}
+		}
+	}
+	return "", false
+}
+
+// rocmSmiPath resolves the rocm-smi binary, tolerating an empty PATH.
+func rocmSmiPath() (string, bool) {
+	return resolveTool("rocm-smi",
+		"/usr/bin/rocm-smi",
+		"/opt/rocm/bin/rocm-smi",
+		"/opt/rocm-*/bin/rocm-smi",
+	)
+}
+
 func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
 	if ch, err := tryLACT(ctx, every, logger); err == nil {
 		logger.Info("using LACT for GPU monitoring")
@@ -141,13 +171,15 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 }
 
 func tryROCmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	if _, err := exec.LookPath("rocm-smi"); err != nil {
+	smi, ok := rocmSmiPath()
+	if !ok {
 		return nil, ErrNoGpuTool
 	}
 
-	// First check if rocm-smi can see any GPUs
-	checkCmd := exec.CommandContext(ctx, "rocm-smi", "--alldevices")
-	checkCmd.Env = append(os.Environ(), "HSA_OVERRIDE_GFX_VERSION=12.0.1")
+	// First check if rocm-smi can see any GPUs. rocm-smi reads sysfs and does
+	// not need HSA_OVERRIDE_GFX_VERSION; a hardcoded override here (previously
+	// 12.0.1) is wrong for any non-gfx1201 card, so it is not set.
+	checkCmd := exec.CommandContext(ctx, smi, "--alldevices")
 	if out, err := checkCmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("rocm-smi check failed: %s: %w", string(out), err)
 	}
@@ -173,22 +205,22 @@ func tryROCmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 			var stats []GpuStat
 
 			// VRAM
-			if out, err := exec.CommandContext(ctx, "rocm-smi", "--showmeminfo=vram", "--json").Output(); err == nil {
+			if out, err := exec.CommandContext(ctx, smi, "--showmeminfo=vram", "--json").Output(); err == nil {
 				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
 			}
 
 			// Temperature
-			if out, err := exec.CommandContext(ctx, "rocm-smi", "--showtemp", "--json").Output(); err == nil {
+			if out, err := exec.CommandContext(ctx, smi, "--showtemp", "--json").Output(); err == nil {
 				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
 			}
 
 			// Power
-			if out, err := exec.CommandContext(ctx, "rocm-smi", "--showpower", "--json").Output(); err == nil {
+			if out, err := exec.CommandContext(ctx, smi, "--showpower", "--json").Output(); err == nil {
 				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
 			}
 
 			// GPU utilization
-			if out, err := exec.CommandContext(ctx, "rocm-smi", "--showuse", "--json").Output(); err == nil {
+			if out, err := exec.CommandContext(ctx, smi, "--showuse", "--json").Output(); err == nil {
 				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
 			}
 
@@ -439,7 +471,8 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 }
 
 func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	if _, err := exec.LookPath("rocm-smi"); err != nil {
+	smi, ok := rocmSmiPath()
+	if !ok {
 		return nil, ErrNoGpuTool
 	}
 	if every < time.Second {
@@ -460,7 +493,7 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 				return
 			case <-ticker.C:
 				pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
-				cmd := exec.CommandContext(pollCtx, "rocm-smi", "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
+				cmd := exec.CommandContext(pollCtx, smi, "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
 				out, err := cmd.Output()
 				timedOut := pollCtx.Err() == context.DeadlineExceeded
 				cancel()
