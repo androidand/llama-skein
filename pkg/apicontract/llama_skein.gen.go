@@ -527,7 +527,10 @@ type Model struct {
 	// OverrideTensor Current --override-tensor value parsed from the model command, when set (llama.cpp tensor placement).
 	OverrideTensor *string `json:"override_tensor,omitempty"`
 	OwnedBy        *string `json:"owned_by,omitempty"`
-	State          *string `json:"state,omitempty"`
+
+	// Reasoning True if the model emits reasoning/thinking output (reasoning_content) before its answer. Resolved from the model config; omitted when not declared. Clients use it to enable reasoning-stream rendering.
+	Reasoning *bool   `json:"reasoning,omitempty"`
+	State     *string `json:"state,omitempty"`
 }
 
 // ModelBackend Inference backend type.

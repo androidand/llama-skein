@@ -170,3 +170,40 @@ func TestServer_Redirects(t *testing.T) {
 		}
 	}
 }
+
+// A model declaring reasoning:true advertises it in /v1/models so clients
+// (opencode) enable thinking-stream rendering; a model without it omits the
+// field (no change for non-reasoning models).
+func TestServer_HandleListModels_Reasoning(t *testing.T) {
+	yes := true
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+	s.cfg = config.Config{
+		Models: map[string]config.ModelConfig{
+			"reasoner": {Name: "Reasoner", Reasoning: &yes, Cmd: "/usr/bin/llama-server"},
+			"plain":    {Name: "Plain", Cmd: "/usr/bin/llama-server"},
+		},
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var resp struct {
+		Data []apicontract.Model `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, m := range resp.Data {
+		switch m.Id {
+		case "reasoner":
+			if m.Reasoning == nil || !*m.Reasoning {
+				t.Errorf("reasoner: reasoning = %v, want true", m.Reasoning)
+			}
+		case "plain":
+			if m.Reasoning != nil {
+				t.Errorf("plain: reasoning = %v, want omitted (nil)", m.Reasoning)
+			}
+		}
+	}
+}

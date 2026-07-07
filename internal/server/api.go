@@ -62,6 +62,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if v, ok := hints["override_tensor"].(string); ok {
 			rec.OverrideTensor = &v
 		}
+		if mc.Reasoning != nil {
+			rec.Reasoning = mc.Reasoning
+		}
 		return rec
 	}
 

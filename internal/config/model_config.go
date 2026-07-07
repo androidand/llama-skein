@@ -82,6 +82,12 @@ type ModelConfig struct {
 	// The config API reports this as the stored `cmd` and Cmd as the effective
 	// launch command. Not serialized.
 	TuningOriginalCmd string `yaml:"-"`
+
+	// Reasoning declares the model emits reasoning/thinking output
+	// (reasoning_content) before its answer. Advertised in /v1/models so
+	// clients (opencode) enable reasoning-stream rendering instead of showing
+	// a frozen UI during the think phase. nil = not declared (omitted).
+	Reasoning *bool `yaml:"reasoning"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
