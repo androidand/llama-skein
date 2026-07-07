@@ -53,3 +53,69 @@ func TestResolveTool_AbsoluteFallbackWithEmptyPath(t *testing.T) {
 		t.Error("non-executable file must not resolve")
 	}
 }
+
+func writeSysfsFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The sysfs reader is the unbreakable fallback when ROCm userland is missing
+// or points at a moved install (the rocky case: wrapper hardcoding a stale
+// version dir, exit 127). It must produce VRAM/busy/temp/power from the bare
+// amdgpu counters, skip cards without VRAM info, and unit-convert hwmon's
+// millidegrees and microwatts.
+func TestReadSysfsGpuStats(t *testing.T) {
+	root := t.TempDir()
+
+	// card0: full amdgpu counters (values from a real gfx1100 host).
+	dev0 := filepath.Join(root, "card0", "device")
+	writeSysfsFile(t, filepath.Join(dev0, "mem_info_vram_total"), "25753026560\n")
+	writeSysfsFile(t, filepath.Join(dev0, "mem_info_vram_used"), "23439769600\n")
+	writeSysfsFile(t, filepath.Join(dev0, "gpu_busy_percent"), "98\n")
+	writeSysfsFile(t, filepath.Join(dev0, "hwmon", "hwmon3", "temp1_input"), "61000\n")
+	writeSysfsFile(t, filepath.Join(dev0, "hwmon", "hwmon3", "power1_average"), "250000000\n")
+
+	// card1: a display-only device without VRAM counters — must be skipped.
+	writeSysfsFile(t, filepath.Join(root, "card1", "device", "gpu_busy_percent"), "3\n")
+
+	stats := readSysfsGpuStats(root)
+	if len(stats) != 1 {
+		t.Fatalf("len(stats) = %d, want 1", len(stats))
+	}
+	s := stats[0]
+	if s.ID != 0 {
+		t.Errorf("ID = %d, want 0", s.ID)
+	}
+	if s.MemTotalMB != 24560 {
+		t.Errorf("MemTotalMB = %d, want 24560", s.MemTotalMB)
+	}
+	if s.MemUsedMB != 22353 {
+		t.Errorf("MemUsedMB = %d, want 22353", s.MemUsedMB)
+	}
+	if s.GpuUtilPct != 98 {
+		t.Errorf("GpuUtilPct = %v, want 98", s.GpuUtilPct)
+	}
+	if s.TempC != 61 {
+		t.Errorf("TempC = %d, want 61 (millidegrees converted)", s.TempC)
+	}
+	if s.PowerDrawW != 250 {
+		t.Errorf("PowerDrawW = %v, want 250 (microwatts converted)", s.PowerDrawW)
+	}
+	if s.MemUtilPct < 90 || s.MemUtilPct > 92 {
+		t.Errorf("MemUtilPct = %v, want ~91", s.MemUtilPct)
+	}
+	if s.Timestamp.IsZero() {
+		t.Error("Timestamp should be set")
+	}
+}
+
+func TestReadSysfsGpuStats_NoCards(t *testing.T) {
+	if stats := readSysfsGpuStats(t.TempDir()); len(stats) != 0 {
+		t.Fatalf("expected no stats from empty root, got %d", len(stats))
+	}
+}

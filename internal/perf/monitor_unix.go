@@ -480,6 +480,18 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 	}
 	const pollTimeout = 5 * time.Second
 
+	// The resolved path may be a wrapper around a moved or uninstalled ROCm
+	// (seen in the wild: wrapper hardcoding a stale version dir, exit 127).
+	// Verify it actually answers before claiming this source — otherwise the
+	// poll loop below fails silently forever and the sysfs fallback is never
+	// reached.
+	checkCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+	out, err := exec.CommandContext(checkCtx, smi, "--alldevices").CombinedOutput()
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("rocm-smi check failed: %s: %w", string(out), err)
+	}
+
 	ch := make(chan []GpuStat, 1)
 
 	go func() {
@@ -620,8 +632,98 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 	return result
 }
 
+// trySysfs reads amdgpu counters straight from /sys/class/drm — the kernel
+// driver publishes VRAM, busy%, temperature and power for every card with no
+// ROCm userland at all. Last in the chain: it is the source that cannot be
+// broken by a moved/upgraded toolchain.
 func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	return nil, ErrNotImplemented
+	if stats := readSysfsGpuStats("/sys/class/drm"); len(stats) == 0 {
+		return nil, ErrNoGpuTool
+	}
+	if every < time.Second {
+		every = time.Second
+	}
+
+	ch := make(chan []GpuStat, 1)
+
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if stats := readSysfsGpuStats("/sys/class/drm"); len(stats) > 0 {
+					select {
+					case ch <- stats:
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+func sysfsReadUint(path string) (uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// readSysfsGpuStats scans <root>/card*/device for amdgpu VRAM counters.
+// root is parameterized for tests; production callers pass /sys/class/drm.
+func readSysfsGpuStats(root string) []GpuStat {
+	matches, _ := filepath.Glob(filepath.Join(root, "card[0-9]*", "device", "mem_info_vram_total"))
+	var stats []GpuStat
+	for _, m := range matches {
+		dev := filepath.Dir(m)
+		id := 0
+		fmt.Sscanf(filepath.Base(filepath.Dir(dev)), "card%d", &id)
+
+		total, ok := sysfsReadUint(m)
+		if !ok || total == 0 {
+			continue
+		}
+		used, _ := sysfsReadUint(filepath.Join(dev, "mem_info_vram_used"))
+
+		const toMB = 1024 * 1024
+		stat := GpuStat{
+			Timestamp:  time.Now(),
+			ID:         id,
+			Name:       fmt.Sprintf("AMD GPU card%d (sysfs)", id),
+			MemTotalMB: int(total / toMB),
+			MemUsedMB:  int(used / toMB),
+		}
+		if stat.MemTotalMB > 0 {
+			stat.MemUtilPct = float64(stat.MemUsedMB) / float64(stat.MemTotalMB) * 100
+		}
+		if busy, ok := sysfsReadUint(filepath.Join(dev, "gpu_busy_percent")); ok {
+			stat.GpuUtilPct = float64(busy)
+		}
+		// hwmon publishes millidegrees / microwatts.
+		if hw, _ := filepath.Glob(filepath.Join(dev, "hwmon", "hwmon*", "temp1_input")); len(hw) > 0 {
+			if t, ok := sysfsReadUint(hw[0]); ok {
+				stat.TempC = int(t / 1000)
+			}
+		}
+		if hw, _ := filepath.Glob(filepath.Join(dev, "hwmon", "hwmon*", "power1_average")); len(hw) > 0 {
+			if p, ok := sysfsReadUint(hw[0]); ok && p > 0 {
+				stat.PowerDrawW = float64(p) / 1e6
+			}
+		}
+		stats = append(stats, stat)
+	}
+	return stats
 }
 
 func lactSocketPath() string {
@@ -809,10 +911,6 @@ func lactGetDeviceStats(conn net.Conn, id string, name string, index int) (GpuSt
 		FanSpeedPct: fanSpeed,
 		PowerDrawW:  powerDraw,
 	}, nil
-}
-
-func readSysfs() ([]GpuStat, error) {
-	return nil, ErrNotImplemented
 }
 
 func readSysStats() (SysStat, error) {
