@@ -11,6 +11,16 @@ set -e
 # and the ROCm bin dir so tooling resolves regardless of the launch context.
 export PATH="/opt/rocm/bin:$(ls -d /opt/rocm-*/bin 2>/dev/null | head -1):/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:${PATH}"
 
+# Cap glibc's per-arena heap growth so freed pages return to the OS instead of
+# fragmenting. Long-lived llama-server processes that load/unload models or
+# offload MoE experts to system RAM otherwise creep in RSS for hours until the
+# kernel OOM-kills them (worst on small-VRAM AMD/ROCm rigs). The binary also
+# injects these per-model via the tuning engine; setting them here covers the
+# process regardless, and only when unset so an operator override still wins.
+# (ROCm PSA + data: github.com/brjen/pytorch-memory-fix)
+: "${MALLOC_MMAP_THRESHOLD_:=65536}"; export MALLOC_MMAP_THRESHOLD_
+: "${MALLOC_TRIM_THRESHOLD_:=65536}"; export MALLOC_TRIM_THRESHOLD_
+
 # Some container runtimes don't populate /etc/hosts, breaking localhost
 # resolution for the llama-server subprocess llama-skein manages.
 if ! grep -q '^127\.0\.0\.1[[:space:]]' /etc/hosts 2>/dev/null; then

@@ -711,6 +711,9 @@ type TuningMTP struct {
 
 // TuningPatchRequest Partial per-host tuning override. A set field forces that value (including disabling a recommendation); a null field resets it to the built-in recommendation. Profiles are never forced.
 type TuningPatchRequest struct {
+	// BackendEnv Toggle glibc allocator-env injection (MALLOC_* caps) on Linux llama.cpp backends. false disables it while leaving GPU flag tuning active; true or null defers to the built-in default (enabled on Linux).
+	BackendEnv *bool `json:"backend_env,omitempty"`
+
 	// Enabled Master switch for auto-injection.
 	Enabled *bool `json:"enabled,omitempty"`
 
@@ -760,6 +763,9 @@ type TuningProfilesResponse struct {
 
 // TuningStatus Effective GPU tuning for this host: detected arch, whether enabled, the resolved profile after user overrides, and per-value provenance. Profiles are recommendations the operator can override or disable.
 type TuningStatus struct {
+	// BackendEnv Effective glibc allocator env vars injected into each llama.cpp backend process on this host (e.g. MALLOC_MMAP_THRESHOLD_). Empty/absent on non-Linux hosts or when disabled. Recommended defaults, overridable per-model or via backend_env=false.
+	BackendEnv *map[string]string `json:"backend_env,omitempty"`
+
 	// DetectedGfx Empty when no known AMD GPU is detected.
 	DetectedGfx *string `json:"detected_gfx,omitempty"`
 

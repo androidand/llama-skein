@@ -897,4 +897,8 @@ type TuningConfig struct {
 	MTP       *bool    `yaml:"mtp,omitempty"`
 	ExtraArgs []string `yaml:"extra_args,omitempty"`
 	GfxTarget string   `yaml:"gfx_target,omitempty"`
+	// BackendEnv toggles injection of the glibc allocator env caps (MALLOC_*)
+	// into llama.cpp backends on Linux. nil defers to the built-in default
+	// (on); false disables just the env injection (GPU flag tuning stays on).
+	BackendEnv *bool `yaml:"backend_env,omitempty"`
 }

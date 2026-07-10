@@ -1607,6 +1607,13 @@
               "type": "string"
             },
             "description": "User-supplied flags appended at launch."
+          },
+          "backend_env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Effective glibc allocator env vars injected into each llama.cpp backend process on this host (e.g. MALLOC_MMAP_THRESHOLD_). Empty/absent on non-Linux hosts or when disabled. Recommended defaults, overridable per-model or via backend_env=false."
           }
         }
       },
@@ -1672,6 +1679,11 @@
             "type": "string",
             "nullable": true,
             "description": "Override GPU detection."
+          },
+          "backend_env": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Toggle glibc allocator-env injection (MALLOC_* caps) on Linux llama.cpp backends. false disables it while leaving GPU flag tuning active; true or null defers to the built-in default (enabled on Linux)."
           }
         }
       }

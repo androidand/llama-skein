@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/androidand/llama-skein/internal/config"
 )
 
 func boolp(b bool) *bool { return &b }
@@ -253,5 +255,98 @@ func TestIsMTPModel(t *testing.T) {
 	}
 	if IsMTPModel("llama-server --model /mtparty/plain.gguf", false) {
 		t.Error("substring 'mtp' inside another word must not match")
+	}
+}
+
+// ── backend env (glibc allocator caps) ───────────────────────────────────────
+
+func TestBackendEnv_EmbeddedParses(t *testing.T) {
+	db, _ := LoadProfiles("")
+	want := map[string]string{"MALLOC_MMAP_THRESHOLD_": "65536", "MALLOC_TRIM_THRESHOLD_": "65536"}
+	for k, v := range want {
+		if got := db.BackendEnv.LinuxGlibc[k]; got != v {
+			t.Errorf("backend_env %s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+func TestBackendEnvToInject_Resolution(t *testing.T) {
+	db, _ := LoadProfiles("")
+	cases := []struct {
+		name    string
+		isLinux bool
+		tc      *config.TuningConfig
+		wantLen int
+	}{
+		{"linux default", true, nil, 2},
+		{"non-linux is no-op", false, nil, 0},
+		{"globally disabled", true, &config.TuningConfig{Enabled: boolp(false)}, 0},
+		{"backend_env toggle off", true, &config.TuningConfig{BackendEnv: boolp(false)}, 0},
+		{"backend_env toggle on", true, &config.TuningConfig{BackendEnv: boolp(true)}, 2},
+		{"flags disabled but env stays", true, &config.TuningConfig{FlashAttn: boolp(false)}, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := db.backendEnvToInject(c.tc, c.isLinux)
+			if len(got) != c.wantLen {
+				t.Fatalf("got %d vars, want %d (%v)", len(got), c.wantLen, got)
+			}
+		})
+	}
+}
+
+func TestBackendEnvToInject_ReturnsCopy(t *testing.T) {
+	db, _ := LoadProfiles("")
+	got := db.backendEnvToInject(nil, true)
+	got["MALLOC_MMAP_THRESHOLD_"] = "mutated"
+	if db.BackendEnv.LinuxGlibc["MALLOC_MMAP_THRESHOLD_"] == "mutated" {
+		t.Error("BackendEnvFor must return a copy; the DB was mutated")
+	}
+}
+
+func TestInjectEnvDefaults(t *testing.T) {
+	defaults := map[string]string{"MALLOC_MMAP_THRESHOLD_": "65536", "MALLOC_TRIM_THRESHOLD_": "65536"}
+
+	// Empty env: both added, deterministic (sorted) order.
+	env, added := injectEnvDefaults(nil, defaults)
+	if !added || len(env) != 2 {
+		t.Fatalf("expected 2 added, got %v (added=%v)", env, added)
+	}
+	if env[0] != "MALLOC_MMAP_THRESHOLD_=65536" || env[1] != "MALLOC_TRIM_THRESHOLD_=65536" {
+		t.Errorf("unsorted/incorrect output: %v", env)
+	}
+
+	// User-set var wins: present key is not overwritten, only the other added.
+	env, added = injectEnvDefaults([]string{"MALLOC_TRIM_THRESHOLD_=131072"}, defaults)
+	if !added || len(env) != 2 {
+		t.Fatalf("expected user var kept + 1 added, got %v", env)
+	}
+	joined := strings.Join(env, " ")
+	if !strings.Contains(joined, "MALLOC_TRIM_THRESHOLD_=131072") {
+		t.Error("user MALLOC_TRIM_THRESHOLD_ override must be preserved")
+	}
+	if strings.Contains(joined, "MALLOC_TRIM_THRESHOLD_=65536") {
+		t.Error("default must not be appended when the key is already present")
+	}
+
+	// Nothing to add when all present.
+	if _, added := injectEnvDefaults([]string{"MALLOC_MMAP_THRESHOLD_=1", "MALLOC_TRIM_THRESHOLD_=1"}, defaults); added {
+		t.Error("added should be false when all keys present")
+	}
+}
+
+func TestApplyToConfig_BackendEnvAndBackendGating(t *testing.T) {
+	db, _ := LoadProfiles("")
+	envMap := db.backendEnvToInject(nil, true) // what a Linux host would inject
+
+	// Simulate the Env injection ApplyToConfig performs per llamacpp model.
+	llamaEnv, added := injectEnvDefaults([]string{"EXISTING=1"}, envMap)
+	if !added || len(llamaEnv) != 3 {
+		t.Fatalf("llamacpp model should gain 2 vars atop its own, got %v", llamaEnv)
+	}
+
+	// Global disable yields no env to inject.
+	if got := db.backendEnvToInject(&config.TuningConfig{Enabled: boolp(false)}, true); got != nil {
+		t.Errorf("tuning.enabled=false must inject no env, got %v", got)
 	}
 }

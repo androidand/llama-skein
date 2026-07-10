@@ -60,11 +60,20 @@ type UseCase struct {
 	Default     bool   `yaml:"default,omitempty"`
 }
 
+// BackendEnv holds process-environment defaults injected into backend
+// launches. LinuxGlibc is applied to llama.cpp models on Linux only: glibc
+// allocator caps that prevent RSS creep / OOM on long-lived load/unload and
+// RAM-offload servers. Recommended defaults, overridable — see BackendEnvFor.
+type BackendEnv struct {
+	LinuxGlibc map[string]string `yaml:"linux_glibc"`
+}
+
 // Database is the parsed tuning file.
 type Database struct {
-	Version  int                `yaml:"version"`
-	UseCases map[string]UseCase `yaml:"usecases"`
-	Profiles []Profile          `yaml:"profiles"`
+	Version    int                `yaml:"version"`
+	UseCases   map[string]UseCase `yaml:"usecases"`
+	BackendEnv BackendEnv         `yaml:"backend_env"`
+	Profiles   []Profile          `yaml:"profiles"`
 }
 
 // LoadProfiles parses the embedded database, then merges a user file from
@@ -99,6 +108,11 @@ func LoadProfiles(configDir string) (*Database, error) {
 func (db *Database) merge(user *Database) {
 	for name, uc := range user.UseCases {
 		db.UseCases[name] = uc
+	}
+	// A user file with a backend_env.linux_glibc map replaces the built-in
+	// allocator env wholesale (so operators can retune or empty it).
+	if user.BackendEnv.LinuxGlibc != nil {
+		db.BackendEnv.LinuxGlibc = user.BackendEnv.LinuxGlibc
 	}
 	for _, up := range user.Profiles {
 		replaced := false

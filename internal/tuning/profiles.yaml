@@ -13,6 +13,21 @@
 
 version: 1
 
+# Backend process environment applied to llama.cpp servers on Linux (glibc).
+# These cap glibc's per-arena heap growth so freed pages return to the OS
+# instead of fragmenting — preventing RSS creep / OOM on long-lived servers
+# that load/unload models or offload MoE experts to system RAM (worst on
+# small-VRAM AMD rigs). Recommended defaults, never forced: a var already set
+# in a model's `env:` wins, `tuning.backend_env: false` disables just this,
+# and `tuning.enabled: false` disables all injection. No-op on non-Linux hosts.
+# sources:
+#   - https://www.reddit.com/r/ROCm/comments/1us5gih/ (PSA, 2026)
+#   - https://github.com/brjen/pytorch-memory-fix
+backend_env:
+  linux_glibc:
+    MALLOC_MMAP_THRESHOLD_: "65536"
+    MALLOC_TRIM_THRESHOLD_: "65536"
+
 usecases:
   agentic-single:
     description: One request at a time, latency-sensitive (opencode / coding agents)

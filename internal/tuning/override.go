@@ -14,6 +14,9 @@ type Override struct {
 	MTP       *bool    `yaml:"mtp,omitempty" json:"mtp,omitempty"`
 	ExtraArgs []string `yaml:"extra_args,omitempty" json:"extra_args,omitempty"`
 	GfxTarget string   `yaml:"gfx_target,omitempty" json:"gfx_target,omitempty"`
+	// BackendEnv=false disables glibc allocator-env injection; nil defers to
+	// the default (enabled on Linux).
+	BackendEnv *bool `yaml:"backend_env,omitempty" json:"backend_env,omitempty"`
 }
 
 // Provenance labels where an effective value came from.

@@ -39,6 +39,9 @@ func (s *Server) buildTuningStatus() apicontract.TuningStatus {
 		args := append([]string(nil), eff.ExtraArgs...)
 		status.ExtraArgs = &args
 	}
+	if env := s.tuningDB.BackendEnvFor(s.tuningOverride()); len(env) > 0 {
+		status.BackendEnv = &env
+	}
 	if ok {
 		p := toAPIProfile(eff.Profile, gfx, uc)
 		status.Profile = &p
@@ -138,11 +141,12 @@ func (s *Server) handlePatchTuning(w http.ResponseWriter, r *http.Request) {
 
 func patchToConfig(req apicontract.TuningPatchRequest) *config.TuningConfig {
 	tc := &config.TuningConfig{
-		Enabled:   req.Enabled,
-		FlashAttn: req.FlashAttn,
-		Parallel:  req.Parallel,
-		MTP:       req.Mtp,
-		GfxTarget: derefStr(req.GfxTarget),
+		Enabled:    req.Enabled,
+		FlashAttn:  req.FlashAttn,
+		Parallel:   req.Parallel,
+		MTP:        req.Mtp,
+		GfxTarget:  derefStr(req.GfxTarget),
+		BackendEnv: req.BackendEnv,
 	}
 	if req.ExtraArgs != nil {
 		tc.ExtraArgs = *req.ExtraArgs
@@ -176,6 +180,9 @@ func (s *Server) writeTuningToConfig(req apicontract.TuningPatchRequest) error {
 	}
 	if req.GfxTarget != nil && *req.GfxTarget != "" {
 		yamlMapSet(entry, "gfx_target", yamlScalar(*req.GfxTarget))
+	}
+	if req.BackendEnv != nil {
+		yamlMapSet(entry, "backend_env", yamlBool(*req.BackendEnv))
 	}
 	if req.ExtraArgs != nil && len(*req.ExtraArgs) > 0 {
 		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
