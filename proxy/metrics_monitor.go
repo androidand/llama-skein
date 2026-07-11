@@ -726,12 +726,24 @@ func (w *sseBufferedWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(w.statusCode)
 	}
-	return w.body.Write(b)
+	// Keep a copy for post-response metrics, but stream each SSE chunk to the
+	// client immediately and flush — otherwise the whole response is withheld
+	// until the backend finishes, so a long reasoning generation shows as
+	// "thinking" for minutes with nothing streamed (the reason this buffered).
+	w.body.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
 }
 
 func (w *sseBufferedWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
-	w.wroteHeader = true
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.ResponseWriter.WriteHeader(statusCode)
+	}
 }
 
 func (w *sseBufferedWriter) Header() http.Header {
@@ -742,13 +754,14 @@ func (w *sseBufferedWriter) StartTime() time.Time {
 	return w.start
 }
 
-// FlushBuffer writes the buffered content to the original client.
+// FlushBuffer is a no-op: Write now streams each chunk to the client live, so
+// there is nothing left to flush at the end. Retained so the caller's existing
+// flush step stays valid, and to avoid double-writing the body to the client.
 func (w *sseBufferedWriter) FlushBuffer() error {
 	if !w.wroteHeader {
-		w.ResponseWriter.WriteHeader(w.statusCode)
+		w.WriteHeader(w.statusCode)
 	}
-	_, err := w.ResponseWriter.Write(w.body.Bytes())
-	return err
+	return nil
 }
 
 // injectUsageIfNeeded parses the buffered SSE response and injects a usage
