@@ -14,17 +14,19 @@ providers:
     - zai:glm-4.7-flash
     - openrouter:poolside/laguna-m.1:free
     - opencode-go:deepseek-v4-flash-free
+    - z4
 tiers:
     cerebras: free-cloud
-    groq: free-cloud
     gemini: free-cloud
+    groq: free-cloud
     huggingface: free-cloud
-    zai: free-cloud
-    openrouter: free-cloud
     opencode-go: free-cloud
+    openrouter: free-cloud
+    zai: free-cloud
 free_cloud_policy:
     max_calls_per_change: 20
     min_iter_gap: 1
+
 # ─── REFERENCE ──────────────────────────────────────────────────────────────
 # Every recognized .skein/config.yaml field, with defaults and valid values.
 # Uncomment and adjust any section you want to override.
@@ -48,22 +50,22 @@ free_cloud_policy:
 #     coder:
 #         - proxmox/llama_swap:coder
 #         - rocky/llama_swap:coder
-#         - mac/lmstudio:coder
+#         - m3/llamaswap:coder
 #     debugger:
-#         - mac/lmstudio:debugger
+#         - m5/llamaswap:debugger
 #         - proxmox/llama_swap:debugger
 #     analyst:
-#         - mac/lmstudio:analyst
+#         - m3/llamaswap:analyst
 #     reviewer:
-#         - mac/lmstudio:reviewer
+#         - m5/llamaswap:reviewer
 #     planner:
-#         - mac/lmstudio:architect
+#         - m3/llamaswap:architect
 #     architect:
-#         - mac/lmstudio:architect
+#         - m3/llamaswap:architect
 #     researcher:
 #         - proxmox/llama_swap:researcher
 #     publisher:
-#         - mac/lmstudio:publisher
+#         - m5/llamaswap:publisher
 #
 #     # ── Model pinning (append :<system>/<model-id>) ──────────────────────
 #     # coder:
@@ -84,34 +86,43 @@ free_cloud_policy:
 #     #     - proxmox/llama_swap:coder
 #     #     - anthropic:coder
 
+# providers: flat list restricting dispatch to selected providers.
+#   An empty list permits every provider — not recommended when cloud providers
+#   are configured, to avoid unexpected API spend.
+#   Format: "provider" | "provider:model" | "provider:model:role"
 # providers:
-#     allow:
-#         # Allowlist of provider IDs the supervisor may dispatch to.
-#         # An empty allow list ([] ) permits every provider — not recommended
-#         # when cloud providers are configured, to avoid unexpected API spend.
-#         - proxmox/llama_swap
-#         - rocky/llama_swap
-#         - mac/lmstudio
-#         # Cloud (requires credentials in opencode.json):
-#         # - anthropic
-#         # - openai
-#         # - google
-#         # - groq
-#         # - openrouter
-#         # - azure
-#         # - vertex
-#         # - bedrock
-#         # - zenmux
-#         # - copilot
-#         # - gitlab
+#     - proxmox/llama_swap
+#     - rocky/llama_swap
+#     - m3/llamaswap
+#     - m5/llamaswap
+#     # Cloud (requires credentials in opencode.json):
+#     # - anthropic
+#     # - openai
+#     # - google
+#     # - groq
+#     # - openrouter
+#     # - azure
+#     # - vertex
+#     # - bedrock
+#     # - zenmux
+#     # - copilot
+#     # - gitlab
 
 # behaviour: optional pipeline tuning
 # behaviour:
 #     auto_ideate_secs: 300       # idle seconds before auto-generating a new idea (0 = disabled)
 #     graphify_auto_update: true  # rebuild knowledge graph after code changes
-#     context_auto_tune: true     # auto-adjust per-provider context window sizes
 #     coder_validate: true        # run build+test validation inside the coder step
-#     use_native_agent: false     # DEPRECATED — native Go runner is always used; this field is ignored
+#     auto_heal_models: false     # auto-replace stale cloud model IDs at startup using live catalog suggestions
+#     max_concurrent_changes: 6        # cap simultaneously active changes (default 6)
+#     max_open_tasks_per_assignment: 12 # block changes with more unchecked tasks than this until split (default 12)
+#     max_no_progress_cycles: 2        # demote a change to blocked after this many 0-task dispatch cycles (default 2)
+#     digest_hour: 8                   # local hour (0-23) the daily Telegram digest sends at (default 8 = 08:00)
+
+# antiloop: NO_PROGRESS streak tracking, forced chain advance, and auto-block
+# on chain exhaustion for funnel stages (supervisor-outcome-robustness-antiloop)
+# antiloop:
+#     enabled: true  # default true; set false to restore pre-antiloop dispatch behaviour exactly
 
 # timing: stage timeout overrides — all values in seconds; 0 = built-in default
 # timing:
@@ -130,7 +141,7 @@ free_cloud_policy:
 #     stale_age_secs: 3600  # age before a stuck change is considered stale (default 3600)
 #     min_stuck: 1          # minimum stuck count to trigger recovery
 #     min_heal_cycles: 2    # watchdog cycles to wait before attempting recovery
-#     max_recoveries: 3     # max recovery attempts per change lifetime
+#     max_recoveries: 5     # max recovery attempts per change lifetime
 #     max_per_cycle: 1      # max recoveries triggered per watchdog cycle
 
 # log_cleanup: automatic log rotation
@@ -169,7 +180,7 @@ free_cloud_policy:
 # work_dir: /path/to/workdir
 
 # providers inventory comes from opencode catalog; configure policy via:
-#   - providers: allow/model pins
+#   - providers: flat list / model pins
 #   - chains: role routing order
 #   - agents: explicit role→provider assignments
 
@@ -192,8 +203,8 @@ free_cloud_policy:
 # agents: explicit agent-to-provider assignments (usually written by skein init)
 # agents:
 #     coder:     [proxmox/llama_swap, rocky/llama_swap]
-#     debugger:  [mac/lmstudio]
-#     analyst:   [mac/lmstudio]
+#     debugger:  [m5/llamaswap]
+#     analyst:   [m3/llamaswap]
 #     reviewer:  [proxmox/llama_swap, rocky/llama_swap]
 
 # tiers: provider cost class (local|free-cloud|paid)
