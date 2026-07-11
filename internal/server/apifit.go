@@ -216,6 +216,12 @@ func fillModelFit(mf *apicontract.ModelFit, r fit.Result) {
 	if r.VRAMTotalMB > 0 {
 		mf.VramTotalMb = ptrOf(r.VRAMTotalMB)
 	}
+	if r.UnderConfigured {
+		mf.UnderConfigured = ptrOf(true)
+	}
+	if r.MaxFitCtx > 0 {
+		mf.MaxFitCtx = ptrOf(r.MaxFitCtx)
+	}
 	mf.Reason = ptrOf(r.Reason)
 }
 

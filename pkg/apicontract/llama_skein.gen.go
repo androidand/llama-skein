@@ -107,6 +107,7 @@ const (
 	No       ModelFitFitLevel = "no"
 	Perfect  ModelFitFitLevel = "perfect"
 	Tight    ModelFitFitLevel = "tight"
+	Unknown  ModelFitFitLevel = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the ModelFitFitLevel enum.
@@ -121,6 +122,8 @@ func (e ModelFitFitLevel) Valid() bool {
 	case Perfect:
 		return true
 	case Tight:
+		return true
+	case Unknown:
 		return true
 	default:
 		return false
@@ -554,11 +557,14 @@ type ModelFit struct {
 	// EstTokensPerSec Estimated generation throughput on this host (benchmark-derived).
 	EstTokensPerSec *float32 `json:"est_tokens_per_sec,omitempty"`
 
-	// FitLevel How well the model fits this host.
+	// FitLevel How well the model fits this host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case.
 	FitLevel ModelFitFitLevel `json:"fit_level"`
 
 	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
 	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
+
+	// MaxFitCtx Largest --ctx-size (hard n_ctx) that fits this host's VRAM, capped at the trained context. The grow target for an under-configured model. 0 when VRAM is unknown.
+	MaxFitCtx *int `json:"max_fit_ctx,omitempty"`
 
 	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx, and accounts for llama-server dividing n_ctx across --parallel slots (per-request share). THIS is the number opencode/skein should trim to, not configured_ctx.
 	MaxSafeCtx int `json:"max_safe_ctx"`
@@ -578,6 +584,9 @@ type ModelFit struct {
 	// Score Per-dimension fit scores in [0,1], weighted by use-case (ported from llmfit fit.rs ScoreComponents).
 	Score *FitScore `json:"score,omitempty"`
 
+	// UnderConfigured True when a configured model's --ctx-size is materially below the context VRAM could safely hold. Signals a starved config that the fit report would otherwise hide behind the small configured_ctx.
+	UnderConfigured *bool `json:"under_configured,omitempty"`
+
 	// VramRequiredMb Estimated VRAM needed: weights + KV + compute buffers (MB).
 	VramRequiredMb *int `json:"vram_required_mb,omitempty"`
 
@@ -588,7 +597,7 @@ type ModelFit struct {
 // ModelFitBackend Inference backend.
 type ModelFitBackend string
 
-// ModelFitFitLevel How well the model fits this host.
+// ModelFitFitLevel How well the model fits this host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case.
 type ModelFitFitLevel string
 
 // ModelFitRunMode How the model would run given memory.

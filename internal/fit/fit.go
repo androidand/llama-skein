@@ -8,7 +8,11 @@
 // difference between a model fitting at 73k ctx or only 20k.
 package fit
 
-import "github.com/androidand/llama-skein/pkg/gguf"
+import (
+	"fmt"
+
+	"github.com/androidand/llama-skein/pkg/gguf"
+)
 
 // BitsPerElement returns the bits used per KV-cache element for a llama.cpp
 // cache-type flag value. Defaults to FP16 (16) for unknown/empty types, which
@@ -51,11 +55,17 @@ type Result struct {
 	ModelMB          int
 	ConfiguredCtx    int
 	MaxSafeCtx       int // the context callers should trim PROMPTS to
+	MaxFitCtx        int // largest --ctx-size (hard n_ctx) that fits VRAM; the grow target for an under-configured model. 0 when VRAM is unknown.
 	KVMBAtMaxSafeCtx int
 	VRAMRequiredMB   int
 	VRAMTotalMB      int
-	FitLevel         string // perfect | good | tight | marginal | no
+	FitLevel         string // perfect | good | tight | marginal | no | unknown
 	Reason           string
+	// UnderConfigured is true when a configured model's --ctx-size is materially
+	// below the context VRAM could safely hold (achievable ceiling). It surfaces
+	// a starved config that would otherwise be invisible — the fit report echoes
+	// the tiny configured_ctx and nothing signals the model is under-sized.
+	UnderConfigured bool
 }
 
 const (
@@ -71,6 +81,10 @@ const (
 	promptMarginFrac     = 0.92
 	defaultOutputReserve = 4096
 	mib                  = 1024 * 1024
+	// underConfigFrac flags a configured model as under-configured when its
+	// --ctx-size sits below this fraction of the VRAM-achievable ceiling. Matches
+	// skein's ctx-fit sweep grow threshold so the two agree on what "starved" is.
+	underConfigFrac = 0.8
 )
 
 // ModelShape is the backend-neutral set of dimensions the fit math needs. It
@@ -203,7 +217,11 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	// computing against a zero budget (which yields a nonsensical "exceeds
 	// VRAM" with a huge max_safe_ctx).
 	if p.VRAMTotalMB <= 0 && p.VRAMFreeMB <= 0 {
-		res.FitLevel = "no"
+		// Unknowable, not unfittable: report "unknown" (max_safe stays 0) rather
+		// than "no", so callers don't confuse "VRAM telemetry warming up" with
+		// "model doesn't fit" and don't trust a max_safe_ctx computed against a
+		// budget we never had.
+		res.FitLevel = "unknown"
 		res.Reason = "host VRAM not yet available (performance monitor warming up)"
 		return res
 	}
@@ -285,6 +303,34 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	if configured && res.FitLevel == "no" {
 		res.FitLevel = "marginal"
 		res.Reason = "runs at the configured context; VRAM estimate exceeds budget (architecture not fully modeled or memory offloaded)"
+	}
+
+	// A model that does not fit has no usable prompt budget: never advertise a
+	// max_safe_ctx computed from a hard ctx the host can't honor (this is what
+	// emitted max_safe_ctx≈237k alongside fit_level:"no"). Only unconfigured
+	// models can still be "no" here — the configured safety net above rescues
+	// deployed ones to "marginal".
+	if res.FitLevel == "no" {
+		res.MaxSafeCtx = 0
+		res.KVMBAtMaxSafeCtx = 0
+	}
+
+	// The largest hard ctx that fits VRAM, capped at the trained context — the
+	// grow target skein's sweep patches an under-configured model up to. 0 when
+	// VRAM is unknown (vramMaxCtx == 0), so the sweep knows not to grow blindly.
+	if vramMaxCtx > 0 {
+		res.MaxFitCtx = vramMaxCtx
+		if g.TrainedCtx > 0 && res.MaxFitCtx > int(g.TrainedCtx) {
+			res.MaxFitCtx = int(g.TrainedCtx)
+		}
+	}
+
+	// Flag a configured model whose --ctx-size is materially below what VRAM
+	// could hold, so the starved config is visible (skein's ctx-fit sweep grows
+	// it; the model-load path warns). MaxFitCtx is the VRAM-achievable ceiling.
+	if configured && res.MaxFitCtx > 0 && p.ConfiguredCtx < int(float64(res.MaxFitCtx)*underConfigFrac) {
+		res.UnderConfigured = true
+		res.Reason = fmt.Sprintf("%s; configured ctx %d is well below the ~%d this host could hold", res.Reason, p.ConfiguredCtx, res.MaxFitCtx)
 	}
 	return res
 }

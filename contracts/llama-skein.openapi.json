@@ -1410,9 +1410,18 @@
               "good",
               "tight",
               "marginal",
-              "no"
+              "no",
+              "unknown"
             ],
-            "description": "How well the model fits this host."
+            "description": "How well the model fits this host. \"unknown\" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case."
+          },
+          "under_configured": {
+            "type": "boolean",
+            "description": "True when a configured model's --ctx-size is materially below the context VRAM could safely hold. Signals a starved config that the fit report would otherwise hide behind the small configured_ctx."
+          },
+          "max_fit_ctx": {
+            "type": "integer",
+            "description": "Largest --ctx-size (hard n_ctx) that fits this host's VRAM, capped at the trained context. The grow target for an under-configured model. 0 when VRAM is unknown."
           },
           "run_mode": {
             "type": "string",

@@ -114,6 +114,61 @@ func TestAnalyze_InsufficientMetadata(t *testing.T) {
 	}
 }
 
+// VRAM telemetry not yet available is "unknown" (can't tell), not "no" (doesn't
+// fit); max_safe_ctx must be 0 so callers don't trust a budget with no basis.
+func TestAnalyze_VRAMUnavailable_ReportsUnknown(t *testing.T) {
+	g := &gguf.GGUF{LayerCount: 48, HeadCount: 32, HeadCountKV: 8, EmbeddingLength: 4096,
+		ParamCount: 18_000_000_000, FileSize: 19_000_000_000}
+	res := Analyze(g, Params{ConfiguredCtx: 32768}) // no VRAMTotalMB/VRAMFreeMB
+	if res.FitLevel != "unknown" {
+		t.Errorf("expected fit=unknown when VRAM unavailable, got %q", res.FitLevel)
+	}
+	if res.MaxSafeCtx != 0 {
+		t.Errorf("max_safe_ctx must be 0 when fit is unknown, got %d", res.MaxSafeCtx)
+	}
+}
+
+// Regression: an UNCONFIGURED model whose native context can't fit VRAM used to
+// emit a huge max_safe_ctx (~237k) alongside fit_level:"no". A non-fitting model
+// has no usable prompt budget — max_safe_ctx must be 0.
+func TestAnalyze_NoFit_ClampsMaxSafeToZero(t *testing.T) {
+	g := &gguf.GGUF{LayerCount: 48, HeadCount: 32, HeadCountKV: 8, EmbeddingLength: 4096,
+		ContextLength: 262144, FileSize: 30_000 * 1024 * 1024} // ~30GB weights
+	res := Analyze(g, Params{VRAMTotalMB: 24576}) // ConfiguredCtx 0 (unconfigured), weights > VRAM
+	if res.FitLevel != "no" {
+		t.Fatalf("expected fit=no (weights exceed VRAM), got %q: %s", res.FitLevel, res.Reason)
+	}
+	if res.MaxSafeCtx != 0 {
+		t.Errorf("max_safe_ctx must be 0 when fit=no, got %d", res.MaxSafeCtx)
+	}
+}
+
+// A configured model pinned far below the VRAM-achievable ceiling is flagged
+// under_configured (the z4 --ctx-size 3072 on a 48GB card class); an in-range
+// config is not.
+func TestAnalyze_UnderConfigured(t *testing.T) {
+	shape := ModelShape{LayerCount: 48, EmbeddingLength: 4096, HeadCount: 32, HeadCountKV: 8,
+		WeightBytes: 8 << 30, TrainedCtx: 262144}
+	host := Params{VRAMTotalMB: 64 << 10, VRAMFreeMB: 48 << 10}
+
+	starved := host
+	starved.ConfiguredCtx = 3072
+	r := AnalyzeShape(shape, starved)
+	if !r.UnderConfigured {
+		t.Errorf("configured 3072 with a large achievable ceiling should be under_configured (fit=%s)", r.FitLevel)
+	}
+	// MaxFitCtx is the grow target skein's sweep uses; it must exceed the starved config.
+	if r.MaxFitCtx <= starved.ConfiguredCtx {
+		t.Errorf("max_fit_ctx %d must exceed the starved configured ctx %d", r.MaxFitCtx, starved.ConfiguredCtx)
+	}
+
+	roomy := host
+	roomy.ConfiguredCtx = 200000 // near the achievable ceiling
+	if r := AnalyzeShape(shape, roomy); r.UnderConfigured {
+		t.Errorf("configured near the achievable ceiling must not be under_configured")
+	}
+}
+
 // llama-server divides n_ctx across --parallel slots; max_safe_ctx must
 // reflect the per-request share while VRAM sizing keeps the full allocation.
 func TestAnalyze_ParallelSlotsDividePerRequestCtx(t *testing.T) {
