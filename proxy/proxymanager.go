@@ -1591,6 +1591,125 @@ func getPlatform() string {
 
 func (pm *ProxyManager) SetPerfMonitor(m *perf.Monitor) {
 	pm.Lock()
-	defer pm.Unlock()
 	pm.perfMonitor = m
+	pm.Unlock()
+	if m != nil {
+		pm.startWedgeWatchdog()
+	}
+}
+
+// startWedgeWatchdog launches the GPU-stall watchdog: it periodically restarts
+// a llama.cpp backend whose GPU is pinned busy while memory-controller
+// activity is ~0 (a stuck kernel) with a request in-flight past a grace floor.
+// This catches the wedge class that neither client-disconnect nor the request
+// hard-timeout would (the client stays connected and no timeout is set). It is
+// a no-op without a perf monitor, on hosts without exactly one GPU, or when a
+// GPU does not report memory-activity telemetry (so a busy GPU is never
+// mistaken for a wedge). Disable with `wedgeWatchdog: {enabled: false}`.
+func (pm *ProxyManager) startWedgeWatchdog() {
+	wd := pm.config.WedgeWatchdog
+	if wd.Enabled != nil && !*wd.Enabled {
+		return
+	}
+	grace := time.Duration(intOr(wd.GraceSecs, 60)) * time.Second
+	interval := time.Duration(intOr(wd.IntervalSecs, 10)) * time.Second
+	needSamples := intOr(wd.Samples, 3)
+	gpuMin := float64(intOr(wd.GpuBusyThreshold, 95))
+	memMax := float64(intOr(wd.MemActivityMax, 5))
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		stalls := map[string]int{} // process ID → consecutive stalled samples
+		for {
+			select {
+			case <-pm.shutdownCtx.Done():
+				return
+			case <-ticker.C:
+				pm.wedgeWatchdogTick(grace, gpuMin, memMax, needSamples, stalls)
+			}
+		}
+	}()
+}
+
+func (pm *ProxyManager) wedgeWatchdogTick(grace time.Duration, gpuMin, memMax float64, needSamples int, stalls map[string]int) {
+	pm.Lock()
+	mon := pm.perfMonitor
+	pm.Unlock()
+	if mon == nil {
+		return
+	}
+	_, gpus := mon.Current()
+	// Require exactly one GPU so a stall is unambiguously attributable.
+	if len(gpus) != 1 {
+		return
+	}
+	g := gpus[0]
+	stalled := gpuStalled(g, gpuMin, memMax)
+
+	active := map[string]bool{}
+	for _, p := range pm.runningLlamaCppProcesses() {
+		age, inFlight := p.InFlightAge()
+		if !inFlight || age < grace {
+			continue
+		}
+		active[p.ID] = true
+		if !stalled {
+			stalls[p.ID] = 0
+			continue
+		}
+		stalls[p.ID]++
+		if stalls[p.ID] >= needSamples {
+			pm.proxyLogger.Warnf("<%s> wedge watchdog: GPU %.0f%% busy / %.0f%% mem-activity with a request in-flight %s across %d samples — restarting wedged backend",
+				p.ID, g.GpuUtilPct, g.MemActivityPct, age.Round(time.Second), stalls[p.ID])
+			p.StopImmediately()
+			delete(stalls, p.ID)
+		}
+	}
+	for id := range stalls {
+		if !active[id] {
+			delete(stalls, id)
+		}
+	}
+}
+
+// gpuStalled reports the wedge signature: the GPU is pinned busy while its
+// memory controller is idle. Requires measured memory-activity telemetry
+// (MemActivityKnown) so a platform that never reports it is never treated as
+// stalled.
+func gpuStalled(g perf.GpuStat, gpuMin, memMax float64) bool {
+	return g.MemActivityKnown && g.GpuUtilPct >= gpuMin && g.MemActivityPct <= memMax
+}
+
+// runningLlamaCppProcesses returns the ready llama.cpp backends across the
+// active swap mechanism (matrix or process groups).
+func (pm *ProxyManager) runningLlamaCppProcesses() []*Process {
+	var out []*Process
+	collect := func(p *Process) {
+		if p != nil && p.CurrentState() == StateReady && p.config.IsLlamaCpp() {
+			out = append(out, p)
+		}
+	}
+	if pm.matrix != nil {
+		for _, modelID := range pm.matrix.RunningModels() {
+			if p, ok := pm.matrix.GetProcess(modelID); ok {
+				collect(p)
+			}
+		}
+		return out
+	}
+	for _, pg := range pm.processGroups {
+		for _, p := range pg.processes {
+			collect(p)
+		}
+	}
+	return out
+}
+
+// intOr returns v when positive, else fallback.
+func intOr(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }

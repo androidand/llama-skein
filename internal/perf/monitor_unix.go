@@ -710,6 +710,10 @@ func readSysfsGpuStats(root string) []GpuStat {
 		if busy, ok := sysfsReadUint(filepath.Join(dev, "gpu_busy_percent")); ok {
 			stat.GpuUtilPct = float64(busy)
 		}
+		if memBusy, ok := sysfsReadUint(filepath.Join(dev, "mem_busy_percent")); ok {
+			stat.MemActivityPct = float64(memBusy)
+			stat.MemActivityKnown = true
+		}
 		// hwmon publishes millidegrees / microwatts.
 		if hw, _ := filepath.Glob(filepath.Join(dev, "hwmon", "hwmon*", "temp1_input")); len(hw) > 0 {
 			if t, ok := sysfsReadUint(hw[0]); ok {

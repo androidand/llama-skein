@@ -120,16 +120,21 @@ type HookOnStartup struct {
 }
 
 type Config struct {
-	HealthCheckTimeout int                    `yaml:"healthCheckTimeout"`
-	LogRequests        bool                   `yaml:"logRequests"`
-	LogLevel           string                 `yaml:"logLevel"`
-	LogTimeFormat      string                 `yaml:"logTimeFormat"`
-	LogToStdout        string                 `yaml:"logToStdout"`
-	MetricsMaxInMemory int                    `yaml:"metricsMaxInMemory"`
-	CaptureBuffer      int                    `yaml:"captureBuffer"`
-	Performance        PerformanceConfig      `yaml:"performance"`
-	MemoryGuard        MemoryGuardConfig      `yaml:"memoryGuard"`
-	GlobalTTL          int                    `yaml:"globalTTL"`
+	HealthCheckTimeout int               `yaml:"healthCheckTimeout"`
+	LogRequests        bool              `yaml:"logRequests"`
+	LogLevel           string            `yaml:"logLevel"`
+	LogTimeFormat      string            `yaml:"logTimeFormat"`
+	LogToStdout        string            `yaml:"logToStdout"`
+	MetricsMaxInMemory int               `yaml:"metricsMaxInMemory"`
+	CaptureBuffer      int               `yaml:"captureBuffer"`
+	Performance        PerformanceConfig `yaml:"performance"`
+	MemoryGuard        MemoryGuardConfig `yaml:"memoryGuard"`
+	GlobalTTL          int               `yaml:"globalTTL"`
+	// MaxRequestTimeSecs is the global default hard request-time cap inherited
+	// by any model that does not set its own. 0 = no limit. See
+	// ModelConfig.MaxRequestTimeSecs.
+	MaxRequestTimeSecs int                    `yaml:"maxRequestTimeSecs"`
+	WedgeWatchdog      WedgeWatchdogConfig    `yaml:"wedgeWatchdog"`
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
 	Profiles           map[string][]string    `yaml:"profiles"`
 	Tuning             *TuningConfig          `yaml:"tuning"` /* per-host GPU tuning override */
@@ -314,6 +319,11 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	for _, modelId := range modelIds {
 		modelConfig := config.Models[modelId]
 		modelConfig.HealthCheckTimeout = config.HealthCheckTimeout
+
+		// Inherit the global request-time cap unless the model sets its own.
+		if modelConfig.MaxRequestTimeSecs == 0 && config.MaxRequestTimeSecs > 0 {
+			modelConfig.MaxRequestTimeSecs = config.MaxRequestTimeSecs
+		}
 
 		// Strip comments from command fields
 		modelConfig.Cmd = StripComments(modelConfig.Cmd)
@@ -880,6 +890,20 @@ func sanitizeEnvValueForYAML(value, varName string) (string, error) {
 	value = strings.ReplaceAll(value, `"`, `\"`)
 
 	return value, nil
+}
+
+// WedgeWatchdogConfig tunes the GPU-stall watchdog (see proxy). It restarts a
+// llama.cpp backend whose GPU is pinned busy while the memory controller is
+// idle (a stuck kernel) with a request in-flight. Zero fields take safe
+// defaults; the watchdog runs only when perf monitoring and a single GPU with
+// memory-activity telemetry are present, and is enabled unless Enabled=false.
+type WedgeWatchdogConfig struct {
+	Enabled          *bool `yaml:"enabled,omitempty"`          // nil/true = on
+	GraceSecs        int   `yaml:"graceSecs,omitempty"`        // in-flight age floor (default 60)
+	IntervalSecs     int   `yaml:"intervalSecs,omitempty"`     // sample cadence (default 10)
+	Samples          int   `yaml:"samples,omitempty"`          // consecutive stalled samples to act (default 3)
+	GpuBusyThreshold int   `yaml:"gpuBusyThreshold,omitempty"` // GPU util % floor (default 95)
+	MemActivityMax   int   `yaml:"memActivityMax,omitempty"`   // memory-activity % ceiling (default 5)
 }
 
 // TuningConfig is the per-host GPU-tuning override, persisted under the

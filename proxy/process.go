@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,6 +71,11 @@ type Process struct {
 
 	inFlightRequests      sync.WaitGroup
 	inFlightRequestsCount atomic.Int32
+	// requestActiveSince holds the UnixNano when the current continuous
+	// in-flight streak began (set on the 0→1 transition, cleared on 1→0).
+	// 0 means no request is in flight. Used by the GPU-stall watchdog to age
+	// a possibly-wedged request.
+	requestActiveSince atomic.Int64
 
 	// used to block on multiple start() calls
 	waitStarting sync.WaitGroup
@@ -88,7 +94,17 @@ type Process struct {
 }
 
 func NewProcess(ID string, healthCheckTimeout int, config config.ModelConfig, processLogger *logmon.Monitor, proxyLogger *logmon.Monitor) *Process {
+	// Match proxy concurrency to the backend's slot count so requests don't
+	// race into a slot the backend can't serve concurrently (which can deadlock
+	// a --parallel 1 llama.cpp server). Only tighten when --parallel is set
+	// explicitly — otherwise llama.cpp's implicit slot count is version-
+	// dependent, so keep the legacy default. An explicit concurrencyLimit wins.
 	concurrentLimit := 10
+	if config.IsLlamaCpp() {
+		if n, ok := parallelFromCmd(config.Cmd); ok {
+			concurrentLimit = n
+		}
+	}
 	if config.ConcurrencyLimit > 0 {
 		concurrentLimit = config.ConcurrencyLimit
 	}
@@ -686,10 +702,14 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.inFlightRequests.Add(1)
-	p.inFlightRequestsCount.Add(1)
+	if p.inFlightRequestsCount.Add(1) == 1 {
+		p.requestActiveSince.Store(time.Now().UnixNano())
+	}
 	defer func() {
 		p.setLastRequestHandled(time.Now())
-		p.inFlightRequestsCount.Add(-1)
+		if p.inFlightRequestsCount.Add(-1) == 0 {
+			p.requestActiveSince.Store(0)
+		}
 		p.inFlightRequests.Done()
 	}()
 
@@ -784,6 +804,45 @@ func (p *Process) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	totalTime := time.Since(requestBeginTime)
 	p.proxyLogger.Debugf("<%s> request %s - start: %v, total: %v",
 		p.ID, r.RequestURI, startDuration, totalTime)
+}
+
+// InFlightAge returns how long a request has been continuously in flight on
+// this process and whether one is in flight now. Used by the GPU-stall
+// watchdog to age a possibly-wedged request.
+func (p *Process) InFlightAge() (time.Duration, bool) {
+	ns := p.requestActiveSince.Load()
+	if ns == 0 || p.inFlightRequestsCount.Load() == 0 {
+		return 0, false
+	}
+	return time.Since(time.Unix(0, ns)), true
+}
+
+// parallelFromCmd extracts the llama.cpp slot count from a launch command's
+// --parallel / -np flag (bare "flag N" or "flag=N" form). Returns ok=false
+// when the flag is absent or unparseable, so the caller can keep its default
+// rather than assume a slot count llama.cpp's version-dependent implicit
+// default may not match.
+func parallelFromCmd(cmd string) (int, bool) {
+	tokens := strings.Fields(cmd)
+	for i, tok := range tokens {
+		var val string
+		switch {
+		case tok == "--parallel" || tok == "-np":
+			if i+1 < len(tokens) {
+				val = tokens[i+1]
+			}
+		case strings.HasPrefix(tok, "--parallel="):
+			val = strings.TrimPrefix(tok, "--parallel=")
+		case strings.HasPrefix(tok, "-np="):
+			val = strings.TrimPrefix(tok, "-np=")
+		}
+		if val != "" {
+			if n, err := strconv.Atoi(val); err == nil && n > 0 {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // cancelBusySlots queries the upstream llama.cpp /slots endpoint and sends a

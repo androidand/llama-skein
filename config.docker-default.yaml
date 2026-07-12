@@ -21,6 +21,15 @@
 healthCheckTimeout: 120
 logLevel: info
 
+# Global hard cap on how long a single request may run (wall clock). Inherited
+# by any model without its own maxRequestTimeSecs. If a backend wedges (e.g. a
+# GPU-kernel deadlock), the request is cancelled at this cap and the backend
+# restarted if the slot doesn't release — so a stuck model self-heals instead
+# of hanging forever. 0 = no limit. 900s (15 min) suits long agentic turns;
+# lower it if your requests are short. The GPU-stall watchdog recovers faster
+# when perf monitoring + a single GPU are present; this is the backstop.
+maxRequestTimeSecs: 900
+
 # Dedicated inference appliance: keep the model resident. ttl defaults to 0
 # (never auto-unload — the idle-unload timer is only armed for ttl > 0), so a
 # loaded model stays in VRAM until the next reload. Preload it at startup so

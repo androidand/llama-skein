@@ -86,6 +86,7 @@ func writeGpuMetrics(w http.ResponseWriter, gpus []GpuStat) {
 		{"GPU VRAM temperature in Celsius", "llamaswap_gpu_vram_temperature_celsius", func(g GpuStat) float64 { return float64(g.VramTempC) }},
 		{"GPU utilization percent (0-100)", "llamaswap_gpu_util_percent", func(g GpuStat) float64 { return g.GpuUtilPct }},
 		{"GPU memory utilization percent (0-100)", "llamaswap_gpu_memory_util_percent", func(g GpuStat) float64 { return g.MemUtilPct }},
+		{"GPU memory-controller activity percent (0-100)", "llamaswap_gpu_memory_activity_percent", func(g GpuStat) float64 { return g.MemActivityPct }},
 		{"GPU memory used in bytes", "llamaswap_gpu_memory_used_bytes", func(g GpuStat) float64 { return float64(g.MemUsedMB) * float64(mbToBytes) }},
 		{"GPU memory total in bytes", "llamaswap_gpu_memory_total_bytes", func(g GpuStat) float64 { return float64(g.MemTotalMB) * float64(mbToBytes) }},
 		{"GPU fan speed percent (0-100)", "llamaswap_gpu_fan_speed_percent", func(g GpuStat) float64 { return g.FanSpeedPct }},

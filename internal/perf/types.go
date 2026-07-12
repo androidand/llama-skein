@@ -5,17 +5,27 @@ import "time"
 type GpuStat struct {
 	Timestamp time.Time `json:"timestamp"`
 
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	UUID        string  `json:"uuid"`
-	TempC       int     `json:"temp_c"`
-	VramTempC   int     `json:"vram_temp_c"`
-	GpuUtilPct  float64 `json:"gpu_util_pct"`
-	MemUtilPct  float64 `json:"mem_util_pct"`
-	MemUsedMB   int     `json:"mem_used_mb"`
-	MemTotalMB  int     `json:"mem_total_mb"`
-	FanSpeedPct float64 `json:"fan_speed_pct"`
-	PowerDrawW  float64 `json:"power_draw_w"`
+	ID         int     `json:"id"`
+	Name       string  `json:"name"`
+	UUID       string  `json:"uuid"`
+	TempC      int     `json:"temp_c"`
+	VramTempC  int     `json:"vram_temp_c"`
+	GpuUtilPct float64 `json:"gpu_util_pct"`
+	MemUtilPct float64 `json:"mem_util_pct"`
+	// MemActivityPct is the memory-controller busy percentage (amdgpu sysfs
+	// mem_busy_percent), distinct from MemUtilPct (VRAM used %). A productive
+	// memory-bound decode keeps this high; a wedged GPU kernel spins with
+	// GpuUtilPct high but MemActivityPct ~0. 0 when the platform lacks it.
+	MemActivityPct float64 `json:"mem_activity_pct"`
+	// MemActivityKnown is true only when MemActivityPct was actually measured
+	// (amdgpu sysfs). Consumers that would act on a low value (the wedge
+	// watchdog) MUST check this, so a platform that never reports the metric
+	// is not mistaken for a stalled GPU.
+	MemActivityKnown bool    `json:"mem_activity_known,omitempty"`
+	MemUsedMB        int     `json:"mem_used_mb"`
+	MemTotalMB       int     `json:"mem_total_mb"`
+	FanSpeedPct      float64 `json:"fan_speed_pct"`
+	PowerDrawW       float64 `json:"power_draw_w"`
 }
 
 type NetIOStat struct {
