@@ -56,6 +56,13 @@ type Server struct {
 	// the perf snapshot, too costly per request). Cleared on config reload.
 	maxSafeCtxCache sync.Map // map[string]int
 
+	// unfittable records models the fit guard determined cannot fit this host's
+	// memory even at a minimal context (weights exceed memory). Populated once
+	// in New (clampModelsToFit) before serving; read-only afterward. The load
+	// gate refuses these and preload skips them, so an oversized model can't
+	// OOM-crash the host. nil until New runs.
+	unfittable map[string]string // real model id → refusal reason
+
 	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
 	// every poll from every client. Dies with the Server on config reload.
@@ -144,28 +151,7 @@ type BuildInfo struct {
 }
 
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
-	var local router.LocalRouter
-	var err error
-
-	if cfg.Matrix != nil {
-		local, err = router.NewMatrix(cfg, proxylog, upstreamlog)
-		if err != nil {
-			return nil, fmt.Errorf("creating matrix router: %w", err)
-		}
-	} else {
-		local, err = router.NewGroup(cfg, proxylog, upstreamlog)
-		if err != nil {
-			return nil, fmt.Errorf("creating group router: %w", err)
-		}
-	}
-
-	peer, err := router.NewPeer(cfg, proxylog)
-	if err != nil {
-		return nil, fmt.Errorf("creating peer router: %w", err)
-	}
-
 	silentMgr := thermal.NewManager()
-
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:         cfg,
@@ -177,11 +163,36 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
 		silentMode:  silentMgr,
 		build:       build,
-		local:       local,
-		peer:        peer,
 		shutdownCtx: shutdownCtx,
 		shutdownFn:  shutdownFn,
 	}
+
+	// Fit guard (proactive half): shrink over-large contexts and flag models
+	// whose weights exceed host memory BEFORE the router captures per-model
+	// configs and before preload runs — so an oversized model can't OOM-crash
+	// the host. Uses s.cfg + s.perf; mutates s.cfg.Models. Fails open.
+	s.clampModelsToFit()
+
+	var local router.LocalRouter
+	var err error
+	if s.cfg.Matrix != nil {
+		local, err = router.NewMatrix(s.cfg, proxylog, upstreamlog)
+		if err != nil {
+			return nil, fmt.Errorf("creating matrix router: %w", err)
+		}
+	} else {
+		local, err = router.NewGroup(s.cfg, proxylog, upstreamlog)
+		if err != nil {
+			return nil, fmt.Errorf("creating group router: %w", err)
+		}
+	}
+
+	peer, err := router.NewPeer(s.cfg, proxylog)
+	if err != nil {
+		return nil, fmt.Errorf("creating peer router: %w", err)
+	}
+	s.local = local
+	s.peer = peer
 
 	if sched := cfg.SilentMode.Schedule; sched != "" {
 		pct := cfg.SilentMode.PowerLimitPct
@@ -251,6 +262,7 @@ func (s *Server) routes() {
 	modelChain := chain.New(
 		authMW,
 		CreateConcurrencyMiddleware(s.cfg),
+		s.CreateLoadFitGateMiddleware(),
 		s.CreatePromptGuardMiddleware(),
 		filterMW,
 		formFilterMW,

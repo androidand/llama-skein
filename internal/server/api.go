@@ -191,6 +191,12 @@ func (s *Server) startPreload() {
 				s.proxylog.Warnf("preload: model %s is not a local model, skipping", modelID)
 				continue
 			}
+			// Fit guard: never preload a model that can't fit host memory —
+			// preload bypasses the HTTP load gate and would OOM-crash the host.
+			if reason, refuse := s.modelLoadRefusal(modelID); refuse {
+				s.proxylog.Warnf("preload: skipping model %s — %s", modelID, reason)
+				continue
+			}
 			s.proxylog.Infof("preloading model: %s", modelID)
 
 			req, err := http.NewRequestWithContext(s.shutdownCtx, http.MethodGet, "/", nil)
