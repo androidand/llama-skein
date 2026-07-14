@@ -29,6 +29,12 @@ type handlerReq struct {
 	ctx        context.Context
 	respond    chan handlerResp
 	positionCh chan int
+
+	// queuedAt is set when this request is parked in baseRouter's queued
+	// slice (handleRequest cases 4/5) — the moment it started waiting behind
+	// something else. expireStaleQueued uses it to bound that wait. Zero for
+	// a request that was never queued.
+	queuedAt time.Time
 }
 
 type handlerResp struct {
@@ -104,7 +110,19 @@ type baseRouter struct {
 	// events are intentionally NOT signalled here so test event counts
 	// remain stable.
 	testProcessed chan struct{}
+
+	// queueScanInterval is how often run() checks the queue for entries that
+	// have exceeded config.SwapQueueTimeoutSecs. Defaults to
+	// defaultQueueScanInterval; tests override it. The actual bound/decision
+	// logic lives in expireStaleQueued, which tests call directly rather than
+	// waiting on this ticker.
+	queueScanInterval time.Duration
 }
+
+// defaultQueueScanInterval is how often run() scans the queue for stale
+// entries when queueScanInterval is unset. Coarser than the swap-queue
+// timeout itself matters little — see expireStaleQueued.
+const defaultQueueScanInterval = time.Second
 
 func newBaseRouter(name string, conf config.Config, processes map[string]process.Process, planner swapPlanner, logger *logmon.Monitor) *baseRouter {
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
@@ -141,6 +159,14 @@ func (b *baseRouter) run() {
 	inFlight := make(map[string]int)
 	var queued []handlerReq
 
+	swapQueueTimeout := time.Duration(b.config.SwapQueueTimeoutSecs) * time.Second
+	scanInterval := b.queueScanInterval
+	if scanInterval <= 0 {
+		scanInterval = defaultQueueScanInterval
+	}
+	ticker := time.NewTicker(scanInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case req := <-b.shutdownCh:
@@ -161,6 +187,12 @@ func (b *baseRouter) run() {
 
 		case ev := <-b.serveDoneCh:
 			b.handleServeDone(ev, active, inFlight, &queued)
+
+		case now := <-ticker.C:
+			// Intentionally does not call notifyProcessed(): this is a
+			// time-driven tick, not a request/event tests synchronize on (same
+			// reasoning as serveDoneCh above).
+			b.expireStaleQueued(now, swapQueueTimeout, active, &queued)
 		}
 	}
 }
@@ -279,6 +311,7 @@ func (b *baseRouter) handleRequest(req handlerReq, active map[string]*activeSwap
 	// (4) Collision with an in-flight swap — queue.
 	if collidesWith(req.model, evict, active) {
 		b.logger.Debugf("%s: queuing request for model %s (collides with in-flight swap)", b.name, req.model)
+		req.queuedAt = time.Now()
 		*queued = append(*queued, req)
 		b.broadcastQueuePositions(*queued)
 		return
@@ -287,6 +320,7 @@ func (b *baseRouter) handleRequest(req handlerReq, active map[string]*activeSwap
 	// (5) Would evict a busy process — queue until it drains.
 	if conflictsWithInFlight(evict, inFlight) {
 		b.logger.Debugf("%s: queuing request for model %s (would evict in-flight process)", b.name, req.model)
+		req.queuedAt = time.Now()
 		*queued = append(*queued, req)
 		b.broadcastQueuePositions(*queued)
 		return
@@ -375,6 +409,45 @@ func (b *baseRouter) drainQueue(active map[string]*activeSwap, inFlight map[stri
 	}
 	*queued = remaining
 	b.broadcastQueuePositions(*queued)
+}
+
+// expireStaleQueued bounds how long a request may wait behind a busy sibling.
+// The router never interrupts a busy process to satisfy a competing model
+// request — cases 4/5 in handleRequest queue instead of evicting — which is
+// correct: killing an in-flight generation to load something else would be
+// worse. But an unbounded queue means a caller waits forever if what it's
+// queued behind never finishes (wedged rather than merely busy), with no
+// feedback. Called on every tick of run()'s scan ticker; now is the tick's
+// timestamp (not time.Now(), so this stays a pure, directly testable
+// function). timeout <= 0 disables the bound entirely (legacy behavior).
+func (b *baseRouter) expireStaleQueued(now time.Time, timeout time.Duration, active map[string]*activeSwap, queued *[]handlerReq) {
+	if timeout <= 0 || len(*queued) == 0 {
+		return
+	}
+	pending := *queued
+	var remaining []handlerReq
+	for _, req := range pending {
+		if now.Sub(req.queuedAt) < timeout {
+			remaining = append(remaining, req)
+			continue
+		}
+		evict := b.planner.EvictionFor(req.model, activeTargets(active, req.model))
+		waited := now.Sub(req.queuedAt)
+		b.logger.Warnf("%s: model %s queued for %v without becoming available (blocked by %v) — refusing", b.name, req.model, waited, evict)
+		b.grant(req, handlerResp{err: swapQueueTimeoutError(req.model, evict, waited)})
+	}
+	*queued = remaining
+	b.broadcastQueuePositions(*queued)
+}
+
+// swapQueueTimeoutError builds the client-facing error for expireStaleQueued,
+// naming which model(s) it was waiting on so the message is actionable.
+func swapQueueTimeoutError(model string, blockedBy []string, waited time.Duration) error {
+	waited = waited.Round(time.Second)
+	if len(blockedBy) == 0 {
+		return fmt.Errorf("model %q could not be loaded after waiting %v: %w", model, waited, ErrSwapQueueTimeout)
+	}
+	return fmt.Errorf("model %q could not be loaded after waiting %v for %v to become available: %w", model, waited, blockedBy, ErrSwapQueueTimeout)
 }
 
 // broadcastQueuePositions sends each queued request its current 1-indexed

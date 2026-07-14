@@ -30,6 +30,15 @@ logLevel: info
 # when perf monitoring + a single GPU are present; this is the backstop.
 maxRequestTimeSecs: 900
 
+# How long a request for one model waits behind a busy sibling that must be
+# evicted first (single-model-at-a-time groups) before being refused with a
+# clear error instead of queued indefinitely. The router never interrupts a
+# busy generation to load something else — it queues — but an unbounded queue
+# means switching models hangs with zero feedback if what it's queued behind
+# is wedged rather than merely busy. Defaults to 10 even if omitted here; set
+# to 0 to restore unbounded queueing.
+# swapQueueTimeoutSecs: 10
+
 # Dedicated inference appliance: keep the model resident. ttl defaults to 0
 # (never auto-unload — the idle-unload timer is only armed for ttl > 0), so a
 # loaded model stays in VRAM until the next reload. Preload it at startup so

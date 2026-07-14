@@ -45,6 +45,12 @@ var (
 	ErrNoPeerModelFound  = fmt.Errorf("peer model not found")
 	ErrNoLocalModelFound = fmt.Errorf("local model not found")
 
+	// ErrSwapQueueTimeout reports that a request waited behind a busy sibling
+	// model (one that must be evicted before this one can start) longer than
+	// swapQueueTimeoutSecs without it becoming available. See baseRouter's
+	// expireStaleQueued.
+	ErrSwapQueueTimeout = fmt.Errorf("timed out waiting for a busy model to become available")
+
 	ContextKey = &contextkey{"context"}
 )
 
@@ -193,6 +199,8 @@ func SendError(w http.ResponseWriter, r *http.Request, err error) {
 		SendResponse(w, r, http.StatusNotFound, "no local server found for requested model")
 	case errors.Is(err, ErrNoRouterFound):
 		SendResponse(w, r, http.StatusNotFound, "no router for requested model")
+	case errors.Is(err, ErrSwapQueueTimeout):
+		SendResponse(w, r, http.StatusServiceUnavailable, err.Error())
 	default:
 		SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("unspecific error: %v", err))
 	}

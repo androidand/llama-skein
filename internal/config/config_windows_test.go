@@ -220,9 +220,10 @@ groups:
 				HealthCheckTimeout: 15,
 			},
 		},
-		HealthCheckTimeout: 15,
-		MetricsMaxInMemory: 1000,
-		CaptureBuffer:      5,
+		HealthCheckTimeout:   15,
+		MetricsMaxInMemory:   1000,
+		CaptureBuffer:        5,
+		SwapQueueTimeoutSecs: 10,
 		Performance: PerformanceConfig{
 			Every: 5 * time.Second,
 		},

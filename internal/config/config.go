@@ -133,12 +133,20 @@ type Config struct {
 	// MaxRequestTimeSecs is the global default hard request-time cap inherited
 	// by any model that does not set its own. 0 = no limit. See
 	// ModelConfig.MaxRequestTimeSecs.
-	MaxRequestTimeSecs int                    `yaml:"maxRequestTimeSecs"`
-	WedgeWatchdog      WedgeWatchdogConfig    `yaml:"wedgeWatchdog"`
-	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
-	Profiles           map[string][]string    `yaml:"profiles"`
-	Tuning             *TuningConfig          `yaml:"tuning"` /* per-host GPU tuning override */
-	Groups             map[string]GroupConfig `yaml:"groups"` /* key is group ID */
+	MaxRequestTimeSecs int                 `yaml:"maxRequestTimeSecs"`
+	WedgeWatchdog      WedgeWatchdogConfig `yaml:"wedgeWatchdog"`
+	// SwapQueueTimeoutSecs bounds how long a request for a not-yet-ready model
+	// will wait behind a busy sibling that must first be evicted (same
+	// exclusive group). The router never interrupts a busy process — it
+	// queues instead — but an unbounded queue means a caller waits forever if
+	// what it's queued behind never finishes (e.g. wedged). After this many
+	// seconds the queued request is refused with a clear error instead of left
+	// waiting. Default 10; 0 disables the bound (legacy unbounded queueing).
+	SwapQueueTimeoutSecs int                    `yaml:"swapQueueTimeoutSecs"`
+	Models               map[string]ModelConfig `yaml:"models"` /* key is model ID */
+	Profiles             map[string][]string    `yaml:"profiles"`
+	Tuning               *TuningConfig          `yaml:"tuning"` /* per-host GPU tuning override */
+	Groups               map[string]GroupConfig `yaml:"groups"` /* key is group ID */
 
 	// swap matrix: solver-based alternative to groups
 	Matrix *MatrixConfig `yaml:"matrix"`
@@ -240,14 +248,15 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 	// Unmarshal into full Config with defaults
 	config := Config{
-		HealthCheckTimeout: 120,
-		StartPort:          5800,
-		LogLevel:           "info",
-		LogTimeFormat:      "",
-		LogToStdout:        LogToStdoutProxy,
-		MetricsMaxInMemory: 1000,
-		CaptureBuffer:      5,
-		GlobalTTL:          0,
+		HealthCheckTimeout:   120,
+		StartPort:            5800,
+		LogLevel:             "info",
+		LogTimeFormat:        "",
+		LogToStdout:          LogToStdoutProxy,
+		MetricsMaxInMemory:   1000,
+		CaptureBuffer:        5,
+		GlobalTTL:            0,
+		SwapQueueTimeoutSecs: 10,
 	}
 	if err = yaml.Unmarshal([]byte(yamlStr), &config); err != nil {
 		return Config{}, err
