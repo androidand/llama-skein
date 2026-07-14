@@ -4,10 +4,54 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/logmon"
 )
+
+// TestKillProcess_BoundedWaitOnUnreapableProcess is a regression for the z4
+// wedge: killProcess's final wait for cmdDone (after SIGKILL) had no timeout.
+// SIGKILL cannot interrupt a process blocked in an uninterruptible
+// kernel-level wait (e.g. a GPU driver ioctl stuck behind a livelocked compute
+// kernel), so if the OS never reaps the process, that wait — which runs
+// inside the model's single in-order control loop — hung forever, freezing
+// every future operation (start, stop, health checks) on that model. This
+// simulates "the OS never reaps it" via a cmdDone channel that is never
+// closed, and asserts killProcess gives up within its configured grace period
+// instead of blocking indefinitely.
+func TestKillProcess_BoundedWaitOnUnreapableProcess(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{Cmd: "irrelevant"}, logger, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p.postKillGrace = 30 * time.Millisecond
+
+	cmdDone := make(chan struct{}) // deliberately never closed
+	cancelled := false
+	cancel := func() { cancelled = true }
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		p.killProcess(nil, cancel, cmdDone, 5*time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		elapsed := time.Since(start)
+		if elapsed > time.Second {
+			t.Errorf("killProcess took %v to give up — expected it to return promptly after its bounded grace period", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("killProcess blocked indefinitely waiting for an OS process that will never be reaped — the exact z4 wedge-recovery regression")
+	}
+	if !cancelled {
+		t.Error("killProcess must always call cancel(), even when giving up on cmdDone")
+	}
+}
 
 func TestShouldRecoverWedge(t *testing.T) {
 	cases := []struct {

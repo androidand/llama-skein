@@ -35,6 +35,21 @@ var ErrStartAborted = fmt.Errorf("aborted")
 // the stop request, and stays independent of the caller's graceful timeout.
 const cmdWaitDelay = 10 * time.Second
 
+// defaultPostKillGrace bounds how long killProcess waits for the OS to reap a
+// process after SIGKILL before giving up. SIGKILL cannot interrupt a process
+// blocked in an uninterruptible kernel-level wait — e.g. a GPU driver ioctl
+// stuck behind a livelocked compute kernel — so without a bound, waiting for
+// that exit can hang indefinitely. Because this wait runs inside the
+// process's single in-order control loop (run()), an unbounded hang here
+// freezes EVERY future operation on that model (start, stop, health checks)
+// until the OS eventually reaps it — there is otherwise no bounded worst case
+// for recovery. If the grace period elapses, killProcess gives up and
+// returns; the process is abandoned (its cmd.Wait() goroutine keeps running
+// and will still close cmdDone whenever the OS does reap it). Should the
+// model be started again before that happens, reclaimStalePort force-kills
+// whatever still holds its port, independent of this abandoned wait.
+const defaultPostKillGrace = 15 * time.Second
+
 // parentCancelGraceTimeout is the graceful timeout used when the process is
 // torn down because parentCtx was cancelled (final router teardown or app
 // shutdown). In the normal flow the process has already been stopped via
@@ -106,6 +121,11 @@ type ProcessCommand struct {
 	probeInterval time.Duration
 	probeTimeout  time.Duration
 
+	// postKillGrace bounds killProcess's post-SIGKILL wait. Defaults to
+	// postKillGrace (the package constant); tests override it to something
+	// small so the giving-up path doesn't dominate their runtime.
+	postKillGrace time.Duration
+
 	// skipPortReclaim disables the pre-start stale-orphan port reclaim. Set by
 	// tests, where the proxy target is a separate mock server on the proxy port
 	// (in production the model's own upstream binds it), so reclaiming would
@@ -168,6 +188,7 @@ func New(
 		waitDelay:     cmdWaitDelay,
 		probeInterval: inferenceProbeInterval,
 		probeTimeout:  inferenceProbeTimeout,
+		postKillGrace: defaultPostKillGrace,
 	}
 	if conf.Backend == config.BackendMLX {
 		p.serializeSlot = make(chan struct{}, 1)
@@ -828,7 +849,21 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 		// ignored or outlived the graceful signal is force-terminated too.
 		_ = killProcessTree(cmd)
 	}
-	<-cmdDone
+
+	// Bounded wait: SIGKILL is fire-and-forget (signalProcessTree does not
+	// block on exit), and the kernel will not deliver it at all while the
+	// process is in an uninterruptible wait — exactly the state a GPU-driver
+	// livelock produces. Give up after postKillGrace rather than block this
+	// model's control loop forever; see defaultPostKillGrace's doc comment.
+	grace := p.postKillGrace
+	if grace <= 0 {
+		grace = defaultPostKillGrace
+	}
+	select {
+	case <-cmdDone:
+	case <-time.After(grace):
+		p.proxyLogger.Errorf("<%s> killProcess: process did not exit within %v of SIGKILL — abandoning the wait so this model's control loop stays responsive; the process may still be alive and will be forcibly reclaimed the next time this model's port is needed", p.id, grace)
+	}
 }
 
 func (p *ProcessCommand) ID() string {
