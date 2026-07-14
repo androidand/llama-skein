@@ -532,7 +532,10 @@ type Model struct {
 	OwnedBy        *string `json:"owned_by,omitempty"`
 
 	// Reasoning True if the model emits reasoning/thinking output (reasoning_content) before its answer. Resolved from the model config; omitted when not declared. Clients use it to enable reasoning-stream rendering.
-	Reasoning *bool   `json:"reasoning,omitempty"`
+	Reasoning *bool `json:"reasoning,omitempty"`
+
+	// SizeBytes On-disk size of the model weights in bytes: the GGUF file size for llama.cpp, or the summed safetensors size for MLX. Lets clients show a human-readable size (e.g. GB) when picking between similar quantizations. Omitted when the size can't be determined (peer models, un-resolvable path).
+	SizeBytes *int64  `json:"size_bytes,omitempty"`
 	State     *string `json:"state,omitempty"`
 }
 

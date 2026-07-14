@@ -63,6 +63,11 @@ type Server struct {
 	// OOM-crash the host. nil until New runs.
 	unfittable map[string]string // real model id → refusal reason
 
+	// modelSizeCache memoizes each model's on-disk weight size (bytes) for the
+	// /v1/models listing — a GGUF stat is cheap but MLX resolution reads the HF
+	// cache, too costly per request per model. Cleared with the Server on reload.
+	modelSizeCache sync.Map // map[string]int64
+
 	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
 	// every poll from every client. Dies with the Server on config reload.

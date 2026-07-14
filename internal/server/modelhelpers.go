@@ -32,6 +32,50 @@ func parseModelPath(cmd string) string {
 	return ""
 }
 
+// modelSizeBytes returns a model's on-disk weight size in bytes, memoized per
+// model id (cleared with the Server on reload). 0 when it can't be determined.
+func (s *Server) modelSizeBytes(id string, mc config.ModelConfig) int64 {
+	if v, ok := s.modelSizeCache.Load(id); ok {
+		return v.(int64)
+	}
+	size := computeModelSizeBytes(mc)
+	s.modelSizeCache.Store(id, size)
+	return size
+}
+
+// computeModelSizeBytes stats the model's weights: the GGUF file size for
+// llama.cpp, the summed safetensors size for MLX. 0 for unknown backends /
+// unresolvable paths.
+func computeModelSizeBytes(mc config.ModelConfig) int64 {
+	backend := mc.Backend
+	if backend == "" {
+		backend = config.BackendLlamaCpp
+	}
+	switch backend {
+	case config.BackendMLX:
+		if mc.UseModelName == "" {
+			return 0
+		}
+		shape, err := resolveMLXShape(mc.UseModelName)
+		if err != nil {
+			return 0
+		}
+		return shape.WeightBytes
+	case config.BackendLlamaCpp:
+		path := parseModelPath(mc.Cmd)
+		if path == "" {
+			return 0
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return fi.Size()
+	default:
+		return 0
+	}
+}
+
 // modelsDir returns the configured models directory, or infers it from model
 // cmds by finding the common ancestor of all model file paths.
 func (s *Server) modelsDir() string {
