@@ -7,24 +7,45 @@ import (
 )
 
 func TestGpuStalled(t *testing.T) {
-	const gpuMin, memMax = 95.0, 5.0
+	const gpuMin, memMax = 95.0, 20.0
 	cases := []struct {
 		name string
 		g    perf.GpuStat
 		want bool
 	}{
 		{"wedge: busy gpu, idle memory controller", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 2, MemActivityKnown: true}, true},
-		{"healthy decode: busy gpu, busy memory (observed ~14-56% on real z4 generations)", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 14, MemActivityKnown: true}, false},
-		{"healthy decode, high memory activity", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 56, MemActivityKnown: true}, false},
 		{"idle gpu", perf.GpuStat{GpuUtilPct: 3, MemActivityPct: 0, MemActivityKnown: true}, false},
 		{"no telemetry never counts as stalled", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 0, MemActivityKnown: false}, false},
 		{"just under gpu threshold", perf.GpuStat{GpuUtilPct: 94, MemActivityPct: 0, MemActivityKnown: true}, false},
-		{"just over mem threshold", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 6, MemActivityKnown: true}, false},
+		{"just over mem threshold", perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 21, MemActivityKnown: true}, false},
 	}
 	for _, c := range cases {
 		if got := gpuStalled(c.g, gpuMin, memMax); got != c.want {
 			t.Errorf("%s: gpuStalled = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestGpuStalled_DefaultThreshold_CatchesObservedZ4Wedge is a calibration
+// regression: the shipped default MemActivityMax=20 must classify the ACTUAL
+// wedge readings observed live on z4 (11%, 12%, 14% — confirmed repeatedly:
+// each cleared via /unload, GPU dropping to 0% immediately after) as stalled.
+// The first shipped default (5) was a naive "near zero" guess never
+// cross-checked against this data, so the watchdog sat idle through a
+// two-minute live wedge before this was caught. The one available reference
+// for genuinely healthy decode activity (56%, observed mid-generation) must
+// NOT be classified as stalled.
+func TestGpuStalled_DefaultThreshold_CatchesObservedZ4Wedge(t *testing.T) {
+	const gpuMin, defaultMemMax = 95.0, 20.0
+	for _, wedgeReading := range []float64{11, 12, 14} {
+		g := perf.GpuStat{GpuUtilPct: 100, MemActivityPct: wedgeReading, MemActivityKnown: true}
+		if !gpuStalled(g, gpuMin, defaultMemMax) {
+			t.Errorf("observed z4 wedge reading mem=%.0f%% must be classified as stalled at the default threshold", wedgeReading)
+		}
+	}
+	healthy := perf.GpuStat{GpuUtilPct: 100, MemActivityPct: 56, MemActivityKnown: true}
+	if gpuStalled(healthy, gpuMin, defaultMemMax) {
+		t.Error("observed healthy decode reading mem=56%% must NOT be classified as stalled at the default threshold")
 	}
 }
 

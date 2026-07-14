@@ -918,7 +918,14 @@ type WedgeWatchdogConfig struct {
 	IntervalSecs     int   `yaml:"intervalSecs,omitempty"`     // sample cadence (default 10)
 	Samples          int   `yaml:"samples,omitempty"`          // consecutive stalled samples to act (default 3)
 	GpuBusyThreshold int   `yaml:"gpuBusyThreshold,omitempty"` // GPU util % floor (default 95)
-	MemActivityMax   int   `yaml:"memActivityMax,omitempty"`   // memory-activity % ceiling (default 5)
+	// MemActivityMax is the memory-activity % ceiling below which a busy GPU
+	// is considered stalled (default 20). Every confirmed wedge observed live
+	// on z4 read 11-14% mem_busy_percent — NOT near zero — while a genuine
+	// decode read as high as 56%. An earlier default of 5 (a naive "near
+	// zero" guess, not cross-checked against the observed data) never
+	// triggered on the real wedge; 20 sits with margin above the observed
+	// wedge cluster and well below the observed healthy-decode reading.
+	MemActivityMax int `yaml:"memActivityMax,omitempty"`
 }
 
 // TuningConfig is the per-host GPU-tuning override, persisted under the

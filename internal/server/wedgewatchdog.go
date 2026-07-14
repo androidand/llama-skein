@@ -39,7 +39,7 @@ func (s *Server) startWedgeWatchdog() {
 	interval := time.Duration(intOr(wd.IntervalSecs, 10)) * time.Second
 	needSamples := intOr(wd.Samples, 3)
 	gpuMin := float64(intOr(wd.GpuBusyThreshold, 95))
-	memMax := float64(intOr(wd.MemActivityMax, 5))
+	memMax := float64(intOr(wd.MemActivityMax, 20))
 
 	go func() {
 		select {
