@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,14 +126,18 @@ type ProcessCommand struct {
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
 
-	// mlxSlot serializes inference against mlx_lm.server, whose
-	// ThreadingHTTPServer crashes outright when two requests arrive
-	// simultaneously (observed on 0.31.3: both connections EOF and the
-	// process exits). Capacity 1; requests QUEUE here rather than being
-	// rejected, so slow model loads do not turn into 429s. The inference
-	// probe acquires the same slot so it can never overlap a real request.
-	// Nil for non-mlx backends.
-	mlxSlot chan struct{}
+	// serializeSlot bounds concurrent inference to the backend's real slot
+	// count so requests never race into a slot the backend can't serve
+	// concurrently. For MLX it is capacity 1 — mlx_lm.server's
+	// ThreadingHTTPServer crashes outright when two requests arrive at once
+	// (observed 0.31.3: both connections EOF and the process exits). For
+	// llama.cpp it is the explicit --parallel/-np value, so two requests can't
+	// deadlock a --parallel 1 server's single GPU slot. Requests QUEUE here
+	// rather than being rejected, so a slow load or a long generation doesn't
+	// turn into a 429. The inference probe acquires the same slot so it can
+	// never overlap a real request. Nil = unbounded (llama.cpp without an
+	// explicit --parallel: slot count is version-dependent, so we don't assume).
+	serializeSlot chan struct{}
 
 	// crashMu guards crashTimes: timestamps of unexpected upstream exits
 	// within crashLoopWindow. Appended by run(), read by doStart, cleared
@@ -165,7 +170,14 @@ func New(
 		probeTimeout:  inferenceProbeTimeout,
 	}
 	if conf.Backend == config.BackendMLX {
-		p.mlxSlot = make(chan struct{}, 1)
+		p.serializeSlot = make(chan struct{}, 1)
+	} else if conf.IsLlamaCpp() {
+		// Bound llama.cpp to its explicit slot count so concurrent requests
+		// can't deadlock a --parallel 1 GPU slot. No explicit flag → unbounded
+		// (implicit slot count is version-dependent; don't assume).
+		if n, ok := parallelFromCmd(conf.Cmd); ok {
+			p.serializeSlot = make(chan struct{}, n)
+		}
 	}
 	p.state.Store(StateStopped)
 
@@ -174,6 +186,33 @@ func New(
 }
 
 func (p *ProcessCommand) Logger() *logmon.Monitor { return p.processLogger }
+
+// parallelFromCmd extracts the llama.cpp slot count from a launch command's
+// --parallel / -np flag (bare "flag N" or "flag=N"). ok is false when the flag
+// is absent or unparseable, so the caller keeps its default (unbounded) rather
+// than assuming llama.cpp's version-dependent implicit slot count.
+func parallelFromCmd(cmd string) (int, bool) {
+	tokens := strings.Fields(cmd)
+	for i, tok := range tokens {
+		var val string
+		switch {
+		case tok == "--parallel" || tok == "-np":
+			if i+1 < len(tokens) {
+				val = tokens[i+1]
+			}
+		case strings.HasPrefix(tok, "--parallel="):
+			val = strings.TrimPrefix(tok, "--parallel=")
+		case strings.HasPrefix(tok, "-np="):
+			val = strings.TrimPrefix(tok, "-np=")
+		}
+		if val != "" {
+			if n, err := strconv.Atoi(val); err == nil && n > 0 {
+				return n, true
+			}
+		}
+	}
+	return 0, false
+}
 
 // run is the single-writer goroutine that owns all mutable lifecycle state
 // (current ProcessState, the running *exec.Cmd, the active reverse-proxy
@@ -862,33 +901,52 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.lastUse.Store(time.Now().UnixNano())
 		p.inflight.Add(-1)
 	}()
-	// Serialize mlx requests: queue (honouring client disconnect) instead of
-	// rejecting, so requests parked behind a slow model load or a long
-	// generation wait their turn rather than 429ing. See mlxSlot.
-	if p.mlxSlot != nil {
+	// Serialize to the backend's slot count: queue (honouring client
+	// disconnect) instead of rejecting, so requests parked behind a slow model
+	// load or a long generation wait their turn rather than 429ing, and never
+	// race into a slot the backend can't serve concurrently. See serializeSlot.
+	if p.serializeSlot != nil {
 		select {
-		case p.mlxSlot <- struct{}{}:
-			defer func() { <-p.mlxSlot }()
+		case p.serializeSlot <- struct{}{}:
+			defer func() { <-p.serializeSlot }()
 		case <-r.Context().Done():
 			return
 		}
 	}
-	(*fn)(w, r)
 
-	// If the client disconnected mid-stream and this was the only in-flight
-	// request, cancel orphaned llama.cpp inference slots so they do not keep
-	// generating for a dead connection (and block the next request behind
-	// --parallel 1). Only llama.cpp exposes the /slots endpoint needed.
-	if p.config.IsLlamaCpp() && r.Context().Err() != nil && p.inflight.Load() <= 1 {
+	// Hard request-time cap: bound the upstream request so a wedged backend (a
+	// GPU-kernel deadlock — pinned at 100% but producing nothing) can't hang the
+	// client forever. On expiry the reverse proxy's round-trip is cancelled and
+	// its ErrorHandler returns an error to the client — real feedback instead of
+	// an infinite spinner — and the slot recovery below fires.
+	serveR := r
+	if secs := p.config.MaxRequestTimeSecs; secs > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(secs)*time.Second)
+		defer cancel()
+		serveR = r.WithContext(ctx)
+	}
+	(*fn)(w, serveR)
+
+	// If the request ended with its context cancelled — the client disconnected
+	// mid-stream OR the hard timeout fired — and this was the only in-flight
+	// request, run slot recovery: cancel orphaned llama.cpp slots and, if a slot
+	// stays wedged (cancel ignored, the GPU-kernel-deadlock signature), restart
+	// the backend so the next request reloads clean. Only llama.cpp has /slots.
+	if p.config.IsLlamaCpp() && serveR.Context().Err() != nil && p.inflight.Load() <= 1 {
 		go p.cancelBusySlots()
 	}
 }
 
-// cancelBusySlots queries the upstream llama.cpp /slots endpoint and sends a
-// cancel for every slot currently processing. Called when the downstream
-// client disconnects mid-generation so orphaned inference does not burn GPU
-// or block subsequent requests. Requires the upstream llama-server to have
-// the /slots endpoint enabled.
+// cancelBusySlots queries the upstream llama.cpp /slots endpoint and cancels
+// every slot currently processing. Called when a request ended with its
+// context cancelled (client disconnect OR the maxRequestTimeSecs hard timeout)
+// so orphaned inference does not burn GPU or block the next request. It then
+// verifies the cancel actually released the slot: a backend wedged in a GPU
+// kernel keeps the slot processing (GPU pinned) while its HTTP control plane
+// still answers — the cancel is ignored. When that happens, or when the
+// backend stops answering at all, it restarts the process so the next request
+// reloads clean instead of hanging on a wedged backend. Requires the upstream
+// llama-server to have the /slots endpoint enabled.
 func (p *ProcessCommand) cancelBusySlots() {
 	base := strings.TrimRight(p.config.Proxy, "/")
 	if base == "" {
@@ -896,40 +954,90 @@ func (p *ProcessCommand) cancelBusySlots() {
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	resp, err := client.Get(base + "/slots")
+	busy, err := p.hasProcessingSlot(base, client)
 	if err != nil {
-		p.proxyLogger.Debugf("<%s> cancelBusySlots: GET /slots: %v", p.id, err)
+		// HTTP control plane unresponsive — a hung/wedged backend. Restart so
+		// the next request gets a fresh process instead of hanging behind it.
+		p.proxyLogger.Warnf("<%s> cancelBusySlots: GET /slots failed (%v) — backend appears hung, restarting", p.id, err)
+		go p.Stop(10 * time.Second)
 		return
 	}
-	defer resp.Body.Close()
+	if !busy {
+		return
+	}
 
+	resp, err := client.Get(base + "/slots")
+	if err != nil {
+		return
+	}
 	var slots []struct {
 		ID    int `json:"id"`
 		State int `json:"state"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
-		p.proxyLogger.Debugf("<%s> cancelBusySlots: decode: %v", p.id, err)
+	dErr := json.NewDecoder(resp.Body).Decode(&slots)
+	resp.Body.Close()
+	if dErr != nil {
+		p.proxyLogger.Debugf("<%s> cancelBusySlots: decode: %v", p.id, dErr)
 		return
 	}
-
 	for _, slot := range slots {
 		if slot.State != 1 { // only cancel processing slots
 			continue
 		}
 		cancelURL := fmt.Sprintf("%s/slots/%d", base, slot.ID)
-		body := bytes.NewBufferString(`{"action":"cancel"}`)
-		req, err := http.NewRequest(http.MethodDelete, cancelURL, body)
+		req, err := http.NewRequest(http.MethodDelete, cancelURL, bytes.NewBufferString(`{"action":"cancel"}`))
 		if err != nil {
 			continue
 		}
-		cancelResp, err := client.Do(req)
-		if err != nil {
-			p.proxyLogger.Debugf("<%s> cancelBusySlots: DELETE slot %d: %v", p.id, slot.ID, err)
-			continue
+		if cancelResp, err := client.Do(req); err == nil {
+			cancelResp.Body.Close()
+			p.proxyLogger.Infof("<%s> cancelBusySlots: cancelled orphaned slot %d", p.id, slot.ID)
 		}
-		cancelResp.Body.Close()
-		p.proxyLogger.Infof("<%s> cancelBusySlots: cancelled orphaned slot %d (client disconnected)", p.id, slot.ID)
 	}
+
+	// Verify the cancel took effect. If the slot is still processing after a
+	// short grace AND no new request has taken it over, the cancel was ignored
+	// (the GPU-kernel-wedge signature) — restart rather than leave the GPU
+	// pinned on dead work indefinitely.
+	for attempt := 0; attempt < 3; attempt++ {
+		time.Sleep(2 * time.Second)
+		if p.inflight.Load() > 0 {
+			return // a new request legitimately owns a slot again
+		}
+		busy, err := p.hasProcessingSlot(base, client)
+		if err != nil {
+			p.proxyLogger.Warnf("<%s> cancelBusySlots: backend unresponsive after cancel (%v) — restarting", p.id, err)
+			go p.Stop(10 * time.Second)
+			return
+		}
+		if !busy {
+			return // cancel took effect, slot released
+		}
+	}
+	p.proxyLogger.Warnf("<%s> cancelBusySlots: slot still processing ~6s after cancel with no client — backend wedged, restarting", p.id)
+	go p.Stop(10 * time.Second)
+}
+
+// hasProcessingSlot reports whether any llama.cpp slot is in the processing
+// state (1), used to verify a slot-cancel actually released the slot.
+func (p *ProcessCommand) hasProcessingSlot(base string, client *http.Client) (bool, error) {
+	resp, err := client.Get(base + "/slots")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var slots []struct {
+		State int `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		return false, err
+	}
+	for _, s := range slots {
+		if s.State == 1 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // recordUnexpectedExit appends a crash timestamp, prunes entries older than
@@ -1011,9 +1119,9 @@ func (p *ProcessCommand) inferenceProbeLoop() {
 		// run concurrently with a real request — simultaneous requests are
 		// exactly what crashes mlx_lm.server. Slot busy means the backend is
 		// working; that answers the health question for this round.
-		if p.mlxSlot != nil {
+		if p.serializeSlot != nil {
 			select {
-			case p.mlxSlot <- struct{}{}:
+			case p.serializeSlot <- struct{}{}:
 			default:
 				failures = 0
 				continue
@@ -1023,8 +1131,8 @@ func (p *ProcessCommand) inferenceProbeLoop() {
 		ctx, cancel := context.WithTimeout(p.parentCtx, p.probeTimeout)
 		err := p.warmupModel(ctx)
 		cancel()
-		if p.mlxSlot != nil {
-			<-p.mlxSlot
+		if p.serializeSlot != nil {
+			<-p.serializeSlot
 		}
 		if p.State() != StateReady {
 			return
