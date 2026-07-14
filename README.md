@@ -163,6 +163,11 @@ Almost all configuration settings are optional and can be added one step at a ti
 
 See the [configuration documentation](docs/configuration.md) for all options.
 
+Running MLX models on Apple Silicon? See
+[Apple Silicon / MLX](docs/macos-mlx.md) for `backend: mlx` setup, the Metal
+memory ceiling (`iogpu.wired_limit_mb`) that governs what fits, and how to
+recover a host that's run low on memory.
+
 ## How does llama-skein work?
 
 When a request is made to an OpenAI compatible endpoint, llama-skein will extract the `model` value and load the appropriate server configuration to serve it. If the wrong upstream server is running, it will be replaced with the correct one. This is where the "swap" part comes in (inherited from llama-swap). The upstream server is automatically swapped to handle the request correctly.
