@@ -9,6 +9,64 @@ import (
 	"github.com/androidand/llama-skein/internal/logmon"
 )
 
+func TestShouldRecoverWedge(t *testing.T) {
+	cases := []struct {
+		name        string
+		hardCtxErr  error
+		clientErr   error
+		inflight    int64
+		wantRecover bool
+	}{
+		{
+			name:        "our own timeout fires with requests piled up behind --parallel 1 (the z4 regression)",
+			hardCtxErr:  context.DeadlineExceeded,
+			clientErr:   context.DeadlineExceeded,
+			inflight:    5, // retries/concurrent sessions queued — must NOT block recovery
+			wantRecover: true,
+		},
+		{
+			name:        "our own timeout fires with no other requests queued",
+			hardCtxErr:  context.DeadlineExceeded,
+			clientErr:   context.DeadlineExceeded,
+			inflight:    1,
+			wantRecover: true,
+		},
+		{
+			name:        "client disconnect, sole in-flight request — recover",
+			hardCtxErr:  nil,
+			clientErr:   context.Canceled,
+			inflight:    1,
+			wantRecover: true,
+		},
+		{
+			name:        "client disconnect while others are queued — do not disrupt them",
+			hardCtxErr:  nil,
+			clientErr:   context.Canceled,
+			inflight:    3,
+			wantRecover: false,
+		},
+		{
+			name:        "client disconnect cancels the shared parent context too — hardCtxErr is Canceled, not DeadlineExceeded",
+			hardCtxErr:  context.Canceled,
+			clientErr:   context.Canceled,
+			inflight:    1,
+			wantRecover: true, // falls through to the client-disconnect branch
+		},
+		{
+			name:        "request completed normally — no recovery",
+			hardCtxErr:  nil,
+			clientErr:   nil,
+			inflight:    1,
+			wantRecover: false,
+		},
+	}
+	for _, c := range cases {
+		if got := shouldRecoverWedge(c.hardCtxErr, c.clientErr, c.inflight); got != c.wantRecover {
+			t.Errorf("%s: shouldRecoverWedge = %v, want %v", c.name, got, c.wantRecover)
+		}
+	}
+}
+
 func TestParallelFromCmd(t *testing.T) {
 	cases := []struct {
 		cmd  string

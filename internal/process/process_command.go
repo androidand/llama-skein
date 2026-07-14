@@ -920,21 +920,49 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// its ErrorHandler returns an error to the client — real feedback instead of
 	// an infinite spinner — and the slot recovery below fires.
 	serveR := r
+	var hardCtx context.Context
 	if secs := p.config.MaxRequestTimeSecs; secs > 0 {
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(secs)*time.Second)
+		var cancel context.CancelFunc
+		hardCtx, cancel = context.WithTimeout(r.Context(), time.Duration(secs)*time.Second)
 		defer cancel()
-		serveR = r.WithContext(ctx)
+		serveR = r.WithContext(hardCtx)
 	}
 	(*fn)(w, serveR)
 
-	// If the request ended with its context cancelled — the client disconnected
-	// mid-stream OR the hard timeout fired — and this was the only in-flight
-	// request, run slot recovery: cancel orphaned llama.cpp slots and, if a slot
-	// stays wedged (cancel ignored, the GPU-kernel-deadlock signature), restart
-	// the backend so the next request reloads clean. Only llama.cpp has /slots.
-	if p.config.IsLlamaCpp() && serveR.Context().Err() != nil && p.inflight.Load() <= 1 {
+	var hardCtxErr error
+	if hardCtx != nil {
+		hardCtxErr = hardCtx.Err()
+	}
+	if p.config.IsLlamaCpp() && shouldRecoverWedge(hardCtxErr, r.Context().Err(), p.inflight.Load()) {
 		go p.cancelBusySlots()
 	}
+}
+
+// shouldRecoverWedge decides whether ServeHTTP should trigger slot recovery
+// after a request completes, given two distinct triggers with different
+// safety margins:
+//
+//   - Our own hard-timeout expired (hardCtxErr == DeadlineExceeded, which
+//     context.WithTimeout reports only when ITS deadline elapses, not when the
+//     parent request context is cancelled first). This is authoritative proof
+//     THIS request exceeded its configured budget, so recovery ALWAYS runs —
+//     regardless of how many other requests are queued behind it (inflight).
+//     This matters: under --parallel 1 with requests piled up (retries, or
+//     concurrent sessions — the common wedge trigger), inflight never drops to
+//     <=1 while more requests keep queueing, so gating on inflight would
+//     silently defeat the timeout for exactly the load pattern that causes
+//     wedges. If the backend is genuinely wedged every queued request is
+//     doomed anyway; if it's just slow, cancelBusySlots only cancels the one
+//     overlong slot.
+//   - The client disconnected (clientCtxErr != nil) with no timeout involved:
+//     keep the conservative inflight<=1 guard, since another client's slot may
+//     be legitimately busy and should not be disrupted for one abandoning
+//     caller.
+func shouldRecoverWedge(hardCtxErr, clientCtxErr error, inflight int64) bool {
+	if hardCtxErr == context.DeadlineExceeded {
+		return true
+	}
+	return clientCtxErr != nil && inflight <= 1
 }
 
 // cancelBusySlots queries the upstream llama.cpp /slots endpoint and cancels
