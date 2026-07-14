@@ -901,14 +901,20 @@ func sanitizeEnvValueForYAML(value, varName string) (string, error) {
 	return value, nil
 }
 
-// WedgeWatchdogConfig tunes the GPU-stall watchdog (see proxy). It restarts a
-// llama.cpp backend whose GPU is pinned busy while the memory controller is
-// idle (a stuck kernel) with a request in-flight. Zero fields take safe
-// defaults; the watchdog runs only when perf monitoring and a single GPU with
-// memory-activity telemetry are present, and is enabled unless Enabled=false.
+// WedgeWatchdogConfig tunes the GPU-stall watchdog (internal/server). It
+// restarts a llama.cpp backend whose GPU is pinned busy while the memory
+// controller is idle — a stuck compute kernel — independent of whether any
+// HTTP request is currently in flight. This is the recovery path for a wedge
+// that forms (or persists) with no active request to time out: request-scoped
+// recovery (maxRequestTimeSecs, cancelBusySlots) only ever fires as part of a
+// request's own lifecycle, so a wedge outside that window would otherwise
+// only self-heal once some future request happens to hit it and wait out its
+// own timeout. Zero fields take safe defaults; the watchdog runs only when
+// perf monitoring and a single GPU with memory-activity telemetry are
+// present, and is enabled unless Enabled=false.
 type WedgeWatchdogConfig struct {
 	Enabled          *bool `yaml:"enabled,omitempty"`          // nil/true = on
-	GraceSecs        int   `yaml:"graceSecs,omitempty"`        // in-flight age floor (default 60)
+	GraceSecs        int   `yaml:"graceSecs,omitempty"`        // seconds after server startup before evaluating (default 60)
 	IntervalSecs     int   `yaml:"intervalSecs,omitempty"`     // sample cadence (default 10)
 	Samples          int   `yaml:"samples,omitempty"`          // consecutive stalled samples to act (default 3)
 	GpuBusyThreshold int   `yaml:"gpuBusyThreshold,omitempty"` // GPU util % floor (default 95)

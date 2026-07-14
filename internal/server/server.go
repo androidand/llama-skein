@@ -217,6 +217,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.routes()
 	s.startPreload()
 	s.startMemoryGuard()
+	s.startWedgeWatchdog()
 	go s.warmModelSizes() // populate /v1/models size cache off the request path
 	return s, nil
 }

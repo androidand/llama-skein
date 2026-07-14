@@ -35,10 +35,29 @@
        force-kills whatever still holds its port on the next start attempt,
        independent of the abandoned wait. Test:
        `TestKillProcess_BoundedWaitOnUnreapableProcess`.
-- [ ] 9. Follow-up: GPU-memory-activity watchdog to catch an in-flight wedge
-       without waiting for the wall-clock cap; re-home remaining dead-`proxy`
-       safeguards; set a global `maxRequestTimeSecs` default on the hosts;
-       investigate whether two different models' processes can genuinely
-       contend for the same physical GPU during a swap (the user's own
-       hypothesis) — not confirmed this incident (process state was `ready`,
-       not `stopping`, when diagnosed) but worth a dedicated look.
+- [x] 9. GPU-stall watchdog, this time on the live path (`internal/server`,
+       reusing `config.WedgeWatchdogConfig` already defined for the earlier
+       dead-`proxy` attempt). Root gap it closes: every recovery mechanism so
+       far (`maxRequestTimeSecs`, `cancelBusySlots`) is scoped to a specific
+       request's own lifecycle — a wedge that forms after the triggering
+       request already returned, or with nothing in flight at all, sat
+       unrecovered until some *future* request happened to hit the same stuck
+       slot and wait out its own (up to 900s) timeout. The watchdog samples
+       GPU telemetry every `intervalSecs` (default 10s) independent of request
+       state; on `samples` (default 3) consecutive ticks of the wedge
+       signature (GPU busy ≥ `gpuBusyThreshold`, memory-activity ≤
+       `memActivityMax`) for a `StateReady` llama.cpp model, it calls the
+       router's `Unload` (routes through the now-bounded `Stop()`) to restart
+       it — with zero dependency on any client request. Gated on exactly one
+       GPU with measured memory-activity telemetry (fails open otherwise).
+       Tests: `TestGpuStalled` (thresholds incl. real observed z4 values:
+       14%/56% healthy vs 2% wedge), `TestWedgeWatchdogTick_ConsecutiveSamples`.
+- [ ] 10. Follow-up: re-home remaining dead-`proxy` safeguards; set a global
+       `maxRequestTimeSecs` default on the hosts; investigate whether two
+       different models' processes can genuinely contend for the same
+       physical GPU during a swap (the user's own hypothesis) — not confirmed
+       on the incidents diagnosed so far (process state was consistently
+       `ready`, not `stopping`) but worth a dedicated look; consider a
+       same-model queue-wait timeout/feedback (`serializeSlot` currently has
+       none — bounded only transitively via the holder's own
+       `maxRequestTimeSecs` + `postKillGrace`, up to ~15 min).

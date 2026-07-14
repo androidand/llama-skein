@@ -38,6 +38,24 @@
   the server MUST restart the process so the next request reloads a fresh
   backend instead of hanging on the wedged one.
 
+### Standalone GPU-stall watchdog
+
+- The server MUST run a watchdog that detects and recovers a wedged backend
+  independent of any HTTP request's lifecycle. Request-scoped recovery
+  (the request-time cap, slot-cancel-and-verify) only ever runs as part of a
+  specific request ending; a wedge that forms after its triggering request
+  already returned, or with no request in flight, would otherwise sit
+  unrecovered indefinitely.
+- On a fixed interval, for each `ready` llama.cpp model, the watchdog MUST
+  sample GPU telemetry and — when GPU utilization stays at or above a
+  configured floor while memory-controller activity stays at or below a
+  configured ceiling for a configured number of consecutive samples — restart
+  that model's backend.
+- The watchdog MUST require exactly one GPU with measured memory-activity
+  telemetry (fail open otherwise: a platform without this telemetry, or with
+  more than one GPU making a stall unattributable, must never be treated as
+  stalled). It MUST be toggleable via config and enabled by default.
+
 ### Bounded process teardown
 
 - Terminating a process (via SIGKILL, after a graceful signal did not stop it
