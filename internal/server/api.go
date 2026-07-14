@@ -65,7 +65,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if mc.Reasoning != nil {
 			rec.Reasoning = mc.Reasoning
 		}
-		if sz := s.modelSizeBytes(id, mc); sz > 0 {
+		if sz := s.modelSizeBytes(id); sz > 0 {
 			rec.SizeBytes = &sz
 		}
 		return rec

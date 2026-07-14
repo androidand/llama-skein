@@ -32,15 +32,33 @@ func parseModelPath(cmd string) string {
 	return ""
 }
 
-// modelSizeBytes returns a model's on-disk weight size in bytes, memoized per
-// model id (cleared with the Server on reload). 0 when it can't be determined.
-func (s *Server) modelSizeBytes(id string, mc config.ModelConfig) int64 {
+// modelSizeBytes returns a model's cached on-disk weight size in bytes, or 0
+// when not yet computed. It NEVER computes synchronously: sizing MLX models
+// resolves the HF cache, which — across dozens of models — made /v1/models
+// time out. warmModelSizes populates the cache in the background; until it
+// lands, size is simply omitted. Cache is cleared with the Server on reload.
+func (s *Server) modelSizeBytes(id string) int64 {
 	if v, ok := s.modelSizeCache.Load(id); ok {
 		return v.(int64)
 	}
-	size := computeModelSizeBytes(mc)
-	s.modelSizeCache.Store(id, size)
-	return size
+	return 0
+}
+
+// warmModelSizes computes every model's weight size once, in the background, so
+// the /v1/models listing only ever reads the cache. Cheap for GGUF (a stat);
+// for MLX it resolves the HF cache, hence off the request path.
+func (s *Server) warmModelSizes() {
+	for id, mc := range s.cfg.Models {
+		select {
+		case <-s.shutdownCtx.Done():
+			return
+		default:
+		}
+		if _, ok := s.modelSizeCache.Load(id); ok {
+			continue
+		}
+		s.modelSizeCache.Store(id, computeModelSizeBytes(mc))
+	}
 }
 
 // computeModelSizeBytes stats the model's weights: the GGUF file size for
