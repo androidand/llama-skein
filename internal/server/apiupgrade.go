@@ -149,61 +149,101 @@ func lemonadeGfxBucket(gfx string) (bucket string, ok bool) {
 }
 
 // resolvePrebuiltSource decides where to fetch a prebuilt llama-server build
-// from, given the AMD GPU architecture detected via sysfs (gfx == "" means
-// none was found). Deliberately NOT gated on a ROCm *dev toolchain* being
-// present (detectROCmRoot/detectROCm, which look for hipcc): that's only
-// needed to compile from source. A prebuilt binary needs zero local
-// toolchain — that's the whole point of prebuilt — and rocky is the proof:
-// it runs ROCm inference (via runtime libs borrowed from Ollama's bundle)
-// with no hipcc anywhere on the host, so gating prebuilt on detectROCm()
-// wrongly fell through to a CPU build there. gfx (from the sysfs-only
-// tuning.DetectGfx, already resolved into s.tunedGfx at startup) is the
-// correct, toolchain-independent signal for "this host has an AMD GPU".
+// from, given the host platform. Pure and unit-testable; the network I/O and
+// extraction live in upgradePrebuilt. A non-nil error means "refuse — do not
+// install anything", surfaced to the caller as the upgrade failure reason.
 //
-// When the detected GPU has a lemonade-sdk tailored bucket, that build is
-// ALWAYS preferred: lemonade-sdk/llamacpp-rocm builds RDNA3/RDNA4 with
+//   - gfx: AMD GPU architecture detected via sysfs (tuning.DetectGfx,
+//     s.tunedGfx), "" if none. Deliberately NOT gated on a ROCm *dev
+//     toolchain* being present (detectROCmRoot/detectROCm, which look for
+//     hipcc): that's only needed to compile from source. A prebuilt binary
+//     needs zero local toolchain — that's the whole point of prebuilt — and
+//     rocky is the proof: it runs ROCm inference (via runtime libs borrowed
+//     from Ollama's bundle) with no hipcc anywhere on the host.
+//   - goos/goarch: runtime.GOOS/GOARCH, for routing non-AMD hosts (macOS,
+//     future Windows) to the right official asset.
+//   - nvidiaDetected: whether nvidia-smi is present (Linux only).
+//
+// AMD GPUs ALWAYS get lemonade-sdk/llamacpp-rocm's tailored build — never a
+// silent untailored fallback. lemonade-sdk builds RDNA3/RDNA4 with
 // -DGGML_HIP_ROCWMMA_FATTN=OFF by design (see z4's wedge investigation — the
 // WMMA flash-attention kernel path is unstable on RDNA3 for large head
-// dimensions; disabling it is their deliberate, tailored configuration, not
-// a fallback). An AMD GPU whose arch lemonade-sdk doesn't publish falls back
-// to upstream llama.cpp's own generic ROCm build — which is NOT
-// arch-tailored and may carry the same instability; the note says so. No
-// detected GPU gets upstream's plain CPU build.
-func resolvePrebuiltSource(gfx string) prebuiltSource {
+// dimensions; disabling it is their deliberate, tailored configuration, not a
+// workaround). If the detected arch isn't one of their published buckets,
+// this REFUSES rather than quietly falling back to upstream's generic ROCm
+// build, which is not arch-tailored and could carry the same instability —
+// an operator should have to notice and decide, not get a silently worse
+// build.
+//
+// Non-AMD hosts use upstream ggml-org/llama.cpp's own official releases:
+// macOS gets the official macos-arm64/macos-x64 build (no lemonade-sdk
+// equivalent exists for Apple Silicon — nor is one needed, these aren't ROCm
+// hosts). An NVIDIA Linux host currently REFUSES: upstream does not publish a
+// Linux+CUDA release asset (checked directly against a live release — only
+// win-cuda-*.zip exists), so there is no tailored *or* official prebuilt to
+// select; `--method source` (with the CUDA toolkit installed) is the
+// documented path until a tailored NVIDIA source is adopted. A plain Linux
+// host with neither gets upstream's generic CPU build.
+func resolvePrebuiltSource(gfx, goos, goarch string, nvidiaDetected bool) (prebuiltSource, error) {
 	if gfx != "" {
-		if bucket, ok := lemonadeGfxBucket(gfx); ok {
-			// lemonade-sdk publishes both Windows and Ubuntu assets with the
-			// same "-rocm-<bucket>-x64.zip" suffix (e.g. "...-win-rocm-..."
-			// vs "...-ubuntu-rocm-...") — require "-ubuntu-" too, or this
-			// would pick the Windows asset just as happily.
-			suffix := fmt.Sprintf("-rocm-%s-x64.zip", bucket)
-			return prebuiltSource{
-				repo: "lemonade-sdk/llamacpp-rocm",
-				matchAsset: func(name string) bool {
-					return strings.Contains(name, "-ubuntu-") && strings.HasSuffix(name, suffix)
-				},
-				archiveFmt: "zip",
-				tailored:   true,
-				note:       fmt.Sprintf("using lemonade-sdk/llamacpp-rocm's %s-tailored build (ROCWMMA_FATTN off by design — see z4-wedge-rootcause)", bucket),
-			}
+		bucket, ok := lemonadeGfxBucket(gfx)
+		if !ok {
+			return prebuiltSource{}, fmt.Errorf(
+				"AMD GPU arch %q has no lemonade-sdk/llamacpp-rocm tailored build — refusing to install an untailored generic ROCm build. "+
+					"See lemonadeGfxBucket for the currently supported archs; add one there once lemonade-sdk publishes this arch, or use --method source", gfx)
 		}
+		// lemonade-sdk publishes both Windows and Ubuntu assets with the
+		// same "-rocm-<bucket>-x64.zip" suffix (e.g. "...-win-rocm-..." vs
+		// "...-ubuntu-rocm-...") — require "-ubuntu-" too, or this would
+		// pick the Windows asset just as happily.
+		suffix := fmt.Sprintf("-rocm-%s-x64.zip", bucket)
 		return prebuiltSource{
-			repo: "ggml-org/llama.cpp",
+			repo: "lemonade-sdk/llamacpp-rocm",
 			matchAsset: func(name string) bool {
-				return strings.Contains(name, "-bin-ubuntu-rocm-") && strings.HasSuffix(name, "-x64.tar.gz")
+				return strings.Contains(name, "-ubuntu-") && strings.HasSuffix(name, suffix)
 			},
-			archiveFmt: "tar.gz",
-			tailored:   false,
-			note:       fmt.Sprintf("no lemonade-sdk tailored build for detected GPU arch %q — falling back to upstream's generic ROCm build (NOT arch-tailored; may carry the same RDNA3/RDNA4 flash-attention instability)", gfx),
-		}
+			archiveFmt: "zip",
+			tailored:   true,
+			note:       fmt.Sprintf("using lemonade-sdk/llamacpp-rocm's %s-tailored build (ROCWMMA_FATTN off by design — see z4-wedge-rootcause)", bucket),
+		}, nil
 	}
+
+	if goos == "darwin" {
+		arch := "arm64"
+		if goarch == "386" || goarch == "amd64" {
+			arch = "x64"
+		}
+		suffix := fmt.Sprintf("-bin-macos-%s.tar.gz", arch)
+		return prebuiltSource{
+			repo:       "ggml-org/llama.cpp",
+			matchAsset: func(name string) bool { return strings.HasSuffix(name, suffix) },
+			archiveFmt: "tar.gz",
+			tailored:   false, // official upstream build; no tailored AMD-style source exists for Apple Silicon
+			note:       fmt.Sprintf("using upstream ggml-org/llama.cpp's official macOS %s build", arch),
+		}, nil
+	}
+
+	if goos == "linux" && nvidiaDetected {
+		return prebuiltSource{}, fmt.Errorf(
+			"NVIDIA GPU detected but upstream ggml-org/llama.cpp does not publish a Linux+CUDA prebuilt release (only Windows) — " +
+				"refusing to install an untailored/CPU-only build onto a GPU host. Use --method source with the CUDA toolkit installed, " +
+				"or adopt a tailored NVIDIA source here once one is chosen")
+	}
+
 	return prebuiltSource{
 		repo:       "ggml-org/llama.cpp",
 		matchAsset: func(name string) bool { return strings.HasSuffix(name, "-bin-ubuntu-x64.tar.gz") },
 		archiveFmt: "tar.gz",
 		tailored:   false,
-		note:       "CPU build (no ROCm detected)",
-	}
+		note:       "CPU build (no AMD/NVIDIA GPU detected)",
+	}, nil
+}
+
+// detectNvidia reports whether nvidia-smi is on PATH — the same lightweight
+// signal internal/perf uses for its own NVIDIA GPU telemetry path.
+func detectNvidia() bool {
+	_, err := exec.LookPath("nvidia-smi")
+	return err == nil
 }
 
 // fetchGithubRelease resolves ref ("latest" or a specific tag) to a release
@@ -387,7 +427,10 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 		}
 	}
 
-	source := resolvePrebuiltSource(s.tunedGfx)
+	source, err := resolvePrebuiltSource(s.tunedGfx, runtime.GOOS, runtime.GOARCH, detectNvidia())
+	if err != nil {
+		return err
+	}
 	s.sendUpgradeEvent(w, "source", source.note)
 
 	s.sendUpgradeEvent(w, "resolving", fmt.Sprintf("resolving %s release %s", source.repo, ref))

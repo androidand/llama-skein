@@ -35,7 +35,10 @@ func TestLemonadeGfxBucket(t *testing.T) {
 
 func TestResolvePrebuiltSource(t *testing.T) {
 	t.Run("RDNA3 gets the tailored lemonade-sdk build", func(t *testing.T) {
-		src := resolvePrebuiltSource("gfx1100")
+		src, err := resolvePrebuiltSource("gfx1100", "linux", "amd64", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if src.repo != "lemonade-sdk/llamacpp-rocm" {
 			t.Errorf("repo = %q, want lemonade-sdk/llamacpp-rocm", src.repo)
 		}
@@ -53,26 +56,63 @@ func TestResolvePrebuiltSource(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown ROCm arch falls back to upstream generic ROCm build", func(t *testing.T) {
-		src := resolvePrebuiltSource("gfx942")
-		if src.repo != "ggml-org/llama.cpp" {
-			t.Errorf("repo = %q, want ggml-org/llama.cpp", src.repo)
+	t.Run("RDNA4 gets the tailored lemonade-sdk build (proxmox's arch)", func(t *testing.T) {
+		src, err := resolvePrebuiltSource("gfx1201", "linux", "amd64", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if src.tailored {
-			t.Error("expected tailored=false for the generic ROCm fallback")
-		}
-		if !src.matchAsset("llama-b10032-bin-ubuntu-rocm-7.2-x64.tar.gz") {
-			t.Error("matchAsset should accept upstream's real observed ROCm asset name, tolerating ROCm version drift")
-		}
-		if src.matchAsset("llama-b10032-bin-ubuntu-x64.tar.gz") {
-			t.Error("matchAsset must not accept the plain CPU asset")
+		if src.repo != "lemonade-sdk/llamacpp-rocm" || !src.tailored {
+			t.Errorf("unexpected source for gfx1201: %+v", src)
 		}
 	})
 
-	t.Run("no ROCm gets the plain CPU build", func(t *testing.T) {
-		src := resolvePrebuiltSource("")
+	t.Run("AMD arch with no lemonade-sdk bucket REFUSES rather than falling back untailored", func(t *testing.T) {
+		_, err := resolvePrebuiltSource("gfx942", "linux", "amd64", false)
+		if err == nil {
+			t.Fatal("expected a refusal error for an AMD arch lemonade-sdk doesn't publish, got nil")
+		}
+	})
+
+	t.Run("macOS gets upstream's official arm64 build", func(t *testing.T) {
+		src, err := resolvePrebuiltSource("", "darwin", "arm64", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if src.repo != "ggml-org/llama.cpp" {
+			t.Errorf("repo = %q, want ggml-org/llama.cpp", src.repo)
+		}
+		if !src.matchAsset("llama-b10034-bin-macos-arm64.tar.gz") {
+			t.Error("matchAsset should accept the real observed macos-arm64 asset name")
+		}
+		if src.matchAsset("llama-b10034-bin-macos-x64.tar.gz") {
+			t.Error("matchAsset must not accept the Intel macOS asset for an arm64 host")
+		}
+	})
+
+	t.Run("macOS Intel gets upstream's official x64 build", func(t *testing.T) {
+		src, err := resolvePrebuiltSource("", "darwin", "amd64", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !src.matchAsset("llama-b10034-bin-macos-x64.tar.gz") {
+			t.Error("matchAsset should accept the macos-x64 asset for an Intel Mac")
+		}
+	})
+
+	t.Run("NVIDIA on Linux REFUSES — upstream publishes no Linux+CUDA release", func(t *testing.T) {
+		_, err := resolvePrebuiltSource("", "linux", "amd64", true)
+		if err == nil {
+			t.Fatal("expected a refusal error for NVIDIA-on-Linux (no tailored or official prebuilt exists), got nil")
+		}
+	})
+
+	t.Run("plain Linux host gets the CPU build", func(t *testing.T) {
+		src, err := resolvePrebuiltSource("", "linux", "amd64", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if src.repo != "ggml-org/llama.cpp" || src.tailored {
-			t.Errorf("unexpected source for no-ROCm case: %+v", src)
+			t.Errorf("unexpected source for plain Linux: %+v", src)
 		}
 		if !src.matchAsset("llama-b10032-bin-ubuntu-x64.tar.gz") {
 			t.Error("matchAsset should accept the plain CPU asset")
@@ -97,14 +137,22 @@ func TestSelectReleaseAsset(t *testing.T) {
 		{Name: "llama-b1297-ubuntu-rocm-gfx110X-x64.zip"},
 		{Name: "llama-b1297-ubuntu-rocm-gfx120X-x64.zip"},
 	}
-	src := resolvePrebuiltSource("gfx1100")
+	src, err := resolvePrebuiltSource("gfx1100", "linux", "amd64", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	got, ok := selectReleaseAsset(assets, src)
 	if !ok || got.Name != "llama-b1297-ubuntu-rocm-gfx110X-x64.zip" {
 		t.Errorf("selectReleaseAsset = (%+v, %v), want the ubuntu gfx110X asset", got, ok)
 	}
+}
 
-	if _, ok := selectReleaseAsset(assets, resolvePrebuiltSource("gfx942")); ok {
-		t.Error("selectReleaseAsset should find nothing when no asset matches")
+func TestDetectNvidia_NoPanicWhenAbsent(t *testing.T) {
+	// Just exercise the real PATH lookup — this test environment has no
+	// nvidia-smi, so the meaningful assertion is that it returns cleanly
+	// rather than panicking, and consistently returns false here.
+	if detectNvidia() {
+		t.Skip("nvidia-smi unexpectedly present in this test environment")
 	}
 }
 
