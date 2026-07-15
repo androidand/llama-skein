@@ -21,6 +21,13 @@ import (
 type upgradeRequest struct {
 	Method string `json:"method"` // "prebuilt" or "source"
 	Ref    string `json:"ref"`    // build tag like "b9200"
+	// RocwmmaFattn controls -DGGML_HIP_ROCWMMA_FATTN for a "source" build on
+	// ROCm hosts. nil = upstream default (ON on RDNA3/CDNA where available).
+	// false builds with the WMMA-based flash-attention kernel variant
+	// disabled in favor of the generic kernel — a diagnostic lever for
+	// suspected RDNA3 flash-attention instability. Ignored for non-ROCm/
+	// "prebuilt" upgrades.
+	RocwmmaFattn *bool `json:"rocwmmaFattn,omitempty"`
 }
 
 type upgradeProgressEvent struct {
@@ -58,7 +65,7 @@ func (s *Server) runUpgrade(w http.ResponseWriter, r *http.Request) {
 	case "prebuilt":
 		err = s.upgradePrebuilt(w, r, req.Ref)
 	case "source":
-		err = s.upgradeFromSource(w, r, req.Ref)
+		err = s.upgradeFromSource(w, r, req.Ref, req.RocwmmaFattn)
 	}
 
 	if err != nil {
@@ -163,7 +170,42 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 	return nil
 }
 
-func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref string) error {
+// sourceCmakeArgs builds the cmake configure argument list for a from-source
+// llama-server build, plus human-readable notes to surface as progress
+// events. Pure (no I/O) so the composition can be unit tested without
+// mocking exec/filesystem. rocmRoot == "" means no ROCm toolchain was
+// detected, so the build stays CPU/generic — gfx and rocwmmaFattn are both
+// ignored in that case since AMDGPU_TARGETS and GGML_HIP_ROCWMMA_FATTN are
+// meaningless without -DGGML_HIP=ON.
+func sourceCmakeArgs(buildDir, workspace, rocmRoot, gfx string, rocwmmaFattn *bool) (args []string, notes []string) {
+	args = []string{"-B", buildDir, "-DBUILD_SHARED_LIBS=ON", "-DLLAMA_SERVER_SSL=OFF", "-DLLAMA_BUILD_UI=OFF", "-DLLAMA_BUILD_WEBUI=OFF"}
+	if rocmRoot != "" {
+		// Tailor the build to the actual detected GPU rather than compiling
+		// for HIP's broad default target list — faster build, and ensures
+		// architecture-specific codegen (e.g. the WMMA kernels below) is for
+		// the real hardware, not a generic fallback.
+		if gfx != "" {
+			args = append(args, "-DAMDGPU_TARGETS="+gfx)
+			notes = append(notes, fmt.Sprintf("targeting detected GPU arch %s", gfx))
+		}
+		if rocwmmaFattn != nil {
+			val := "ON"
+			if !*rocwmmaFattn {
+				val = "OFF"
+			}
+			args = append(args, "-DGGML_HIP_ROCWMMA_FATTN="+val)
+			notes = append(notes, fmt.Sprintf("rocwmmaFattn override: -DGGML_HIP_ROCWMMA_FATTN=%s", val))
+		}
+		// cmake requires the real clang compiler, not the hipcc wrapper
+		amdclang := filepath.Join(rocmRoot, "bin", "amdclang++")
+		args = append(args, "-DGGML_HIP=ON", "-DCMAKE_HIP_COMPILER="+amdclang)
+		notes = append(notes, fmt.Sprintf("ROCm detected at %s — adding -DGGML_HIP=ON", rocmRoot))
+	}
+	args = append(args, workspace)
+	return args, notes
+}
+
+func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref string, rocwmmaFattn *bool) error {
 	serverPath, err := s.currentServerPath()
 	if err != nil {
 		return fmt.Errorf("determine server path: %w", err)
@@ -204,15 +246,11 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 
 	// cmake configure
 	s.sendUpgradeEvent(w, "configuring", "running cmake configure")
-	cmakeArgs := []string{"-B", buildDir, "-DBUILD_SHARED_LIBS=ON", "-DLLAMA_SERVER_SSL=OFF", "-DLLAMA_BUILD_UI=OFF", "-DLLAMA_BUILD_WEBUI=OFF"}
 	rocmRoot := s.detectROCmRoot()
-	if rocmRoot != "" {
-		// cmake requires the real clang compiler, not the hipcc wrapper
-		amdclang := filepath.Join(rocmRoot, "bin", "amdclang++")
-		cmakeArgs = append(cmakeArgs, "-DGGML_HIP=ON", "-DCMAKE_HIP_COMPILER="+amdclang)
-		s.sendUpgradeEvent(w, "rocm", fmt.Sprintf("ROCm detected at %s — adding -DGGML_HIP=ON", rocmRoot))
+	cmakeArgs, rocmNotes := sourceCmakeArgs(buildDir, workspace, rocmRoot, s.tunedGfx, rocwmmaFattn)
+	for _, n := range rocmNotes {
+		s.sendUpgradeEvent(w, "rocm", n)
 	}
-	cmakeArgs = append(cmakeArgs, workspace)
 	cmd = exec.CommandContext(r.Context(), "cmake", cmakeArgs...)
 	// Ensure ROCm bin dir is on PATH for cmake's compiler detection
 	if rocmRoot != "" {
