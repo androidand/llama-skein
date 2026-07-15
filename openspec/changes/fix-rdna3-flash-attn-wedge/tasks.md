@@ -69,9 +69,38 @@
         (doc said `/api/skein/upgrade`, actually `/api/system/upgrade`), and
         documented the new ROCm/RDNA3-aware `prebuilt` behavior.
 
+## Fleet rollout (same day, follow-up to the above)
+
+- [x] 22. Rolled out to rocky (gfx1100/RDNA3) and proxmox (gfx1201/RDNA4) via
+        the now ROCm-aware upgrade API — each auto-resolved its own
+        lemonade-sdk bucket (`gfx110X`/`gfx120X`) with zero manual flags.
+- [x] 23. Found + fixed a real bug live during the rocky rollout:
+        `resolvePrebuiltSource` was gated on `detectROCm()` (checks for the
+        `hipcc` dev-toolchain compiler) — wrong for `prebuilt`, which needs
+        no local toolchain at all. Rocky runs ROCm inference fine via
+        runtime libs borrowed from Ollama's bundle with no `hipcc` anywhere
+        on the host, so detection silently failed and fell through to a CPU
+        build (caught by the smoke test, rolled back cleanly, no harm done).
+        Fixed (commit `fa0ff30`): resolve on the detected GPU arch
+        (`s.tunedGfx`, sysfs-only) instead. Removed the now-fully-unused
+        `detectROCm()`.
+- [x] 24. Rocky fully validated: clean upgrade, model verified working,
+        98%/68% GPU-util/mem-activity during real generation (healthy,
+        matches z4's pattern).
+- [x] 25. Proxmox: upgrade succeeded cleanly, currently-loaded MTP model
+        verified working. **Open item**: one genuine backend crash observed
+        (EOF/connection-refused, self-recovered via llama-skein's existing
+        health-check/reload) while testing concurrently with the user's own
+        live traffic. No kernel-level GPU fault in dmesg (same clean pattern
+        as z4). Not yet isolated whether this is build-specific, an
+        MTP+concurrency interaction, or unrelated — user chose to keep the
+        new build and watch rather than roll back or force more test load
+        onto a host they were actively using. See z4-wedge-rootcause memory
+        for full detail.
+
 ## Follow-ups (not done, explicitly out of scope here)
 
-- [ ] 22. Consider the same lemonade-sdk swap for rocky (same gfx1100/RDNA3
-        family) preventatively.
-- [ ] 23. Consider whether llama-skein's tuning database should stop
+- [ ] 26. Watch proxmox for a recurrence of the crash above; `.prev` backup
+        is in place if a rollback is needed.
+- [ ] 27. Consider whether llama-skein's tuning database should stop
         recommending `flash_attn: true` for gfx1100 by default.
