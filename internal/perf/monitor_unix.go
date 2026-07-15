@@ -224,6 +224,13 @@ func tryROCmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
 			}
 
+			// Memory-controller activity — distinct from VRAM-used % above;
+			// the signal that separates a real memory-bound decode from a
+			// GPU spinning on a wedged kernel (high util, ~0 activity).
+			if out, err := exec.CommandContext(ctx, smi, "--showmemuse", "--json").Output(); err == nil {
+				stats = mergeROCmStats(stats, parseROCmSmiJSON(out))
+			}
+
 			if len(stats) > 0 {
 				select {
 				case ch <- stats:
@@ -259,13 +266,15 @@ func parseROCmSmiJSON(out []byte) []GpuStat {
 
 	// Collect all card indices and their key-value maps.
 	type cardData struct {
-		idx   int
-		keys  map[string]string
-		total uint64
-		used  uint64
-		temp  float64
-		power float64
-		util  float64
+		idx              int
+		keys             map[string]string
+		total            uint64
+		used             uint64
+		temp             float64
+		power            float64
+		util             float64
+		memActivity      float64
+		memActivityKnown bool
 	}
 	cards := make(map[int]*cardData)
 
@@ -301,6 +310,15 @@ func parseROCmSmiJSON(out []byte) []GpuStat {
 				cd.util = num
 			case strings.Contains(key, "Power") && strings.Contains(key, "W"):
 				cd.power = num
+			// "GPU Memory Read/Write Activity (%)" (from --showmemuse) is the
+			// memory-controller busy percentage — distinct from the unrelated
+			// "Memory Activity" key (a different, often "N/A" metric) and
+			// "GPU Memory Allocated (VRAM%)" (VRAM used %, i.e. MemUtilPct).
+			// This is the signal that distinguishes a real memory-bound decode
+			// from a GPU spinning on a wedged kernel (high util, ~0 activity).
+			case strings.Contains(key, "Memory") && strings.Contains(key, "Read/Write") && strings.Contains(key, "Activity"):
+				cd.memActivity = num
+				cd.memActivityKnown = true
 			}
 		}
 	}
@@ -318,15 +336,17 @@ func parseROCmSmiJSON(out []byte) []GpuStat {
 			gpuUtil = memUtilPct // fallback: approximate GPU util from VRAM utilization
 		}
 		stats = append(stats, GpuStat{
-			Timestamp:  time.Now(),
-			ID:         cd.idx,
-			Name:       fmt.Sprintf("AMD GPU [%d]", cd.idx),
-			TempC:      int(cd.temp),
-			GpuUtilPct: gpuUtil,
-			MemUtilPct: memUtilPct,
-			MemUsedMB:  memUsedMB,
-			MemTotalMB: memTotalMB,
-			PowerDrawW: cd.power,
+			Timestamp:        time.Now(),
+			ID:               cd.idx,
+			Name:             fmt.Sprintf("AMD GPU [%d]", cd.idx),
+			TempC:            int(cd.temp),
+			GpuUtilPct:       gpuUtil,
+			MemUtilPct:       memUtilPct,
+			MemUsedMB:        memUsedMB,
+			MemTotalMB:       memTotalMB,
+			PowerDrawW:       cd.power,
+			MemActivityPct:   cd.memActivity,
+			MemActivityKnown: cd.memActivityKnown,
 		})
 	}
 
@@ -363,6 +383,10 @@ func mergeROCmStats(existing []GpuStat, newStats []GpuStat) []GpuStat {
 		}
 		if ns.MemUsedMB != 0 {
 			existing[i].MemUsedMB = ns.MemUsedMB
+		}
+		if ns.MemActivityKnown {
+			existing[i].MemActivityPct = ns.MemActivityPct
+			existing[i].MemActivityKnown = true
 		}
 	}
 	return existing

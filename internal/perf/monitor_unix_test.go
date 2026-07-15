@@ -28,6 +28,48 @@ func TestParseROCmSmiJSON_SetsTimestampAndValues(t *testing.T) {
 	}
 }
 
+// TestParseROCmSmiJSON_MemActivity is a regression for the wedge watchdog
+// silently never firing on z4: mem-activity fields were only wired into the
+// sysfs collector, but z4 (LACT absent, rocm-smi present) actually collects
+// via tryROCmSmi/parseROCmSmiJSON, so MemActivityKnown stayed false forever
+// and gpuStalled could never return true. Input is the real --showmemuse
+// --json output captured live from z4.
+func TestParseROCmSmiJSON_MemActivity(t *testing.T) {
+	in := []byte(`{"card0": {"GPU Memory Allocated (VRAM%)": "87", "GPU Memory Read/Write Activity (%)": "38", "Memory Activity": "N/A", "Avg. Memory Bandwidth": "0"}}`)
+
+	stats := parseROCmSmiJSON(in)
+	if len(stats) != 1 {
+		t.Fatalf("len(stats)=%d want 1", len(stats))
+	}
+	g := stats[0]
+	if !g.MemActivityKnown {
+		t.Fatal("MemActivityKnown should be true when --showmemuse reports the Read/Write Activity key")
+	}
+	if g.MemActivityPct != 38 {
+		t.Fatalf("MemActivityPct = %v, want 38 (must not be confused with the unrelated \"Memory Activity\": \"N/A\" or VRAM%% keys)", g.MemActivityPct)
+	}
+}
+
+// TestMergeROCmStats_CarriesMemActivity is a regression for mergeROCmStats
+// silently dropping the mem-activity fields when combining the separate
+// --showuse and --showmemuse query results (tryROCmSmi issues one rocm-smi
+// call per metric and merges them card-by-card).
+func TestMergeROCmStats_CarriesMemActivity(t *testing.T) {
+	existing := []GpuStat{{ID: 0, GpuUtilPct: 100}}
+	newStats := []GpuStat{{ID: 0, MemActivityPct: 12, MemActivityKnown: true}}
+
+	merged := mergeROCmStats(existing, newStats)
+	if len(merged) != 1 {
+		t.Fatalf("len(merged)=%d want 1", len(merged))
+	}
+	if !merged[0].MemActivityKnown || merged[0].MemActivityPct != 12 {
+		t.Fatalf("mergeROCmStats dropped mem-activity fields: %+v", merged[0])
+	}
+	if merged[0].GpuUtilPct != 100 {
+		t.Fatalf("mergeROCmStats must not clobber fields absent from the new sample: GpuUtilPct=%v", merged[0].GpuUtilPct)
+	}
+}
+
 // resolveTool must find a binary via absolute fallback even when PATH is empty
 // — the z4 case where the OCI-launched daemon had no PATH and GPU telemetry
 // silently vanished.
