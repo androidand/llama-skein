@@ -1,6 +1,9 @@
 package server
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -75,6 +78,22 @@ func (s *Server) runUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.sendUpgradeEvent(w, "complete", fmt.Sprintf("upgrade to %s complete", req.Ref))
 }
 
+// unloadAllModels stops every locally-running model before an upgrade swaps
+// the llama-server binary, so the new binary takes effect immediately for the
+// next request instead of an old (possibly wedged) process lingering until it
+// happens to restart on its own.
+func (s *Server) unloadAllModels(w http.ResponseWriter) {
+	if s.local == nil {
+		return
+	}
+	running := s.local.RunningModels()
+	if len(running) == 0 {
+		return
+	}
+	s.sendUpgradeEvent(w, "unloading", fmt.Sprintf("stopping %d running model(s) before upgrade", len(running)))
+	s.local.Unload(30 * time.Second)
+}
+
 func (s *Server) sendUpgradeEvent(w http.ResponseWriter, event, msg string) {
 	evt := upgradeProgressEvent{Event: event, Msg: msg}
 	b, _ := json.Marshal(evt)
@@ -83,6 +102,265 @@ func (s *Server) sendUpgradeEvent(w http.ResponseWriter, event, msg string) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// githubAsset is the subset of a GitHub release asset this file needs.
+type githubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+type githubRelease struct {
+	TagName string        `json:"tag_name"`
+	Assets  []githubAsset `json:"assets"`
+}
+
+// prebuiltSource describes where to fetch a prebuilt llama-server release
+// from and how to recognize the right asset in that release's asset list.
+// Returned by resolvePrebuiltSource (pure, unit-testable); the network I/O
+// and extraction live in upgradePrebuilt.
+type prebuiltSource struct {
+	repo       string // GitHub "owner/repo"
+	matchAsset func(name string) bool
+	archiveFmt string // "zip" or "tar.gz"
+	tailored   bool   // true when this is a build tuned for the specific detected GPU
+	note       string // human-readable explanation, surfaced as a progress event
+}
+
+// lemonadeGfxBucket maps a detected AMD gfx target to lemonade-sdk/llamacpp-rocm's
+// release asset naming (see docs/manual_instructions.md and their release asset
+// list, e.g. llama-<tag>-ubuntu-rocm-gfx110X-x64.zip). Some architectures are
+// bucketed under a wildcard-last-digit name (gfx110X covers gfx1100-gfx1103);
+// others are published under their exact name. ok is false when the arch isn't
+// one of their currently-published buckets, so callers can fall back cleanly.
+func lemonadeGfxBucket(gfx string) (bucket string, ok bool) {
+	switch gfx {
+	case "gfx1100", "gfx1101", "gfx1102", "gfx1103": // RDNA3: 7900 XTX/XT, W7900/W7800/W7700/W7600
+		return "gfx110X", true
+	case "gfx1200", "gfx1201": // RDNA4: RX 9070/9070 XT, R9700, Strix Halo
+		return "gfx120X", true
+	case "gfx1030", "gfx1031", "gfx1032", "gfx1033", "gfx1034", "gfx1035", "gfx1036": // RDNA2
+		return "gfx103X", true
+	case "gfx1150", "gfx1151", "gfx90a", "gfx908": // published under their exact name, not bucketed
+		return gfx, true
+	default:
+		return "", false
+	}
+}
+
+// resolvePrebuiltSource decides where to fetch a prebuilt llama-server build
+// from. When ROCm is present and the detected GPU has a lemonade-sdk tailored
+// bucket, that build is ALWAYS preferred: lemonade-sdk/llamacpp-rocm builds
+// RDNA3/RDNA4 with -DGGML_HIP_ROCWMMA_FATTN=OFF by design (see z4's wedge
+// investigation — the WMMA flash-attention kernel path is unstable on RDNA3
+// for large head dimensions; disabling it is their deliberate, tailored
+// configuration, not a fallback). A ROCm host whose arch lemonade-sdk doesn't
+// publish falls back to upstream llama.cpp's own generic ROCm build — which is
+// NOT arch-tailored and may carry the same instability; the note says so. A
+// non-ROCm host gets upstream's plain CPU build.
+func resolvePrebuiltSource(rocmDetected bool, gfx string) prebuiltSource {
+	if rocmDetected {
+		if bucket, ok := lemonadeGfxBucket(gfx); ok {
+			// lemonade-sdk publishes both Windows and Ubuntu assets with the
+			// same "-rocm-<bucket>-x64.zip" suffix (e.g. "...-win-rocm-..."
+			// vs "...-ubuntu-rocm-...") — require "-ubuntu-" too, or this
+			// would pick the Windows asset just as happily.
+			suffix := fmt.Sprintf("-rocm-%s-x64.zip", bucket)
+			return prebuiltSource{
+				repo: "lemonade-sdk/llamacpp-rocm",
+				matchAsset: func(name string) bool {
+					return strings.Contains(name, "-ubuntu-") && strings.HasSuffix(name, suffix)
+				},
+				archiveFmt: "zip",
+				tailored:   true,
+				note:       fmt.Sprintf("using lemonade-sdk/llamacpp-rocm's %s-tailored build (ROCWMMA_FATTN off by design — see z4-wedge-rootcause)", bucket),
+			}
+		}
+		return prebuiltSource{
+			repo: "ggml-org/llama.cpp",
+			matchAsset: func(name string) bool {
+				return strings.Contains(name, "-bin-ubuntu-rocm-") && strings.HasSuffix(name, "-x64.tar.gz")
+			},
+			archiveFmt: "tar.gz",
+			tailored:   false,
+			note:       fmt.Sprintf("no lemonade-sdk tailored build for detected GPU arch %q — falling back to upstream's generic ROCm build (NOT arch-tailored; may carry the same RDNA3/RDNA4 flash-attention instability)", gfx),
+		}
+	}
+	return prebuiltSource{
+		repo:       "ggml-org/llama.cpp",
+		matchAsset: func(name string) bool { return strings.HasSuffix(name, "-bin-ubuntu-x64.tar.gz") },
+		archiveFmt: "tar.gz",
+		tailored:   false,
+		note:       "CPU build (no ROCm detected)",
+	}
+}
+
+// fetchGithubRelease resolves ref ("latest" or a specific tag) to a release
+// and its asset list for repo.
+func fetchGithubRelease(ctx context.Context, repo, ref string) (githubRelease, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	if ref != "" && ref != "latest" {
+		url = fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, ref)
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	hreq.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(hreq)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return githubRelease{}, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	}
+	var rel githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return githubRelease{}, fmt.Errorf("decode release: %w", err)
+	}
+	return rel, nil
+}
+
+// selectReleaseAsset returns the first asset in assets matching source's
+// criteria. Separated from fetchGithubRelease so the selection logic is
+// testable against a fixed asset list without hitting the network.
+func selectReleaseAsset(assets []githubAsset, source prebuiltSource) (githubAsset, bool) {
+	for _, a := range assets {
+		if source.matchAsset(a.Name) {
+			return a, true
+		}
+	}
+	return githubAsset{}, false
+}
+
+// downloadFile streams url to destPath.
+func downloadFile(ctx context.Context, url, destPath string) error {
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+// extractArchive extracts a zip or tar.gz archive at archivePath into destDir,
+// flattening any single top-level directory the archive wraps everything in
+// (both lemonade-sdk's zips and llama.cpp's tarballs do this). Uses only the
+// standard library (archive/zip, archive/tar, compress/gzip) — no external
+// unzip/tar binary dependency, since it can't be assumed present (z4's LXC
+// shipped without one).
+func extractArchive(archivePath, destDir, format string) error {
+	switch format {
+	case "zip":
+		return extractZip(archivePath, destDir)
+	case "tar.gz":
+		return extractTarGz(archivePath, destDir)
+	default:
+		return fmt.Errorf("unknown archive format %q", format)
+	}
+}
+
+func extractZip(archivePath, destDir string) error {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if err := extractArchiveEntry(f.Name, f.FileInfo().IsDir(), f.Mode(), destDir, func() (io.ReadCloser, error) { return f.Open() }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractTarGz(archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
+			continue // skip symlinks etc.
+		}
+		entry := tr
+		if err := extractArchiveEntry(hdr.Name, hdr.Typeflag == tar.TypeDir, hdr.FileInfo().Mode(), destDir, func() (io.ReadCloser, error) { return io.NopCloser(entry), nil }); err != nil {
+			return err
+		}
+	}
+}
+
+// stripTopLevelDir removes a leading "some-dir/" component from name, if
+// present, so an archive that wraps everything in one top-level directory
+// (both lemonade-sdk's and llama.cpp's releases do this) extracts flat into
+// destDir rather than nesting an extra directory level.
+func stripTopLevelDir(name string) string {
+	if _, rest, ok := strings.Cut(name, "/"); ok {
+		return rest
+	}
+	return name
+}
+
+func extractArchiveEntry(name string, isDir bool, mode os.FileMode, destDir string, open func() (io.ReadCloser, error)) error {
+	rel := stripTopLevelDir(name)
+	if rel == "" {
+		return nil
+	}
+	target := filepath.Join(destDir, rel)
+	// Guard against a malicious/malformed archive entry escaping destDir.
+	if !strings.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		return fmt.Errorf("archive entry %q escapes destination", name)
+	}
+	if isDir {
+		return os.MkdirAll(target, 0o755)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	rc, err := open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	perm := mode.Perm()
+	if perm == 0 {
+		perm = 0o644
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, rc)
+	return err
 }
 
 func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref string) error {
@@ -98,65 +376,79 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 		}
 	}
 
-	s.sendUpgradeEvent(w, "downloading", fmt.Sprintf("fetching pre-built binary for %s", ref))
+	source := resolvePrebuiltSource(s.detectROCm(), s.tunedGfx)
+	s.sendUpgradeEvent(w, "source", source.note)
 
-	downloadURL := fmt.Sprintf("https://github.com/ggerganov/llama.cpp/releases/download/%s/llama-server", ref)
-	hreq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, downloadURL, nil)
+	s.sendUpgradeEvent(w, "resolving", fmt.Sprintf("resolving %s release %s", source.repo, ref))
+	rel, err := fetchGithubRelease(r.Context(), source.repo, ref)
 	if err != nil {
-		return fmt.Errorf("create download request: %w", err)
+		return fmt.Errorf("resolve release: %w", err)
+	}
+	asset, ok := selectReleaseAsset(rel.Assets, source)
+	if !ok {
+		return fmt.Errorf("no matching release asset found in %s release %s", source.repo, rel.TagName)
 	}
 
-	resp, err := http.DefaultClient.Do(hreq)
-	if err != nil {
-		s.sendUpgradeEvent(w, "rollback", "downloading failed — restoring backup")
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("download: %w", err)
+	workspace := filepath.Join(os.TempDir(), "llama-skein-upgrade-prebuilt")
+	if err := os.RemoveAll(workspace); err != nil {
+		return fmt.Errorf("clean workspace: %w", err)
 	}
-	defer resp.Body.Close()
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	defer os.RemoveAll(workspace)
 
-	if resp.StatusCode != http.StatusOK {
-		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("HTTP %d — restoring backup", resp.StatusCode))
+	s.sendUpgradeEvent(w, "downloading", fmt.Sprintf("fetching %s (%s)", asset.Name, rel.TagName))
+	archivePath := filepath.Join(workspace, asset.Name)
+	if err := downloadFile(r.Context(), asset.BrowserDownloadURL, archivePath); err != nil {
+		s.sendUpgradeEvent(w, "rollback", "download failed — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("download %s: %w", asset.Name, err)
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(serverPath), "llama-server-upgrade-*")
-	if err != nil {
-		s.sendUpgradeEvent(w, "rollback", "creating temp file failed — restoring backup")
+	s.sendUpgradeEvent(w, "extracting", "extracting archive")
+	extractDir := filepath.Join(workspace, "extracted")
+	if err := extractArchive(archivePath, extractDir, source.archiveFmt); err != nil {
+		s.sendUpgradeEvent(w, "rollback", "extraction failed — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("create temp: %w", err)
+		return fmt.Errorf("extract %s: %w", asset.Name, err)
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
 
-	s.sendUpgradeEvent(w, "writing", "writing downloaded binary")
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		s.sendUpgradeEvent(w, "rollback", "writing binary failed — restoring backup")
+	newServer := filepath.Join(extractDir, "llama-server")
+	if _, err := os.Stat(newServer); os.IsNotExist(err) {
+		s.sendUpgradeEvent(w, "rollback", "llama-server not found in archive — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("write binary: %w", err)
+		return fmt.Errorf("llama-server not found in extracted archive")
 	}
-	tmpFile.Close()
+	if err := os.Chmod(newServer, 0o755); err != nil {
+		return fmt.Errorf("chmod extracted binary: %w", err)
+	}
 
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
-		os.Remove(tmpPath)
-		s.sendUpgradeEvent(w, "rollback", "chmod failed — restoring backup")
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("chmod: %w", err)
+	// Copy every bundled shared library (ROCm runtime, ggml, etc.) alongside
+	// the binary. These packages are self-contained specifically so they
+	// don't depend on — or conflict with — whatever ROCm version the host
+	// already has installed.
+	libDir := filepath.Dir(serverPath)
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		return fmt.Errorf("create lib dir %s: %w", libDir, err)
 	}
+	s.sendUpgradeEvent(w, "libs", fmt.Sprintf("copying bundled shared libraries to %s", libDir))
+	if err := copySharedLibs(extractDir, libDir); err != nil {
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
+	}
+
+	s.unloadAllModels(w)
 
 	s.sendUpgradeEvent(w, "replacing", "replacing current binary")
-	if err := os.Rename(tmpPath, serverPath); err != nil {
-		os.Remove(tmpPath)
-		s.sendUpgradeEvent(w, "rollback", "rename failed — restoring backup")
+	if err := safeReplaceBinary(newServer, serverPath); err != nil {
+		s.sendUpgradeEvent(w, "rollback", "replace failed — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("rename: %w", err)
+		return fmt.Errorf("replace binary: %w", err)
 	}
 	selinuxRelabel(serverPath)
 
 	s.sendUpgradeEvent(w, "smoke-check", "running post-upgrade smoke test")
-	if err := smokeTest(serverPath, filepath.Dir(serverPath)); err != nil {
+	if err := smokeTest(serverPath, libDir); err != nil {
 		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("smoke test failed — restoring backup: %v", err))
 		s.restoreBackup(w, backupPath, serverPath)
 		return fmt.Errorf("smoke test failed: %w", err)
@@ -296,18 +588,20 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
 	}
 
+	// Unload before swapping: a running llama-server keeps its OLD binary's
+	// code mapped until it exits, so an upgrade that doesn't unload first
+	// silently leaves the old (possibly wedged) process serving until the
+	// next natural restart. safeReplaceBinary's rename is technically safe
+	// against a still-running process (ETXTBSY only hits an open-for-write),
+	// but leaving the model loaded through an upgrade is the wrong semantics.
+	s.unloadAllModels(w)
+
 	s.sendUpgradeEvent(w, "replacing", "replacing current binary")
-	if err := copyFile(newServer, serverPath); err != nil {
+	if err := safeReplaceBinary(newServer, serverPath); err != nil {
 		os.RemoveAll(workspace)
-		s.sendUpgradeEvent(w, "rollback", "copy failed — restoring backup")
+		s.sendUpgradeEvent(w, "rollback", "replace failed — restoring backup")
 		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("copy binary: %w", err)
-	}
-	if err := os.Chmod(serverPath, 0o755); err != nil {
-		os.RemoveAll(workspace)
-		s.sendUpgradeEvent(w, "rollback", "chmod failed — restoring backup")
-		s.restoreBackup(w, backupPath, serverPath)
-		return fmt.Errorf("chmod: %w", err)
+		return fmt.Errorf("replace binary: %w", err)
 	}
 	selinuxRelabel(serverPath)
 	os.RemoveAll(workspace)
@@ -410,6 +704,47 @@ func (s *Server) restoreBackup(w http.ResponseWriter, backupPath, targetPath str
 			s.sendUpgradeEvent(w, "warn", fmt.Sprintf("restore backup failed: %v", err))
 		}
 	}
+}
+
+// safeReplaceBinary installs newPath as targetPath without ever open()-for-write
+// onto a file that may currently be memory-mapped/executing. A direct copyFile
+// onto a running binary fails with ETXTBSY ("text file busy") — this hit in
+// production when upgradeFromSource copied straight onto serverPath while a
+// model was still loaded. Writing to a temp file in the SAME directory (so the
+// final rename stays on one filesystem) and renaming into place is atomic and
+// safe regardless of whether the old binary is currently running: rename only
+// repoints the directory entry, it never touches the inode a running process
+// already has open.
+func safeReplaceBinary(newPath, targetPath string) error {
+	dir := filepath.Dir(targetPath)
+	tmp, err := os.CreateTemp(dir, filepath.Base(targetPath)+".upgrade-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	src, err := os.Open(newPath)
+	if err != nil {
+		tmp.Close()
+		return fmt.Errorf("open new binary: %w", err)
+	}
+	_, copyErr := io.Copy(tmp, src)
+	src.Close()
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		return fmt.Errorf("copy to temp: %w", copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close temp: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return fmt.Errorf("rename into place: %w", err)
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {
