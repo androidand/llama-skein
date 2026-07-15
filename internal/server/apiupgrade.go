@@ -149,17 +149,28 @@ func lemonadeGfxBucket(gfx string) (bucket string, ok bool) {
 }
 
 // resolvePrebuiltSource decides where to fetch a prebuilt llama-server build
-// from. When ROCm is present and the detected GPU has a lemonade-sdk tailored
-// bucket, that build is ALWAYS preferred: lemonade-sdk/llamacpp-rocm builds
-// RDNA3/RDNA4 with -DGGML_HIP_ROCWMMA_FATTN=OFF by design (see z4's wedge
-// investigation — the WMMA flash-attention kernel path is unstable on RDNA3
-// for large head dimensions; disabling it is their deliberate, tailored
-// configuration, not a fallback). A ROCm host whose arch lemonade-sdk doesn't
-// publish falls back to upstream llama.cpp's own generic ROCm build — which is
-// NOT arch-tailored and may carry the same instability; the note says so. A
-// non-ROCm host gets upstream's plain CPU build.
-func resolvePrebuiltSource(rocmDetected bool, gfx string) prebuiltSource {
-	if rocmDetected {
+// from, given the AMD GPU architecture detected via sysfs (gfx == "" means
+// none was found). Deliberately NOT gated on a ROCm *dev toolchain* being
+// present (detectROCmRoot/detectROCm, which look for hipcc): that's only
+// needed to compile from source. A prebuilt binary needs zero local
+// toolchain — that's the whole point of prebuilt — and rocky is the proof:
+// it runs ROCm inference (via runtime libs borrowed from Ollama's bundle)
+// with no hipcc anywhere on the host, so gating prebuilt on detectROCm()
+// wrongly fell through to a CPU build there. gfx (from the sysfs-only
+// tuning.DetectGfx, already resolved into s.tunedGfx at startup) is the
+// correct, toolchain-independent signal for "this host has an AMD GPU".
+//
+// When the detected GPU has a lemonade-sdk tailored bucket, that build is
+// ALWAYS preferred: lemonade-sdk/llamacpp-rocm builds RDNA3/RDNA4 with
+// -DGGML_HIP_ROCWMMA_FATTN=OFF by design (see z4's wedge investigation — the
+// WMMA flash-attention kernel path is unstable on RDNA3 for large head
+// dimensions; disabling it is their deliberate, tailored configuration, not
+// a fallback). An AMD GPU whose arch lemonade-sdk doesn't publish falls back
+// to upstream llama.cpp's own generic ROCm build — which is NOT
+// arch-tailored and may carry the same instability; the note says so. No
+// detected GPU gets upstream's plain CPU build.
+func resolvePrebuiltSource(gfx string) prebuiltSource {
+	if gfx != "" {
 		if bucket, ok := lemonadeGfxBucket(gfx); ok {
 			// lemonade-sdk publishes both Windows and Ubuntu assets with the
 			// same "-rocm-<bucket>-x64.zip" suffix (e.g. "...-win-rocm-..."
@@ -376,7 +387,7 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 		}
 	}
 
-	source := resolvePrebuiltSource(s.detectROCm(), s.tunedGfx)
+	source := resolvePrebuiltSource(s.tunedGfx)
 	s.sendUpgradeEvent(w, "source", source.note)
 
 	s.sendUpgradeEvent(w, "resolving", fmt.Sprintf("resolving %s release %s", source.repo, ref))
@@ -646,7 +657,12 @@ func (s *Server) currentServerPath() (string, error) {
 	return "", fmt.Errorf("cannot determine llama-server path: no running process and ~/.local/lib/llama-cpp/llama-server not found")
 }
 
-// detectROCmRoot returns the ROCm installation root if found, or "".
+// detectROCmRoot returns the ROCm dev-toolchain root (where hipcc/amdclang++
+// live) if found, or "". Only meaningful for compiling from source
+// (sourceCmakeArgs) — a prebuilt binary needs no local toolchain at all, so
+// resolvePrebuiltSource uses the sysfs-only tuning.DetectGfx signal
+// (s.tunedGfx) instead; gating prebuilt on this check wrongly treated a host
+// with GPU runtime libs but no dev toolchain (rocky) as CPU-only.
 func (s *Server) detectROCmRoot() string {
 	// Check standard path first
 	if _, err := os.Stat("/opt/rocm/bin/hipcc"); err == nil {
@@ -657,11 +673,6 @@ func (s *Server) detectROCmRoot() string {
 		return filepath.Dir(filepath.Dir(p))
 	}
 	return ""
-}
-
-// detectROCm returns true if ROCm appears to be installed on this host.
-func (s *Server) detectROCm() bool {
-	return s.detectROCmRoot() != ""
 }
 
 // copySharedLibs walks srcDir recursively and copies every .so file into dstDir.

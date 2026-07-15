@@ -35,7 +35,7 @@ func TestLemonadeGfxBucket(t *testing.T) {
 
 func TestResolvePrebuiltSource(t *testing.T) {
 	t.Run("RDNA3 gets the tailored lemonade-sdk build", func(t *testing.T) {
-		src := resolvePrebuiltSource(true, "gfx1100")
+		src := resolvePrebuiltSource("gfx1100")
 		if src.repo != "lemonade-sdk/llamacpp-rocm" {
 			t.Errorf("repo = %q, want lemonade-sdk/llamacpp-rocm", src.repo)
 		}
@@ -54,7 +54,7 @@ func TestResolvePrebuiltSource(t *testing.T) {
 	})
 
 	t.Run("unknown ROCm arch falls back to upstream generic ROCm build", func(t *testing.T) {
-		src := resolvePrebuiltSource(true, "gfx942")
+		src := resolvePrebuiltSource("gfx942")
 		if src.repo != "ggml-org/llama.cpp" {
 			t.Errorf("repo = %q, want ggml-org/llama.cpp", src.repo)
 		}
@@ -70,7 +70,7 @@ func TestResolvePrebuiltSource(t *testing.T) {
 	})
 
 	t.Run("no ROCm gets the plain CPU build", func(t *testing.T) {
-		src := resolvePrebuiltSource(false, "")
+		src := resolvePrebuiltSource("")
 		if src.repo != "ggml-org/llama.cpp" || src.tailored {
 			t.Errorf("unexpected source for no-ROCm case: %+v", src)
 		}
@@ -97,13 +97,13 @@ func TestSelectReleaseAsset(t *testing.T) {
 		{Name: "llama-b1297-ubuntu-rocm-gfx110X-x64.zip"},
 		{Name: "llama-b1297-ubuntu-rocm-gfx120X-x64.zip"},
 	}
-	src := resolvePrebuiltSource(true, "gfx1100")
+	src := resolvePrebuiltSource("gfx1100")
 	got, ok := selectReleaseAsset(assets, src)
 	if !ok || got.Name != "llama-b1297-ubuntu-rocm-gfx110X-x64.zip" {
 		t.Errorf("selectReleaseAsset = (%+v, %v), want the ubuntu gfx110X asset", got, ok)
 	}
 
-	if _, ok := selectReleaseAsset(assets, resolvePrebuiltSource(true, "gfx942")); ok {
+	if _, ok := selectReleaseAsset(assets, resolvePrebuiltSource("gfx942")); ok {
 		t.Error("selectReleaseAsset should find nothing when no asset matches")
 	}
 }
