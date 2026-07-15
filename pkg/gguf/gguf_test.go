@@ -95,6 +95,43 @@ func TestParseMoE(t *testing.T) {
 	}
 }
 
+func TestIsMTP(t *testing.T) {
+	// IsMTP only reads Tensors, so it's tested directly against the parsed
+	// struct rather than round-tripping through buildGGUF's binary encoder.
+	cases := []struct {
+		name    string
+		tensors []gguf.TensorInfo
+		want    bool
+	}{
+		{
+			name:    "nextn tensor present (Qwythos-9B's observed pattern)",
+			tensors: []gguf.TensorInfo{{Name: "blk.64.nextn.shared_head_norm.weight"}},
+			want:    true,
+		},
+		{
+			name:    "case-insensitive match",
+			tensors: []gguf.TensorInfo{{Name: "blk.64.NEXTN.weight"}},
+			want:    true,
+		},
+		{
+			name:    "ordinary model, no nextn tensor",
+			tensors: []gguf.TensorInfo{{Name: "blk.0.attn_q.weight"}, {Name: "blk.0.ffn_gate.weight"}},
+			want:    false,
+		},
+		{
+			name:    "no tensor info available",
+			tensors: nil,
+			want:    false,
+		},
+	}
+	for _, c := range cases {
+		g := &gguf.GGUF{Tensors: c.tensors}
+		if got := g.IsMTP(); got != c.want {
+			t.Errorf("%s: IsMTP() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestParseRopeScaling(t *testing.T) {
 	buf := buildGGUF(t, []kvEntry{
 		{"general.architecture", "llama"},

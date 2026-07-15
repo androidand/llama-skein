@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 )
 
 // Magic bytes at the start of a GGUF file.
@@ -133,6 +134,24 @@ type TensorInfo struct {
 // IsMoE returns true if the model uses mixture-of-experts architecture.
 func (g *GGUF) IsMoE() bool {
 	return g.ExpertCount > 0
+}
+
+// IsMTP returns true if the model has a self-speculative "nextn"/MTP draft
+// head baked into its own weights (observed tensor name pattern:
+// "blk.<N>.nextn.*", e.g. "blk.64.nextn.shared_head_norm.weight" on
+// Qwythos-9B) — distinct from CLI-flag speculative decoding
+// (--spec-type draft-mtp with a separate draft model). Detected by scanning
+// tensor names rather than a dedicated metadata key, since there isn't one.
+// Requires Tensors to be populated (ParseFile reads them best-effort; false
+// if unavailable, which just means fit falls back to the non-MTP formula
+// rather than erroring).
+func (g *GGUF) IsMTP() bool {
+	for _, t := range g.Tensors {
+		if strings.Contains(strings.ToLower(t.Name), "nextn") {
+			return true
+		}
+	}
+	return false
 }
 
 // WeightBytes estimates the total size of model weights in bytes based on

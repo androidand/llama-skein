@@ -65,6 +65,50 @@ func TestAnalyze_Hybrid_Qwopus_NotDiscarded(t *testing.T) {
 		res.FitLevel, res.MaxSafeCtx, res.KVBytesPerToken, res.VRAMRequiredMB)
 }
 
+// Regression (rocky, Qwythos-9B-MTP, 2026-07): opencode-skein's 413-triggered
+// auto-shrink patches a model's --ctx-size down to max_fit_ctx whenever a
+// prompt overflows, trusting it as a safe ceiling. For a self-speculative
+// "nextn"/MTP model this repeatedly still OOM'd on the very next load — the
+// draft head's own KV-cache-like state and its larger transient
+// draft-verification compute buffer aren't modeled by kvBytesPerShape or the
+// flat computeOverheadFrac, which only know about the base transformer stack.
+// An MTP-flagged shape must report a strictly smaller MaxFitCtx/MaxSafeCtx
+// than an otherwise-identical non-MTP shape at the same VRAM budget — the
+// extra margin (mtpExtraSafetyFrac) is actually being applied.
+func TestAnalyzeShape_MTP_GetsExtraSafetyMargin(t *testing.T) {
+	base := ModelShape{
+		LayerCount: 65, HeadCount: 24, HeadCountKV: 4,
+		EmbeddingLength: 5120, KeyLength: 256, ValueLength: 256,
+		WeightBytes: 9786060736, // ~9.3 GB, Qwythos-9B-Q8's real weight size
+		TrainedCtx:  1000000,
+	}
+	params := Params{
+		KCacheBits: BitsPerElement("q8_0"), VCacheBits: BitsPerElement("q8_0"),
+		VRAMTotalMB: 24576, // a 24GB card, matching the class of host that hit this
+	}
+
+	nonMTP := base
+	nonMTP.IsMTP = false
+	mtp := base
+	mtp.IsMTP = true
+
+	resNonMTP := AnalyzeShape(nonMTP, params)
+	resMTP := AnalyzeShape(mtp, params)
+
+	if resNonMTP.MaxFitCtx <= 0 || resMTP.MaxFitCtx <= 0 {
+		t.Fatalf("expected both to compute a positive MaxFitCtx, got non-MTP=%d MTP=%d", resNonMTP.MaxFitCtx, resMTP.MaxFitCtx)
+	}
+	if resMTP.MaxFitCtx >= resNonMTP.MaxFitCtx {
+		t.Errorf("MTP MaxFitCtx (%d) must be strictly smaller than the non-MTP figure (%d) — the extra safety margin isn't being applied",
+			resMTP.MaxFitCtx, resNonMTP.MaxFitCtx)
+	}
+	if resMTP.MaxSafeCtx >= resNonMTP.MaxSafeCtx {
+		t.Errorf("MTP MaxSafeCtx (%d) must be strictly smaller than the non-MTP figure (%d)", resMTP.MaxSafeCtx, resNonMTP.MaxSafeCtx)
+	}
+	t.Logf("non-MTP: max_fit_ctx=%d max_safe_ctx=%d | MTP: max_fit_ctx=%d max_safe_ctx=%d",
+		resNonMTP.MaxFitCtx, resNonMTP.MaxSafeCtx, resMTP.MaxFitCtx, resMTP.MaxSafeCtx)
+}
+
 // Calibration: a ~35B-A3B-class MoE at Q4 with q4_0 KV must reach the known-good
 // ~73k context on a 36 GB unified Mac — the M3 config that works in production.
 // Arch params approximate Qwen3-class 35B (exact values come from the live GGUF
@@ -201,5 +245,48 @@ func TestAnalyze_ParallelSlotsDividePerRequestCtx(t *testing.T) {
 	// The KV allocation (VRAM requirement) is for the FULL n_ctx: unchanged.
 	if split.VRAMRequiredMB != solo.VRAMRequiredMB {
 		t.Fatalf("VRAMRequiredMB changed with slots: %d vs %d", split.VRAMRequiredMB, solo.VRAMRequiredMB)
+	}
+}
+
+// Regression (rocky, Qwythos-9B, 2026-07): "free + weights we'll place" only
+// makes sense when free already excludes a DIFFERENT resident model this one
+// will evict. With nothing else resident (the model itself is stopped —
+// exactly opencode-skein's 413-recovery scenario, which queries /api/fit for
+// a not-currently-loaded model), VRAMFreeMB already sits near VRAMTotalMB, so
+// adding modelMB on top let the computed budget exceed the card's actual
+// physical capacity. Concretely: rocky's real numbers were VRAMTotalMB=24560,
+// VRAMFreeMB≈24512 (idle), ModelMB=9332 — the old formula's budget
+// (24512+9332=33844) is 38% over the real 24560MB ceiling, which is exactly
+// why max_fit_ctx (682664) recommended something LARGER than the 648192
+// already independently shown to require 30054MB against the same 24560MB
+// card. MaxFitCtx must never imply a budget bigger than VRAMTotalMB.
+func TestAnalyzeShape_BudgetNeverExceedsPhysicalVRAM(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 65, HeadCount: 24, HeadCountKV: 4,
+		EmbeddingLength: 5120, KeyLength: 256, ValueLength: 256,
+		WeightBytes: 9786060736, // ~9.3 GB, Qwythos-9B-Q8's real weight size
+		TrainedCtx:  1000000,
+	}
+	res := AnalyzeShape(shape, Params{
+		KCacheBits: BitsPerElement("q8_0"), VCacheBits: BitsPerElement("q8_0"),
+		VRAMTotalMB: 24560,
+		VRAMFreeMB:  24512, // idle — nothing else resident, matching rocky's actual state
+	})
+
+	if res.MaxFitCtx <= 0 {
+		t.Fatal("expected a positive MaxFitCtx")
+	}
+	// The KV+compute a recommended MaxFitCtx implies must fit within
+	// VRAMTotalMB alongside the model's own weights — i.e. re-deriving
+	// VRAMRequiredMB AT max_fit_ctx must not exceed the physical card.
+	modelMB := int(shape.WeightBytes / mib)
+	kvPerTok := KVBytesPerToken(&gguf.GGUF{
+		LayerCount: shape.LayerCount, HeadCount: shape.HeadCount, HeadCountKV: shape.HeadCountKV,
+		EmbeddingLength: shape.EmbeddingLength, KeyLength: shape.KeyLength, ValueLength: shape.ValueLength,
+	}, BitsPerElement("q8_0"), BitsPerElement("q8_0"))
+	impliedRequiredMB := modelMB + int(float64(modelMB)*computeOverheadFrac) + int(kvPerTok*int64(res.MaxFitCtx)/mib)
+	if impliedRequiredMB > 24560 {
+		t.Errorf("MaxFitCtx=%d implies %dMB required — exceeds the 24560MB physical card (the exact rocky OOM pattern)",
+			res.MaxFitCtx, impliedRequiredMB)
 	}
 }

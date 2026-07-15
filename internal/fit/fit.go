@@ -85,6 +85,17 @@ const (
 	// --ctx-size sits below this fraction of the VRAM-achievable ceiling. Matches
 	// skein's ctx-fit sweep grow threshold so the two agree on what "starved" is.
 	underConfigFrac = 0.8
+	// mtpExtraSafetyFrac applies an ADDITIONAL VRAM haircut (on top of
+	// vramSafetyFrac) for self-speculative "nextn"/MTP models. Their draft head
+	// needs its own KV-cache-like state and a larger transient compute buffer
+	// during draft verification (batch-processing several candidate tokens at
+	// once) — neither is modeled by kvBytesPerShape/computeOverheadFrac, which
+	// only know about the base transformer stack. This is a conservative,
+	// not-precisely-derived margin: root-caused after opencode-skein's
+	// 413-triggered ctx auto-shrink repeatedly wrote a max_fit_ctx for
+	// Qwythos-9B-MTP that still OOM'd on load (rocky, 2026-07). Revisit if
+	// llama.cpp's MTP memory formula is characterized precisely.
+	mtpExtraSafetyFrac = 0.85
 )
 
 // ModelShape is the backend-neutral set of dimensions the fit math needs. It
@@ -100,6 +111,11 @@ type ModelShape struct {
 	FullAttentionInterval int64 // >1 = hybrid attention/SSM; only 1/interval layers hold KV
 	WeightBytes           int64 // resident weight bytes
 	TrainedCtx            int64 // max trained context (n_ctx_train / max_position_embeddings)
+	// IsMTP is true when the model has a self-speculative "nextn"/MTP draft
+	// head baked into its own weights. Its extra draft-verification KV/compute
+	// overhead isn't otherwise modeled by this engine (LayerCount/kvBytesPerShape
+	// only know about the base transformer stack) — see mtpExtraSafetyFrac.
+	IsMTP bool
 }
 
 // ShapeFromGGUF projects a parsed GGUF onto the neutral shape. WeightBytes
@@ -122,6 +138,7 @@ func ShapeFromGGUF(g *gguf.GGUF) ModelShape {
 		HeadCountKV:           g.HeadCountKV,
 		FullAttentionInterval: g.FullAttentionInterval,
 		WeightBytes:           weightBytes,
+		IsMTP:                 g.IsMTP(),
 		TrainedCtx:            g.MinCtxSize(),
 	}
 }
@@ -231,8 +248,26 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	budgetMB := p.VRAMTotalMB
 	if p.VRAMFreeMB > 0 {
 		budgetMB = p.VRAMFreeMB + modelMB // free + the weights we'll (re)place
+		// "free + weights we'll place" is only correct when the free figure
+		// already excludes a DIFFERENT resident model this one will evict —
+		// then the weights genuinely land in newly-freed space. When nothing
+		// else is resident (the common case: model is stopped, e.g. computing
+		// its own fit, or about to cold-load), VRAMFreeMB already sits near
+		// VRAMTotalMB, and adding modelMB on top inflates the budget past the
+		// card's actual physical capacity. Regression (rocky, Qwythos-9B,
+		// 2026-07): this let max_fit_ctx recommend 682664 for a host where the
+		// SAME model's vram_required_mb at its already-configured 648192 was
+		// already 30054MB against a 24560MB card — max_fit_ctx was
+		// recommending something LARGER than an amount already proven to
+		// overflow. Never let the budget exceed the hard physical total.
+		if p.VRAMTotalMB > 0 && budgetMB > p.VRAMTotalMB {
+			budgetMB = p.VRAMTotalMB
+		}
 	}
 	usableMB := float64(budgetMB) * vramSafetyFrac
+	if g.IsMTP {
+		usableMB *= mtpExtraSafetyFrac
+	}
 	kvBudgetMB := usableMB - float64(modelMB)*(1+computeOverheadFrac)
 	vramMaxCtx := 0
 	if kvBudgetMB > 0 {
