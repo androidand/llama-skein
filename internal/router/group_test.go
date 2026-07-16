@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +86,40 @@ func TestGroup_ServeHTTP_SwapStopsPrevious(t *testing.T) {
 	}
 	if got := b.serveCalls.Load(); got != 1 {
 		t.Errorf("b.serveCalls=%d want 1", got)
+	}
+}
+
+// TestGroup_ServeHTTP_RefusesSwapWhenEvictionFails is a regression for the z4
+// wedge: doSwap used to log a Stop() failure and proceed anyway to start the
+// new target, racing the (possibly still-alive, still VRAM-holding) evicted
+// process for the same GPU memory. It must now refuse the swap instead.
+func TestGroup_ServeHTTP_RefusesSwapWhenEvictionFails(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	a.stopErr = fmt.Errorf("simulated: process wedged, did not exit within grace period")
+
+	b := newFakeProcess("b")
+	b.autoReady = true
+
+	conf := config.Config{
+		HealthCheckTimeout: 5,
+		Groups: map[string]config.GroupConfig{
+			"g": {Swap: true, Exclusive: true, Members: []string{"a", "b"}},
+		},
+	}
+	g := newTestGroup(t, conf, map[string]process.Process{"a": a, "b": b})
+
+	w := httptest.NewRecorder()
+	g.ServeHTTP(w, newRequest("b"))
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected the swap to be refused, got status=%d body=%q", w.Code, w.Body.String())
+	}
+	if got := a.stopCalls.Load(); got != 1 {
+		t.Errorf("a.stopCalls=%d want 1", got)
+	}
+	if got := b.runCalls.Load(); got != 0 {
+		t.Errorf("b.runCalls=%d want 0 — must not start the new model while eviction is unconfirmed", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -542,6 +543,8 @@ func containsString(xs []string, s string) bool {
 func (b *baseRouter) doSwap(modelID string, toStop []string) {
 	timeout := b.healthCheckTimeout()
 
+	var mu sync.Mutex
+	var stopErrs []error
 	var wg sync.WaitGroup
 	for _, mID := range toStop {
 		wg.Add(1)
@@ -549,10 +552,28 @@ func (b *baseRouter) doSwap(modelID string, toStop []string) {
 			defer wg.Done()
 			if err := p.Stop(timeout); err != nil {
 				b.logger.Warnf("%s: stopping %s failed: %v", b.name, id, err)
+				mu.Lock()
+				stopErrs = append(stopErrs, err)
+				mu.Unlock()
 			}
 		}(b.processes[mID], mID)
 	}
 	wg.Wait()
+
+	// A failed Stop means that process may still be alive, still holding the
+	// GPU memory it had. Starting the new target now would race it for the
+	// same VRAM instead of getting a clean handoff — exactly the collision
+	// that produces a GPU wedge (high busy%, near-zero memory activity, no
+	// tokens). Refuse instead of silently proceeding into contested resources.
+	if len(stopErrs) > 0 {
+		err := fmt.Errorf("%s: refusing to start %s — %d model(s) failed to stop cleanly and may still hold GPU resources: %w",
+			b.name, modelID, len(stopErrs), errors.Join(stopErrs...))
+		select {
+		case b.swapDoneCh <- swapDone{modelID: modelID, err: err}:
+		case <-b.shutdownCtx.Done():
+		}
+		return
+	}
 
 	target := b.processes[modelID]
 	if target.State() == process.StateStopped {

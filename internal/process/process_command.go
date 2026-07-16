@@ -146,6 +146,17 @@ type ProcessCommand struct {
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
 
+	// possiblyLeaked is set when killProcess gives up on an unreapable process
+	// (see defaultPostKillGrace) — the OS process, and the GPU/port resources
+	// it holds, may still be alive even though this ProcessCommand's own
+	// bookkeeping has moved on to StateStopped. Both Stop() and Run() consult
+	// it so a caller can never mistake "our state machine gave up waiting" for
+	// "the resources are actually free": Run refuses to start a colliding new
+	// process, and Stop reports the ongoing reclaim as an error rather than a
+	// clean handoff, for as long as it's set. reapLeaked clears it once the
+	// process is confirmed to have actually exited.
+	possiblyLeaked atomic.Bool
+
 	// serializeSlot bounds concurrent inference to the backend's real slot
 	// count so requests never race into a slot the backend can't serve
 	// concurrently. For MLX it is capacity 1 — mlx_lm.server's
@@ -355,6 +366,15 @@ func (p *ProcessCommand) run() {
 				req.respond <- fmt.Errorf("[%s] could not be started in %s state", p.id, state)
 				continue
 			}
+			if p.possiblyLeaked.Load() {
+				// A previous instance may still be alive holding GPU/port
+				// resources (see killProcess/reapLeaked). Starting a new
+				// process now would race it for the same GPU memory — the
+				// exact collision that produced the z4 wedge. Refuse until
+				// reapLeaked confirms the old one is actually gone.
+				req.respond <- fmt.Errorf("[%s] refusing to start: a previous instance may still be alive and is being reclaimed — this resolves automatically, retry shortly", p.id)
+				continue
+			}
 			setState(StateStarting)
 
 			startCtx, cancelStart := context.WithCancel(context.Background())
@@ -366,6 +386,7 @@ func (p *ProcessCommand) run() {
 			// pendingStop holds a Stop request that arrived mid-start, so we
 			// can respond to it AFTER we've finished tearing the start down.
 			var pendingStop *stopReq
+			var pendingStopErr error
 			select {
 			// doStart finished on its own — either successfully (latch
 			// cmd/handler and move to Ready) or with an error (back to
@@ -431,7 +452,9 @@ func (p *ProcessCommand) run() {
 				cancelStart()
 				res := <-resultCh
 				if res.cmd != nil {
-					p.killProcess(res.cmd, res.cancel, res.cmdDone, stop.timeout)
+					if !p.killProcess(res.cmd, res.cancel, res.cmdDone, stop.timeout) {
+						pendingStopErr = fmt.Errorf("[%s] process did not exit within grace period after kill signal — it may still be alive holding its resources", p.id)
+					}
 				}
 				setState(StateStopped)
 				notifyWaiters(ErrStartAborted)
@@ -461,18 +484,33 @@ func (p *ProcessCommand) run() {
 			// context is released even on the success path (govet leak check).
 			cancelStart()
 			if pendingStop != nil {
-				pendingStop.respond <- nil
+				pendingStop.respond <- pendingStopErr
 			}
 
 		// Stop: tear down a running process.
 		case stop := <-p.stopCh:
+			var stopErr error
 			if cmd != nil {
 				setState(StateStopping)
-				p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout)
+				if !p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout) {
+					// The OS process may still be alive (e.g. wedged in an
+					// uninterruptible GPU-driver wait) and still holding its
+					// VRAM. Surface this to the Stop() caller — a swap that
+					// silently proceeds to start a new model here would race
+					// the old one for the same GPU memory. See doSwap.
+					stopErr = fmt.Errorf("[%s] process did not exit within grace period after kill signal — it may still be alive holding its resources", p.id)
+				}
 				cmd = nil
 				cmdDone = nil
 				cmdCancel = nil
 				p.handler.Store(nil)
+			} else if p.possiblyLeaked.Load() {
+				// Nothing left in this run() loop's own bookkeeping to stop,
+				// but a prior kill attempt is still unconfirmed and reapLeaked
+				// hasn't cleared it yet — that process may still be alive.
+				// Report it so a caller (doSwap) doesn't treat this as a clean
+				// handoff and start a new model into the same contested GPU.
+				stopErr = fmt.Errorf("[%s] a previous instance may still be alive and is being reclaimed — this resolves automatically, retry shortly", p.id)
 			}
 			// Stop is a no-op (and not an error) when already Stopped — this
 			// is what makes it idempotent for callers that don't track state.
@@ -481,7 +519,7 @@ func (p *ProcessCommand) run() {
 			// operator's reset lever for the crash-loop breaker.
 			p.clearCrashHistory()
 			respondRun(nil)
-			stop.respond <- nil
+			stop.respond <- stopErr
 		}
 	}
 }
@@ -822,9 +860,15 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 // cancel() is still invoked (deferred) to release the context, but only after
 // the process has exited and os/exec's ctx watcher has already torn down, so it
 // never re-fires cmd.Cancel.
-func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, cmdDone <-chan struct{}, gracefulTimeout time.Duration) {
+// killProcess terminates the upstream process. It returns true once cmdDone
+// confirms the OS process actually exited, or false if postKillGrace elapsed
+// first — the process may still be alive (e.g. stuck in an uninterruptible
+// GPU-driver wait, the exact state a GPU livelock produces) and callers that
+// need its resources (VRAM, ports) released before proceeding must treat that
+// as a failure rather than silently continuing; see Stop's docs.
+func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, cmdDone <-chan struct{}, gracefulTimeout time.Duration) bool {
 	if cancel == nil {
-		return
+		return true
 	}
 	defer cancel()
 
@@ -840,7 +884,7 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 
 	select {
 	case <-cmdDone:
-		return
+		return true
 	case <-timer.C:
 	}
 
@@ -861,8 +905,40 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 	}
 	select {
 	case <-cmdDone:
+		return true
 	case <-time.After(grace):
-		p.proxyLogger.Errorf("<%s> killProcess: process did not exit within %v of SIGKILL — abandoning the wait so this model's control loop stays responsive; the process may still be alive and will be forcibly reclaimed the next time this model's port is needed", p.id, grace)
+		p.proxyLogger.Errorf("<%s> killProcess: process did not exit within %v of SIGKILL — abandoning the wait so this model's control loop stays responsive; the process may still be alive and holding its resources", p.id, grace)
+		p.possiblyLeaked.Store(true)
+		go p.reapLeaked(cmd, cmdDone)
+		return false
+	}
+}
+
+// reapLeaked keeps retrying to terminate a process that outlived killProcess's
+// bounded wait, so a leak that was merely transient (a GPU-driver ioctl that
+// was slow rather than truly wedged) still gets reclaimed on its own instead
+// of sitting there until an operator notices and intervenes — the previous
+// behaviour ("forcibly reclaimed the next time this model's port is needed")
+// only actually reclaimed anything if this exact model happened to restart on
+// its own port; a different model contending for the same GPU never triggered
+// it, which is exactly the collision that produced the z4 wedge. Runs outside
+// the control loop so it can never block Start/Stop/WaitReady.
+func (p *ProcessCommand) reapLeaked(cmd *exec.Cmd, cmdDone <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-cmdDone:
+			p.proxyLogger.Infof("<%s> previously leaked process has exited — resources reclaimed", p.id)
+			p.possiblyLeaked.Store(false)
+			return
+		case <-p.parentCtx.Done():
+			return
+		case <-ticker.C:
+			if cmd != nil {
+				_ = killProcessTree(cmd)
+			}
+		}
 	}
 }
 

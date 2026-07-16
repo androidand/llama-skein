@@ -33,9 +33,10 @@ func TestKillProcess_BoundedWaitOnUnreapableProcess(t *testing.T) {
 	cancel := func() { cancelled = true }
 
 	done := make(chan struct{})
+	var exited bool
 	start := time.Now()
 	go func() {
-		p.killProcess(nil, cancel, cmdDone, 5*time.Millisecond)
+		exited = p.killProcess(nil, cancel, cmdDone, 5*time.Millisecond)
 		close(done)
 	}()
 
@@ -50,6 +51,89 @@ func TestKillProcess_BoundedWaitOnUnreapableProcess(t *testing.T) {
 	}
 	if !cancelled {
 		t.Error("killProcess must always call cancel(), even when giving up on cmdDone")
+	}
+	// A caller (doSwap) that starts a new model on the same GPU right after
+	// this must not treat this as a clean teardown: the process may still be
+	// alive holding VRAM. See TestStop_ReportsErrorWhenProcessDoesNotExit.
+	if exited {
+		t.Error("killProcess reported exited=true for a process that was never reaped — callers would wrongly assume its resources were freed")
+	}
+}
+
+// TestRun_RefusesWhileProcessPossiblyLeaked is a regression for the z4 wedge:
+// once killProcess gives up on an unreapable process, a later Run() call
+// (a subsequent swap attempt, or the wedge watchdog retrying) must not
+// silently start a new process that would race the old one for the same GPU
+// memory. It must refuse until reapLeaked confirms the old process is
+// actually gone.
+func TestRun_RefusesWhileProcessPossiblyLeaked(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{Cmd: "irrelevant"}, logger, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p.possiblyLeaked.Store(true)
+
+	if err := p.Run(100 * time.Millisecond); err == nil {
+		t.Fatal("expected Run to refuse while possiblyLeaked is set")
+	}
+	if got := p.State(); got != StateStopped {
+		t.Errorf("state = %s, want StateStopped — a refused Run must not transition state", got)
+	}
+}
+
+// TestKillProcess_LeakClearsOnceReaped is the recovery half of the fix: once a
+// process killProcess gave up on actually exits, reapLeaked must notice and
+// clear possiblyLeaked so a later Run() is allowed again — this is meant to
+// resolve itself automatically, not require an operator to notice and
+// manually intervene (the whole point of the fix).
+func TestKillProcess_LeakClearsOnceReaped(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{Cmd: "irrelevant"}, logger, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p.postKillGrace = 20 * time.Millisecond
+
+	cmdDone := make(chan struct{})
+	go p.killProcess(nil, func() {}, cmdDone, 5*time.Millisecond)
+
+	deadline := time.After(2 * time.Second)
+	for !p.possiblyLeaked.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("possiblyLeaked was never set")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	close(cmdDone) // simulate the OS finally reaping it
+
+	deadline = time.After(2 * time.Second)
+	for p.possiblyLeaked.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("reapLeaked never cleared possiblyLeaked after cmdDone closed")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// TestKillProcess_ReturnsTrueOnCleanExit is the counterpart to the bounded-wait
+// regression above: when cmdDone closes promptly, killProcess must report a
+// confirmed clean exit so callers don't spuriously refuse to proceed.
+func TestKillProcess_ReturnsTrueOnCleanExit(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{Cmd: "irrelevant"}, logger, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cmdDone := make(chan struct{})
+	close(cmdDone) // already exited by the time killProcess is called
+
+	if !p.killProcess(nil, func() {}, cmdDone, 5*time.Millisecond) {
+		t.Error("killProcess reported exited=false for a process that had already exited")
 	}
 }
 

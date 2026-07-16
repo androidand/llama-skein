@@ -41,6 +41,10 @@ type fakeProcess struct {
 	// stopStarted) before completing. Tests use this to prove that several
 	// Stop calls can be in flight simultaneously.
 	stopBlock chan struct{}
+	// stopErr, when non-nil, makes Stop return this error and leave state
+	// untouched — simulating killProcess giving up on an unreapable process
+	// (e.g. a GPU-driver livelock) instead of confirming a clean exit.
+	stopErr error
 
 	runCalls   atomic.Int32
 	stopCalls  atomic.Int32
@@ -132,6 +136,9 @@ func (f *fakeProcess) Stop(_ time.Duration) error {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	if f.state == process.StateStopped {
 		return nil
 	}
