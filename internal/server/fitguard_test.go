@@ -50,6 +50,39 @@ func TestConfidentNoFit(t *testing.T) {
 	}
 }
 
+// TestPreloadFitRefusal is a regression for the z4 wedge: qwythos-9b's
+// startup preload passed modelLoadRefusal (FitLevel was "marginal", not
+// "no") and permanently claimed ~40GB of a 48GB card, starving the other two
+// configured models and wedging the GPU when a swap tried to evict it under
+// load. Preload must hold to a stricter bar than a normal load.
+func TestPreloadFitRefusal(t *testing.T) {
+	cases := []struct {
+		name       string
+		mf         apicontract.ModelFit
+		ok         bool
+		wantRefuse bool
+	}{
+		{"marginal is refused", apicontract.ModelFit{FitLevel: apicontract.Marginal, Reason: ptrOf("fits only above the VRAM safety margin")}, true, true},
+		{"tight is allowed", apicontract.ModelFit{FitLevel: apicontract.Tight}, true, false},
+		{"good is allowed", apicontract.ModelFit{FitLevel: apicontract.Good}, true, false},
+		{"perfect is allowed", apicontract.ModelFit{FitLevel: apicontract.Perfect}, true, false},
+		{"no is left to modelLoadRefusal", apicontract.ModelFit{FitLevel: apicontract.No}, true, false},
+		{"unconfident (ok=false) fails open", apicontract.ModelFit{FitLevel: apicontract.Marginal}, false, false},
+		{"unknown level fails open", apicontract.ModelFit{FitLevel: apicontract.Unknown}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reason, refuse := preloadFitRefusal(c.mf, c.ok)
+			if refuse != c.wantRefuse {
+				t.Errorf("refuse=%v want %v", refuse, c.wantRefuse)
+			}
+			if refuse && reason == "" {
+				t.Error("expected a non-empty reason when refusing")
+			}
+		})
+	}
+}
+
 func TestModelLoadRefusal_UnfittableSet(t *testing.T) {
 	s := &Server{unfittable: map[string]string{"big-model": "weights exceed memory"}}
 	if reason, refuse := s.modelLoadRefusal("big-model"); !refuse || reason == "" {

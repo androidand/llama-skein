@@ -200,6 +200,20 @@ func (s *Server) startPreload() {
 				s.proxylog.Warnf("preload: skipping model %s — %s", modelID, reason)
 				continue
 			}
+			// Preload is a standing VRAM reservation, not a transient load a
+			// swap can evict on demand — it holds its memory for as long as
+			// the host runs. A model whose own configured context is only
+			// "marginal" (fits, but with no safety margin) in isolation was
+			// exactly the z4 wedge: preloading it left ~8GB for two other
+			// configured models needing ~30-40GB each, so the routine swap
+			// needed to run either of them raced the preloaded model's
+			// teardown for the same VRAM and wedged the GPU. Hold preload to
+			// a stricter bar than a normal load, where modelLoadRefusal's
+			// FitLevel==No check alone would have let this through.
+			if reason, refuse := preloadFitRefusal(s.fitForModel(modelID)); refuse {
+				s.proxylog.Warnf("preload: skipping model %s — fit is only \"marginal\" (%s); preloading it would permanently claim VRAM other configured models need to swap in. Reduce its context or drop the startup preload.", modelID, reason)
+				continue
+			}
 			s.proxylog.Infof("preloading model: %s", modelID)
 
 			req, err := http.NewRequestWithContext(s.shutdownCtx, http.MethodGet, "/", nil)

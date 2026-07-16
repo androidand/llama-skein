@@ -87,6 +87,24 @@ func (s *Server) modelLoadRefusal(id string) (string, bool) {
 	return reason, true
 }
 
+// preloadFitRefusal reports whether mf's fit level is too risky for a startup
+// preload. Preload is a standing VRAM reservation — unlike a normal load, the
+// swap engine never evicts it on its own account to make room for something
+// else — so it needs a stricter bar than modelLoadRefusal's FitLevel==No:
+// "marginal" (fits, but with no safety margin) is refused here too. Fails
+// open on every other level, including an unconfident/un-sizable fit (ok
+// false, or FitLevel Unknown) — this must never block a model it cannot size.
+func preloadFitRefusal(mf apicontract.ModelFit, ok bool) (string, bool) {
+	if !ok || mf.FitLevel != apicontract.Marginal {
+		return "", false
+	}
+	reason := "configured context leaves no safety margin on this host"
+	if mf.Reason != nil && *mf.Reason != "" {
+		reason = *mf.Reason
+	}
+	return reason, true
+}
+
 // CreateLoadFitGateMiddleware refuses to load a model that would not fit this
 // host's memory, BEFORE the request reaches the router (which would launch the
 // backend and OOM-crash the host — fatal on unified-memory Macs). It only acts
