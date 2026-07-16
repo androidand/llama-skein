@@ -217,6 +217,42 @@ func TestParallelFromCmd(t *testing.T) {
 	}
 }
 
+func TestLastOutputLines(t *testing.T) {
+	cases := []struct {
+		name    string
+		history []byte
+		n       int
+		want    string
+	}{
+		{"empty history", nil, 5, ""},
+		{
+			name:    "single line",
+			history: []byte("ERROR: Model not found on Femman or TrettiTwo: some.gguf\n"),
+			n:       5,
+			want:    "ERROR: Model not found on Femman or TrettiTwo: some.gguf",
+		},
+		{
+			name:    "takes only the last n, most-recent last",
+			history: []byte("line1\nline2\nline3\nline4\n"),
+			n:       2,
+			want:    "line3; line4",
+		},
+		{
+			name:    "blank lines are skipped",
+			history: []byte("real error\n\n\n   \n"),
+			n:       5,
+			want:    "real error",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := lastOutputLines(c.history, c.n); got != c.want {
+				t.Errorf("lastOutputLines(%q, %d) = %q, want %q", c.history, c.n, got, c.want)
+			}
+		})
+	}
+}
+
 func TestNew_SerializeSlotCapacity(t *testing.T) {
 	logger := logmon.NewWriter(io.Discard)
 	cases := []struct {

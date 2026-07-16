@@ -716,6 +716,9 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 	prematureExit := func() startResult {
 		cmdCancel()
+		if detail := lastOutputLines(p.processLogger.GetHistory(), 5); detail != "" {
+			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", detail)}
+		}
 		return startResult{err: fmt.Errorf("upstream command exited prematurely")}
 	}
 
@@ -796,6 +799,29 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 
 	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+}
+
+// lastOutputLines returns the last n non-empty trimmed lines of history,
+// joined for a single-line error detail. Used to turn a generic "upstream
+// command exited prematurely" into something like "...: ERROR: Model not
+// found on Femman or TrettiTwo: Qwen3.6-...gguf" — the wrapper script (or the
+// backend binary itself) usually already explains why it died on
+// stdout/stderr, which cmd.Stdout/cmd.Stderr feed into processLogger's
+// buffer; without this the reason was only visible by digging into the
+// per-model log stream separately from the error the caller actually got.
+func lastOutputLines(history []byte, n int) string {
+	if len(history) == 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(history)), "\n")
+	var kept []string
+	for i := len(lines) - 1; i >= 0 && len(kept) < n; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			kept = append([]string{line}, kept...)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 // sendStopSignal runs the configured CmdStop (if any) or sends SIGTERM to

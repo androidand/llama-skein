@@ -724,6 +724,39 @@ func TestProcessCommand_ConcurrentRunStop(t *testing.T) {
 	}
 }
 
+// TestProcessCommand_PrematureExitIncludesUpstreamOutput is a regression for
+// an m3 incident: a wrapper script (run-llama-server, resolving a GGUF path
+// across two possible external-drive mounts) printed a clear reason to
+// stderr before exiting — "ERROR: Model not found on Femman or TrettiTwo" —
+// but the client only ever saw a generic "upstream command exited
+// prematurely", with no clue where to look. The actual reason should surface
+// directly in the error.
+func TestProcessCommand_PrematureExitIncludesUpstreamOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a unix shell command")
+	}
+
+	cfg := config.ModelConfig{
+		Cmd:                `sh -c 'echo "ERROR: Model not found on Femman or TrettiTwo: some.gguf" >&2; exit 1'`,
+		Proxy:              "http://127.0.0.1:1",
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 5,
+	}
+	p := newProcessCommand(t, cfg)
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	err := p.Run(testStartTimeout)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exited prematurely") {
+		t.Errorf("error = %q, want it to mention \"exited prematurely\"", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Model not found on Femman or TrettiTwo") {
+		t.Errorf("error = %q, want it to include the upstream's own stderr explanation", err.Error())
+	}
+}
+
 // TestProcessCommand_CrashLoopBreaker verifies that repeated unexpected
 // upstream exits trip the breaker (restarts refused with a clear error) and
 // that an explicit Stop resets it.
