@@ -199,9 +199,51 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 		p.OutputReserve = v
 	}
 	p.VRAMTotalMB, p.VRAMFreeMB = s.vramMB()
+	if modelGetsWholeGPU(s.cfg, realName) {
+		// This model belongs to an exclusive swap group: loading it evicts
+		// every other model on the host (router.groupPlanner.EvictionFor), so
+		// once resident it has the ENTIRE card — not whatever a co-resident
+		// happens to be leaving free right this moment. Budgeting against
+		// live free VRAM here made max_fit_ctx/under_configured swing with
+		// whichever OTHER model was loaded at query time on any host running
+		// several models in one exclusive group (z4: three models, one GPU),
+		// which skein's context-fit sweep (a different repo, reacting to this
+		// same value every cycle) then wrote straight into --ctx-size —
+		// a persistent, real oscillation, not a transient glitch. 0 tells
+		// fit.Analyze free VRAM is unknown here so it falls back to
+		// VRAMTotalMB as the budget, matching what this model will actually
+		// get once it's its turn.
+		p.VRAMFreeMB = 0
+	}
 
 	fillModelFit(&mf, fit.Analyze(g, p))
 	return mf, true
+}
+
+// modelGetsWholeGPU reports whether modelID will have the entire GPU to
+// itself once it's the one running — i.e. its swap group is Exclusive, which
+// evicts every other model on load — AND no other group is Persistent (a
+// Persistent group's members survive even an Exclusive target's load, so the
+// card would genuinely still be shared; fall back to live free VRAM then).
+func modelGetsWholeGPU(cfg config.Config, modelID string) bool {
+	var group string
+	inGroup := false
+	for gid, g := range cfg.Groups {
+		for _, m := range g.Members {
+			if m == modelID {
+				group, inGroup = gid, true
+			}
+		}
+	}
+	if !inGroup || !cfg.Groups[group].Exclusive {
+		return false
+	}
+	for gid, g := range cfg.Groups {
+		if gid != group && g.Persistent {
+			return false
+		}
+	}
+	return true
 }
 
 // fillModelFit copies an engine Result onto the generated ModelFit DTO. Shared

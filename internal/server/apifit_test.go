@@ -25,6 +25,62 @@ func getJSON(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 	return w
 }
 
+// TestModelGetsWholeGPU is a regression for the opencode/skein ctx-size
+// oscillation: on a host running several models in one exclusive swap group
+// (z4: three models sharing one 48GB GPU), fit was budgeted against
+// momentary free VRAM, which depends entirely on whether some OTHER model
+// happened to be loaded at query time — even though an exclusive group
+// guarantees each model gets the whole card once it's its turn. skein's
+// context-fit sweep reacts to that live number every cycle, so the model's
+// --ctx-size kept getting rewritten up and down for no real reason.
+func TestModelGetsWholeGPU(t *testing.T) {
+	cases := []struct {
+		name   string
+		cfg    config.Config
+		model  string
+		expect bool
+	}{
+		{
+			name: "solo model in an exclusive group gets the whole card",
+			cfg: config.Config{Groups: map[string]config.GroupConfig{
+				"default": {Exclusive: true, Members: []string{"a", "b", "c"}},
+			}},
+			model:  "b",
+			expect: true,
+		},
+		{
+			name: "non-exclusive group shares the card, must use live free VRAM",
+			cfg: config.Config{Groups: map[string]config.GroupConfig{
+				"default": {Exclusive: false, Members: []string{"a", "b"}},
+			}},
+			model:  "a",
+			expect: false,
+		},
+		{
+			name: "a persistent group elsewhere survives eviction, card is still shared",
+			cfg: config.Config{Groups: map[string]config.GroupConfig{
+				"default":   {Exclusive: true, Members: []string{"a", "b"}},
+				"always-on": {Persistent: true, Members: []string{"c"}},
+			}},
+			model:  "a",
+			expect: false,
+		},
+		{
+			name:   "model not in any group",
+			cfg:    config.Config{Groups: map[string]config.GroupConfig{"default": {Exclusive: true, Members: []string{"a"}}}},
+			model:  "z",
+			expect: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := modelGetsWholeGPU(c.cfg, c.model); got != c.expect {
+				t.Errorf("modelGetsWholeGPU = %v, want %v", got, c.expect)
+			}
+		})
+	}
+}
+
 func TestServer_Fit_UnknownModel404(t *testing.T) {
 	s := fitTestServer(t, config.Config{Models: map[string]config.ModelConfig{}})
 	if w := getJSON(t, s, "/api/fit/nope"); w.Code != http.StatusNotFound {
