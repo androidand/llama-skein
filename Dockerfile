@@ -119,13 +119,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Same ROCm base as the builder: llama-server dynamically links ROCm's
-# runtime libraries (rocBLAS, hipBLAS, etc.), not part of a plain Ubuntu
-# image.
-FROM docker.io/rocm/dev-ubuntu-24.04:7.2.4-complete AS runtime-base-rocm
+# llama-server dynamically links ROCm's runtime libraries (rocBLAS, hipBLAS,
+# etc.), not part of a plain Ubuntu image — but rocm/dev-ubuntu-24.04:*
+# -complete (also used for the build stage above, where the full SDK is
+# genuinely needed) bundles the entire toolchain: compilers, profilers, docs,
+# samples, headers. None of that is needed at runtime, yet basing the
+# runtime stage on it directly carried all of it forward — a single
+# llama-skein-z4 image measured at 21.9GB, confirmed live via `podman
+# inspect`. Copy just the ROCm library + data tree instead of the whole SDK.
+# NOTE: copies the whole /opt/rocm/lib and /opt/rocm/share tree rather than
+# resolving individual .so files via ldd — rocBLAS/MIOpen dispatch kernels
+# from data files under /opt/rocm/share (Tensile, kernel DBs) that are
+# dlopen'd/read at runtime and would never show up in an `ldd` dependency
+# scan, so trimming to exactly the linked .so files would silently break GEMM
+# kernel lookup. This is a conservative trim (compilers/profilers/docs/
+# samples/headers only), not a minimal one.
+FROM ubuntu:24.04 AS runtime-base-rocm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=llama-cpp-builder-base-rocm /opt/rocm/lib /opt/rocm/lib
+COPY --from=llama-cpp-builder-base-rocm /opt/rocm/share /opt/rocm/share
+ENV LD_LIBRARY_PATH=/opt/rocm/lib
 
 FROM runtime-base-${BACKEND} AS runtime
 
