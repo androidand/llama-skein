@@ -83,6 +83,106 @@ func TestPreloadFitRefusal(t *testing.T) {
 	}
 }
 
+// TestCtxClampDecision_MarginalConfiguredStillClamps is a regression for the
+// Rocky incident: a 27B model hand-configured with --ctx-size 262144 on a
+// 24GB card (real numbers captured live from that host). Its FitLevel reads
+// "marginal" (fit.go's safety net protects any *configured* model from ever
+// reporting "no"), but VramRequiredMb (25536) genuinely exceeds VramTotalMb
+// (24560) — the real overflow signal, carrying no such safety net.
+// clampModelsToFit must still shrink it to MaxFitCtx instead of leaving it
+// configured to crash-loop on every load, which the original FitLevel=="no"
+// gate missed entirely (a configured model's FitLevel can never read "no").
+func TestCtxClampDecision_MarginalConfiguredStillClamps(t *testing.T) {
+	mf := apicontract.ModelFit{
+		FitLevel:       apicontract.Marginal,
+		ConfiguredCtx:  ptrOf(262144),
+		MaxFitCtx:      ptrOf(71480),
+		VramRequiredMb: ptrOf(25536),
+		VramTotalMb:    ptrOf(24560),
+		ModelMb:        ptrOf(16031),
+		Reason:         ptrOf("runs at the configured context; VRAM estimate exceeds budget"),
+	}
+	clampTo, reason, unfit := ctxClampDecision(mf)
+	if unfit {
+		t.Fatalf("expected a clamp, not unfittable (reason=%q)", reason)
+	}
+	if clampTo != 71480 {
+		t.Errorf("clampTo = %d, want 71480", clampTo)
+	}
+}
+
+// TestCtxClampDecision_MTPGenuinelyMarginalIsNotRefused is a regression for a
+// second Rocky model, hit while fixing the incident above: an MTP model
+// running in production, genuinely fitting ("marginal" from the switch
+// itself, not the configured-safety-net rescue — VramRequiredMb 22825 <
+// VramTotalMb 24560). An earlier revision of this function gated on MaxFitCtx
+// instead of VramRequiredMb/VramTotalMb; MaxFitCtx applies an EXTRA
+// safety discount for MTP models (mtpExtraSafetyFrac) that rounds to 0 here
+// even though the model demonstrably fits and serves traffic — that revision
+// wrongly refused it outright. Real numbers captured live from Rocky.
+func TestCtxClampDecision_MTPGenuinelyMarginalIsNotRefused(t *testing.T) {
+	mf := apicontract.ModelFit{
+		FitLevel:       apicontract.Marginal,
+		ConfiguredCtx:  ptrOf(98304),
+		MaxFitCtx:      nil, // 0/unset: MTP's extra discount goes negative here
+		VramRequiredMb: ptrOf(22825),
+		VramTotalMb:    ptrOf(24560),
+		ModelMb:        ptrOf(18630),
+		Reason:         ptrOf("fits only above the VRAM safety margin; reduce context"),
+	}
+	clampTo, reason, unfit := ctxClampDecision(mf)
+	if unfit {
+		t.Fatalf("expected this genuinely-fitting model to be left alone, got unfit (reason=%q)", reason)
+	}
+	if clampTo != 0 {
+		t.Errorf("clampTo = %d, want 0 (already fits, nothing to clamp to)", clampTo)
+	}
+}
+
+func TestCtxClampDecision(t *testing.T) {
+	cases := []struct {
+		name        string
+		mf          apicontract.ModelFit
+		wantClampTo int
+		wantUnfit   bool
+	}{
+		{
+			name:        "already fits, configured below max",
+			mf:          apicontract.ModelFit{ConfiguredCtx: ptrOf(8192), MaxFitCtx: ptrOf(71480), VramRequiredMb: ptrOf(19000), VramTotalMb: ptrOf(24560), ModelMb: ptrOf(16031)},
+			wantClampTo: 0,
+		},
+		{
+			name:        "unconfigured model with room to spare is left alone",
+			mf:          apicontract.ModelFit{MaxFitCtx: ptrOf(71480), VramRequiredMb: ptrOf(19000), VramTotalMb: ptrOf(24560), ModelMb: ptrOf(16031)},
+			wantClampTo: 0,
+		},
+		{
+			name:      "weights alone exceed VRAM, unfittable at any context",
+			mf:        apicontract.ModelFit{ConfiguredCtx: ptrOf(4096), MaxFitCtx: ptrOf(0), VramRequiredMb: ptrOf(42000), VramTotalMb: ptrOf(8192), ModelMb: ptrOf(40000)},
+			wantUnfit: true,
+		},
+		{
+			name:        "VRAM not yet known → fail open",
+			mf:          apicontract.ModelFit{ConfiguredCtx: ptrOf(262144), MaxFitCtx: ptrOf(0), ModelMb: ptrOf(16031)},
+			wantClampTo: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clampTo, reason, unfit := ctxClampDecision(c.mf)
+			if unfit != c.wantUnfit {
+				t.Errorf("unfit = %v, want %v", unfit, c.wantUnfit)
+			}
+			if clampTo != c.wantClampTo {
+				t.Errorf("clampTo = %d, want %d", clampTo, c.wantClampTo)
+			}
+			if unfit && reason == "" {
+				t.Error("expected a non-empty reason when unfit")
+			}
+		})
+	}
+}
+
 func TestModelLoadRefusal_UnfittableSet(t *testing.T) {
 	s := &Server{unfittable: map[string]string{"big-model": "weights exceed memory"}}
 	if reason, refuse := s.modelLoadRefusal("big-model"); !refuse || reason == "" {

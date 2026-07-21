@@ -19,9 +19,9 @@ const minViableCtx = 2048
 
 // clampModelsToFit is the proactive half of the fit guard. Before the router
 // captures each model's config and before preload runs, it consults the fit
-// engine and, for any model that would NOT fit this host's memory at its
-// configured context:
-//   - shrinks --ctx-size to the largest safe context, if one exists (the
+// engine and, for any model whose configured --ctx-size does NOT fit this
+// host's memory:
+//   - shrinks --ctx-size to MaxFitCtx, if that's still a viable context (the
 //     KV cache was the problem: "refuse + shrink first"); or
 //   - records it as unfittable when even a minimal context won't fit (the
 //     weights exceed memory) so the load path refuses it instead of OOM-ing.
@@ -36,28 +36,88 @@ func (s *Server) clampModelsToFit() {
 	}
 	for id := range s.cfg.Models {
 		mf, ok := s.fitForModel(id)
-		if !ok || !s.confidentNoFit(mf) {
-			continue // fits, unknown, or un-sizable → leave alone (fail open)
+		if !ok {
+			continue
 		}
-		mc := s.cfg.Models[id]
-		if mf.MaxSafeCtx >= minViableCtx {
-			if newCmd := setCtxSizeInCmd(mc.Cmd, mf.MaxSafeCtx); newCmd != mc.Cmd {
+		clampTo, unfitReason, unfit := ctxClampDecision(mf)
+		switch {
+		case unfit:
+			s.unfittable[id] = unfitReason
+			s.proxylog.Warnf("fit-guard: model %q cannot fit host memory even at minimal context — it will be refused rather than loaded. %s", id, unfitReason)
+		case clampTo > 0:
+			mc := s.cfg.Models[id]
+			if newCmd := setCtxSizeInCmd(mc.Cmd, clampTo); newCmd != mc.Cmd {
 				mc.Cmd = newCmd
 				s.cfg.Models[id] = mc
-				s.proxylog.Warnf("fit-guard: model %q won't fit at its configured context; clamped --ctx-size to %d to avoid an OOM on load", id, mf.MaxSafeCtx)
-				continue
+				configuredCtx := 0
+				if mf.ConfiguredCtx != nil {
+					configuredCtx = *mf.ConfiguredCtx
+				}
+				s.proxylog.Warnf("fit-guard: model %q configured --ctx-size %d won't fit this host; clamped to %d to avoid an OOM on load", id, configuredCtx, clampTo)
 			}
 		}
-		reason := "model weights exceed this host's available memory; loading it would OOM the host"
-		if mf.Reason != nil && *mf.Reason != "" {
-			reason = *mf.Reason
-		}
-		s.unfittable[id] = reason
-		s.proxylog.Warnf("fit-guard: model %q cannot fit host memory even at minimal context — it will be refused rather than loaded. %s", id, reason)
 	}
 	// Contexts may have changed; drop the pre-flight cache so the prompt guard
 	// re-derives max_safe_ctx from the clamped commands.
 	s.maxSafeCtxCache.Range(func(k, _ any) bool { s.maxSafeCtxCache.Delete(k); return true })
+}
+
+// ctxClampDecision derives what clampModelsToFit should do about one model
+// from its already-computed ModelFit alone, so it's testable without a real
+// GGUF/host. Returns either a positive clampTo (rewrite --ctx-size to this),
+// unfit=true with a reason (weights alone don't fit, at any context), or
+// neither (already fits, or fit isn't confidently known — fail open).
+//
+// The gate is VramRequiredMb > VramTotalMb — the model's ACTUAL required
+// memory at its current (configured or trained-default) context exceeding the
+// host's real budget — rather than FitLevel=="no" (the original approach) or
+// MaxFitCtx (an earlier, buggier revision of this function). Both of those
+// have safety nets baked in that this boot-time guard must NOT inherit:
+//
+//   - FitLevel never reports "no" for a *configured* model (AnalyzeShape's
+//     safety net assumes a configured --ctx-size already proved it loads).
+//     That premise doesn't hold at boot, before this process has started
+//     anything — the Rocky incident this guards against was a 27B model
+//     hand-configured with --ctx-size 262144 on a 24GB card, never once
+//     actually run under THIS binary, permanently shielded from ever
+//     clamping because its FitLevel always read "marginal".
+//   - MaxFitCtx applies an EXTRA safety discount for MTP/speculative-decode
+//     models (mtpExtraSafetyFrac) that can round down to 0 even for a model
+//     that is demonstrably fitting and running right now — gating on it
+//     caused a real regression here: a co-located MTP model on the same
+//     Rocky host, already fitting at "marginal" (genuinely, not via the
+//     configured-safety-net) and serving production traffic, got its
+//     MaxFitCtx computed as 0 and was wrongly refused outright.
+//
+// VramRequiredMb/VramTotalMb carry neither safety net — they're the plain
+// computed numbers regardless of FitLevel — so they correctly separate "this
+// exact configuration overflows the host" (act) from "this is tight but
+// genuinely fits" (leave alone), independent of both MTP and the configured
+// bump. MaxFitCtx is still fine as the shrink TARGET (not the gate): once
+// we've established shrinking is needed, it's the same VRAM-margined ceiling
+// skein's cross-repo ctx-fit sweep grows an under-configured model up to, so
+// the two stay consistent.
+func ctxClampDecision(mf apicontract.ModelFit) (clampTo int, unfitReason string, unfit bool) {
+	if mf.VramTotalMb == nil || *mf.VramTotalMb <= 0 || mf.ModelMb == nil || *mf.ModelMb <= 0 || mf.VramRequiredMb == nil {
+		return 0, "", false // VRAM/model size not yet confidently known → fail open
+	}
+	if *mf.VramRequiredMb <= *mf.VramTotalMb {
+		return 0, "", false // fits as currently configured — nothing to do
+	}
+	maxFit := 0
+	if mf.MaxFitCtx != nil {
+		maxFit = *mf.MaxFitCtx
+	}
+	if maxFit >= minViableCtx {
+		return maxFit, "", false
+	}
+	// Even a minimal context wouldn't help — the weights themselves are the
+	// problem, regardless of whether --ctx-size was ever configured.
+	reason := "model weights exceed this host's available memory even at minimal context; loading it would OOM the host"
+	if mf.Reason != nil && *mf.Reason != "" {
+		reason = *mf.Reason
+	}
+	return 0, reason, true
 }
 
 // confidentNoFit reports whether a ModelFit is a trustworthy "does not fit"
