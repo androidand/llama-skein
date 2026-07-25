@@ -1139,3 +1139,124 @@ func TestReclaimStalePort_Guards(t *testing.T) {
 		t.Errorf("free port must reclaim nothing, got %d", n)
 	}
 }
+
+// TestProcessCommand_FailedIsDistinctFromStopped is the regression guard for
+// the defect this change exists to fix: a model whose load failed used to
+// report "stopped", byte-identical to a model that was never asked to load,
+// so a caller could not tell a broken provider from an idle one.
+func TestProcessCommand_FailedIsDistinctFromStopped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test relies on unix exec failure semantics")
+	}
+
+	idle := newProcessCommand(t, config.ModelConfig{
+		Cmd:           "sleep 60",
+		Proxy:         "http://127.0.0.1:1",
+		CheckEndpoint: "none",
+	})
+	if got := idle.State(); got != StateStopped {
+		t.Fatalf("never-run process: expected %q, got %q", StateStopped, got)
+	}
+	if idle.LastError() != nil {
+		t.Fatalf("never-run process: expected no LastError, got %+v", idle.LastError())
+	}
+
+	broken := newProcessCommand(t, config.ModelConfig{
+		Cmd:                "definitely-not-a-real-binary-xyzzy",
+		Proxy:              "http://127.0.0.1:1",
+		CheckEndpoint:      "none",
+		HealthCheckTimeout: 10,
+	})
+	t.Cleanup(func() { broken.Stop(testStopTimeout) })
+
+	if err := broken.Run(testStartTimeout); err == nil {
+		t.Fatal("expected Run to fail for a nonexistent binary")
+	}
+
+	if got := broken.State(); got != StateFailed {
+		t.Fatalf("failed load: expected %q, got %q — this is the bug: a failed "+
+			"load must not be indistinguishable from an idle model", StateFailed, got)
+	}
+	le := broken.LastError()
+	if le == nil {
+		t.Fatal("failed load: expected a retained LastError, got nil")
+	}
+	if le.Message == "" {
+		t.Error("LastError.Message is empty")
+	}
+	if le.Attempts < 1 {
+		t.Errorf("LastError.Attempts = %d, want >= 1", le.Attempts)
+	}
+	if le.At.IsZero() {
+		t.Error("LastError.At is zero")
+	}
+}
+
+// TestProcessCommand_WaitReadyFailsFastWhenFailed proves a caller is not parked
+// forever on a process that has already failed. No start is in flight, so
+// nothing would ever wake it — the hang this change removes.
+func TestProcessCommand_WaitReadyFailsFastWhenFailed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test relies on unix exec failure semantics")
+	}
+
+	p := newProcessCommand(t, config.ModelConfig{
+		Cmd:                "definitely-not-a-real-binary-xyzzy",
+		Proxy:              "http://127.0.0.1:1",
+		CheckEndpoint:      "none",
+		HealthCheckTimeout: 10,
+	})
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	if err := p.Run(testStartTimeout); err == nil {
+		t.Fatal("expected Run to fail")
+	}
+	if p.State() != StateFailed {
+		t.Fatalf("expected %q, got %q", StateFailed, p.State())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- p.WaitReady(ctx) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("WaitReady returned nil on a failed process")
+		}
+	case <-ctx.Done():
+		t.Fatal("WaitReady parked on a failed process instead of failing fast")
+	}
+}
+
+// TestProcessCommand_FailedIsRestartable guards the state-machine integration:
+// a failed process must still be startable, because refusing a restart is the
+// crash-loop breaker's job, not the state gate's.
+func TestProcessCommand_FailedIsRestartable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses the unix sleep command")
+	}
+
+	p := newProcessCommand(t, config.ModelConfig{
+		Cmd:                "sleep 0.2",
+		Proxy:              "http://127.0.0.1:1",
+		CheckEndpoint:      "none",
+		HealthCheckTimeout: 10,
+	})
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	if err := p.Run(testStartTimeout); err == nil {
+		t.Fatal("expected the first run to end in an unexpected exit")
+	}
+	if p.State() != StateFailed {
+		t.Fatalf("after crash: expected %q, got %q", StateFailed, p.State())
+	}
+
+	// Must not be refused with "could not be started in failed state".
+	err := p.Run(testStartTimeout)
+	if err != nil && strings.Contains(err.Error(), "could not be started in") {
+		t.Fatalf("restart refused by the state gate: %v", err)
+	}
+}

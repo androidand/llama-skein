@@ -846,7 +846,16 @@
             "type": "string"
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "stopped",
+              "starting",
+              "ready",
+              "stopping",
+              "shutdown",
+              "failed"
+            ],
+            "description": "Current process state. 'failed' means the last start or load attempt failed and is distinct from 'stopped', which means idle with nothing wrong; reporting a failed load as stopped makes a broken model indistinguishable from one that was never requested."
           },
           "loaded": {
             "type": "boolean"
@@ -904,6 +913,9 @@
           "reasoning": {
             "type": "boolean",
             "description": "True if the model emits reasoning/thinking output (reasoning_content) before its answer. Resolved from the model config; omitted when not declared. Clients use it to enable reasoning-stream rendering."
+          },
+          "last_error": {
+            "$ref": "#/components/schemas/LastError"
           }
         }
       },
@@ -1698,6 +1710,38 @@
             "type": "boolean",
             "nullable": true,
             "description": "Toggle glibc allocator-env injection (MALLOC_* caps) on Linux llama.cpp backends. false disables it while leaving GPU flag tuning active; true or null defers to the built-in default (enabled on Linux)."
+          }
+        }
+      },
+      "LastError": {
+        "type": "object",
+        "description": "The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.",
+        "required": [
+          "message",
+          "category",
+          "at"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable failure detail."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "start",
+              "crash"
+            ],
+            "description": "'start' = never reached a serving state; 'crash' = was ready then exited on its own."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the failure was recorded."
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Consecutive failures; reset on a successful start."
           }
         }
       }

@@ -23,6 +23,7 @@ type fakeProcess struct {
 
 	mu          sync.Mutex
 	state       process.ProcessState
+	lastError   *process.LoadError
 	readyCh     chan struct{}
 	stopCh      chan struct{}
 	runStarted  chan struct{} // closed on the first Run call
@@ -87,6 +88,18 @@ func (f *fakeProcess) State() process.ProcessState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.state
+}
+
+func (f *fakeProcess) LastError() *process.LoadError {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastError
+}
+
+func (f *fakeProcess) setLastError(e *process.LoadError) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastError = e
 }
 
 func (f *fakeProcess) markReady() { f.setState(process.StateReady) }

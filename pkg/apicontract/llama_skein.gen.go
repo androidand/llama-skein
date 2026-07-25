@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/oapi-codegen/runtime"
 )
@@ -58,6 +59,24 @@ func (e ConfigModelRequestBackend) Valid() bool {
 	}
 }
 
+// Defines values for LastErrorCategory.
+const (
+	Crash LastErrorCategory = "crash"
+	Start LastErrorCategory = "start"
+)
+
+// Valid indicates whether the value is a known member of the LastErrorCategory enum.
+func (e LastErrorCategory) Valid() bool {
+	switch e {
+	case Crash:
+		return true
+	case Start:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ModelBackend.
 const (
 	ModelBackendLlamacpp ModelBackend = "llamacpp"
@@ -73,6 +92,36 @@ func (e ModelBackend) Valid() bool {
 	case ModelBackendMlx:
 		return true
 	case ModelBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelState.
+const (
+	Failed   ModelState = "failed"
+	Ready    ModelState = "ready"
+	Shutdown ModelState = "shutdown"
+	Starting ModelState = "starting"
+	Stopped  ModelState = "stopped"
+	Stopping ModelState = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the ModelState enum.
+func (e ModelState) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Ready:
+		return true
+	case Shutdown:
+		return true
+	case Starting:
+		return true
+	case Stopped:
+		return true
+	case Stopping:
 		return true
 	default:
 		return false
@@ -474,6 +523,24 @@ type InferenceInfo struct {
 	SlotsTotal *int `json:"slots_total,omitempty"`
 }
 
+// LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
+type LastError struct {
+	// At When the failure was recorded.
+	At time.Time `json:"at"`
+
+	// Attempts Consecutive failures; reset on a successful start.
+	Attempts *int `json:"attempts,omitempty"`
+
+	// Category 'start' = never reached a serving state; 'crash' = was ready then exited on its own.
+	Category LastErrorCategory `json:"category"`
+
+	// Message Human-readable failure detail.
+	Message string `json:"message"`
+}
+
+// LastErrorCategory 'start' = never reached a serving state; 'crash' = was ready then exited on its own.
+type LastErrorCategory string
+
 // LoadedModelInfo defines model for LoadedModelInfo.
 type LoadedModelInfo struct {
 	// Id Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls.
@@ -513,11 +580,14 @@ type Model struct {
 	Created      *int `json:"created,omitempty"`
 
 	// Default True when this model is the configured default, used for requests that omit the 'model' field. Listed first in the model list. llama-skein extension to the OpenAI schema.
-	Default         *bool   `json:"default,omitempty"`
-	Description     *string `json:"description,omitempty"`
-	Id              string  `json:"id"`
-	Loaded          *bool   `json:"loaded,omitempty"`
-	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
+	Default     *bool   `json:"default,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Id          string  `json:"id"`
+
+	// LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
+	LastError       *LastError `json:"last_error,omitempty"`
+	Loaded          *bool      `json:"loaded,omitempty"`
+	MaxOutputTokens *int       `json:"max_output_tokens,omitempty"`
 
 	// Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 	Metadata *Model_Metadata `json:"metadata,omitempty"`
@@ -535,8 +605,10 @@ type Model struct {
 	Reasoning *bool `json:"reasoning,omitempty"`
 
 	// SizeBytes On-disk size of the model weights in bytes: the GGUF file size for llama.cpp, or the summed safetensors size for MLX. Lets clients show a human-readable size (e.g. GB) when picking between similar quantizations. Omitted when the size can't be determined (peer models, un-resolvable path).
-	SizeBytes *int64  `json:"size_bytes,omitempty"`
-	State     *string `json:"state,omitempty"`
+	SizeBytes *int64 `json:"size_bytes,omitempty"`
+
+	// State Current process state. 'failed' means the last start or load attempt failed and is distinct from 'stopped', which means idle with nothing wrong; reporting a failed load as stopped makes a broken model indistinguishable from one that was never requested.
+	State *ModelState `json:"state,omitempty"`
 }
 
 // ModelBackend Inference backend type.
@@ -548,6 +620,9 @@ type Model_Metadata struct {
 	Mtp                  *MtpMetadata           `json:"mtp,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
+
+// ModelState Current process state. 'failed' means the last start or load attempt failed and is distinct from 'stopped', which means idle with nothing wrong; reporting a failed load as stopped makes a broken model indistinguishable from one that was never requested.
+type ModelState string
 
 // ModelFit Fit of one model to THIS host: whether it runs, how well, and the max SAFE context (output- and overhead-reserved). Ported from llmfit fit.rs ModelFit.
 type ModelFit struct {
