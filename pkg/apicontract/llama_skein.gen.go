@@ -17,6 +17,36 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ApiModelState.
+const (
+	ApiModelStateFailed   ApiModelState = "failed"
+	ApiModelStateReady    ApiModelState = "ready"
+	ApiModelStateShutdown ApiModelState = "shutdown"
+	ApiModelStateStarting ApiModelState = "starting"
+	ApiModelStateStopped  ApiModelState = "stopped"
+	ApiModelStateStopping ApiModelState = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the ApiModelState enum.
+func (e ApiModelState) Valid() bool {
+	switch e {
+	case ApiModelStateFailed:
+		return true
+	case ApiModelStateReady:
+		return true
+	case ApiModelStateShutdown:
+		return true
+	case ApiModelStateStarting:
+		return true
+	case ApiModelStateStopped:
+		return true
+	case ApiModelStateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConfigModelPatchRequestBackend.
 const (
 	ConfigModelPatchRequestBackendLlamacpp ConfigModelPatchRequestBackend = "llamacpp"
@@ -100,28 +130,28 @@ func (e ModelBackend) Valid() bool {
 
 // Defines values for ModelState.
 const (
-	Failed   ModelState = "failed"
-	Ready    ModelState = "ready"
-	Shutdown ModelState = "shutdown"
-	Starting ModelState = "starting"
-	Stopped  ModelState = "stopped"
-	Stopping ModelState = "stopping"
+	ModelStateFailed   ModelState = "failed"
+	ModelStateReady    ModelState = "ready"
+	ModelStateShutdown ModelState = "shutdown"
+	ModelStateStarting ModelState = "starting"
+	ModelStateStopped  ModelState = "stopped"
+	ModelStateStopping ModelState = "stopping"
 )
 
 // Valid indicates whether the value is a known member of the ModelState enum.
 func (e ModelState) Valid() bool {
 	switch e {
-	case Failed:
+	case ModelStateFailed:
 		return true
-	case Ready:
+	case ModelStateReady:
 		return true
-	case Shutdown:
+	case ModelStateShutdown:
 		return true
-	case Starting:
+	case ModelStateStarting:
 		return true
-	case Stopped:
+	case ModelStateStopped:
 		return true
-	case Stopping:
+	case ModelStateStopping:
 		return true
 	default:
 		return false
@@ -200,6 +230,36 @@ func (e ModelFitRunMode) Valid() bool {
 	case MoeOffload:
 		return true
 	case TensorParallel:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelHealthState.
+const (
+	Failed   ModelHealthState = "failed"
+	Ready    ModelHealthState = "ready"
+	Shutdown ModelHealthState = "shutdown"
+	Starting ModelHealthState = "starting"
+	Stopped  ModelHealthState = "stopped"
+	Stopping ModelHealthState = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the ModelHealthState enum.
+func (e ModelHealthState) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Ready:
+		return true
+	case Shutdown:
+		return true
+	case Starting:
+		return true
+	case Stopped:
+		return true
+	case Stopping:
 		return true
 	default:
 		return false
@@ -291,6 +351,42 @@ func (e TuningStatusProvenance) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Defines values for GetApiModelsParamsState.
+const (
+	Running GetApiModelsParamsState = "running"
+)
+
+// Valid indicates whether the value is a known member of the GetApiModelsParamsState enum.
+func (e GetApiModelsParamsState) Valid() bool {
+	switch e {
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
+// ApiModel defines model for ApiModel.
+type ApiModel struct {
+	Aliases     *[]string               `json:"aliases,omitempty"`
+	Description *string                 `json:"description,omitempty"`
+	Details     *map[string]interface{} `json:"details,omitempty"`
+	Id          string                  `json:"id"`
+	Loaded      bool                    `json:"loaded"`
+	Name        *string                 `json:"name,omitempty"`
+	Object      string                  `json:"object"`
+	State       ApiModelState           `json:"state"`
+	Unlisted    bool                    `json:"unlisted"`
+}
+
+// ApiModelState defines model for ApiModel.State.
+type ApiModelState string
+
+// ApiModelsResponse defines model for ApiModelsResponse.
+type ApiModelsResponse struct {
+	Models []ApiModel `json:"models"`
 }
 
 // CPUInfo defines model for CPUInfo.
@@ -511,6 +607,18 @@ type GPUSnapshot struct {
 	VramUsedMb     *int     `json:"vram_used_mb,omitempty"`
 }
 
+// HealthResponse What the host can actually serve right now. Lets a caller preflight — distinguishing ready, loading, busy, failed and idle-with-no-model-resident — instead of discovering it by spending an inference request.
+type HealthResponse struct {
+	// AnyModelResident True when at least one model is loaded and serving. False here with a reachable control plane is the 'up but not serving' case.
+	AnyModelResident bool `json:"any_model_resident"`
+
+	// Busy True when at least one inference request is in flight. A single-slot host that is busy will queue a new request.
+	Busy     bool                   `json:"busy"`
+	InFlight *int64                 `json:"in_flight,omitempty"`
+	Models   map[string]ModelHealth `json:"models"`
+	Status   string                 `json:"status"`
+}
+
 // InferenceInfo Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
 type InferenceInfo struct {
 	// Busy True when every slot of every running model is occupied (in_flight >= slots_total > 0) — a new request would queue. False when no model is running: the host is idle, it just needs a swap-in.
@@ -681,6 +789,16 @@ type ModelFitFitLevel string
 // ModelFitRunMode How the model would run given memory.
 type ModelFitRunMode string
 
+// ModelHealth Per-model readiness. 'failed' is distinct from 'stopped': stopped means idle with nothing wrong, failed means the last load attempt failed.
+type ModelHealth struct {
+	// LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
+	LastError *LastError       `json:"last_error,omitempty"`
+	State     ModelHealthState `json:"state"`
+}
+
+// ModelHealthState defines model for ModelHealth.State.
+type ModelHealthState string
+
 // ModelList defines model for ModelList.
 type ModelList struct {
 	Data   []Model         `json:"data"`
@@ -766,6 +884,22 @@ type ResourceSnapshot struct {
 	Memory      *MemoryInfo      `json:"memory,omitempty"`
 	Storage     *StorageInfo     `json:"storage,omitempty"`
 	Vram        *VRAMInfo        `json:"vram,omitempty"`
+}
+
+// RunningModel defines model for RunningModel.
+type RunningModel struct {
+	Cmd         *string `json:"cmd,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Model       string  `json:"model"`
+	Name        *string `json:"name,omitempty"`
+	Proxy       *string `json:"proxy,omitempty"`
+	State       string  `json:"state"`
+	Ttl         *int    `json:"ttl,omitempty"`
+}
+
+// RunningResponse defines model for RunningResponse.
+type RunningResponse struct {
+	Running []RunningModel `json:"running"`
 }
 
 // StorageInfo defines model for StorageInfo.
@@ -903,6 +1037,15 @@ type GetModelFitParams struct {
 	// Ctx Score this context size instead of computing max_safe_ctx.
 	Ctx *int `form:"ctx,omitempty" json:"ctx,omitempty"`
 }
+
+// GetApiModelsParams defines parameters for GetApiModels.
+type GetApiModelsParams struct {
+	// State Pass 'running' to list only loaded models.
+	State *GetApiModelsParamsState `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// GetApiModelsParamsState defines parameters for GetApiModels.
+type GetApiModelsParamsState string
 
 // SetDefaultModelJSONRequestBody defines body for SetDefaultModel for application/json ContentType.
 type SetDefaultModelJSONRequestBody = ConfigDefaultModelRequest
@@ -1243,6 +1386,9 @@ type ClientInterface interface {
 	// GetHardware request
 	GetHardware(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetApiModels request
+	GetApiModels(ctx context.Context, params *GetApiModelsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetOffloadRecommendation request
 	GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1262,6 +1408,12 @@ type ClientInterface interface {
 
 	// ListTuningProfiles request
 	ListTuningProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetHealth request
+	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetRunning request
+	GetRunning(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListModels request
 	ListModels(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1471,6 +1623,18 @@ func (c *Client) GetHardware(ctx context.Context, reqEditors ...RequestEditorFn)
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetApiModels(ctx context.Context, params *GetApiModelsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetApiModelsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetOffloadRecommendationRequest(c.Server, model)
 	if err != nil {
@@ -1545,6 +1709,30 @@ func (c *Client) PatchTuning(ctx context.Context, body PatchTuningJSONRequestBod
 
 func (c *Client) ListTuningProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListTuningProfilesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetRunning(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetRunningRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -2032,6 +2220,60 @@ func NewGetHardwareRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetApiModelsRequest generates requests for GetApiModels
+func NewGetApiModelsRequest(server string, params *GetApiModelsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.State != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "state", *params.State, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetOffloadRecommendationRequest generates requests for GetOffloadRecommendation
 func NewGetOffloadRecommendationRequest(server string, model string) (*http.Request, error) {
 	var err error
@@ -2214,6 +2456,60 @@ func NewListTuningProfilesRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetHealthRequest generates requests for GetHealth
+func NewGetHealthRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/health")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetRunningRequest generates requests for GetRunning
+func NewGetRunningRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/running")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListModelsRequest generates requests for ListModels
 func NewListModelsRequest(server string) (*http.Request, error) {
 	var err error
@@ -2331,6 +2627,9 @@ type ClientWithResponsesInterface interface {
 	// GetHardwareWithResponse request
 	GetHardwareWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHardwareResponse, error)
 
+	// GetApiModelsWithResponse request
+	GetApiModelsWithResponse(ctx context.Context, params *GetApiModelsParams, reqEditors ...RequestEditorFn) (*GetApiModelsResponse, error)
+
 	// GetOffloadRecommendationWithResponse request
 	GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error)
 
@@ -2350,6 +2649,12 @@ type ClientWithResponsesInterface interface {
 
 	// ListTuningProfilesWithResponse request
 	ListTuningProfilesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListTuningProfilesResponse, error)
+
+	// GetHealthWithResponse request
+	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
+
+	// GetRunningWithResponse request
+	GetRunningWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRunningResponse, error)
 
 	// ListModelsWithResponse request
 	ListModelsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelsResponse, error)
@@ -2745,6 +3050,36 @@ func (r GetHardwareResponse) ContentType() string {
 	return ""
 }
 
+type GetApiModelsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ApiModelsResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetApiModelsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetApiModelsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetApiModelsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetOffloadRecommendationResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2919,6 +3254,66 @@ func (r ListTuningProfilesResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListTuningProfilesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetHealthResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *HealthResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetHealthResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetHealthResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetHealthResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetRunningResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RunningResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetRunningResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetRunningResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetRunningResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3104,6 +3499,15 @@ func (c *ClientWithResponses) GetHardwareWithResponse(ctx context.Context, reqEd
 	return ParseGetHardwareResponse(rsp)
 }
 
+// GetApiModelsWithResponse request returning *GetApiModelsResponse
+func (c *ClientWithResponses) GetApiModelsWithResponse(ctx context.Context, params *GetApiModelsParams, reqEditors ...RequestEditorFn) (*GetApiModelsResponse, error) {
+	rsp, err := c.GetApiModels(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetApiModelsResponse(rsp)
+}
+
 // GetOffloadRecommendationWithResponse request returning *GetOffloadRecommendationResponse
 func (c *ClientWithResponses) GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error) {
 	rsp, err := c.GetOffloadRecommendation(ctx, model, reqEditors...)
@@ -3164,6 +3568,24 @@ func (c *ClientWithResponses) ListTuningProfilesWithResponse(ctx context.Context
 		return nil, err
 	}
 	return ParseListTuningProfilesResponse(rsp)
+}
+
+// GetHealthWithResponse request returning *GetHealthResponse
+func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
+	rsp, err := c.GetHealth(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetHealthResponse(rsp)
+}
+
+// GetRunningWithResponse request returning *GetRunningResponse
+func (c *ClientWithResponses) GetRunningWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRunningResponse, error) {
+	rsp, err := c.GetRunning(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetRunningResponse(rsp)
 }
 
 // ListModelsWithResponse request returning *ListModelsResponse
@@ -3513,6 +3935,32 @@ func ParseGetHardwareResponse(rsp *http.Response) (*GetHardwareResponse, error) 
 	return response, nil
 }
 
+// ParseGetApiModelsResponse parses an HTTP response from a GetApiModelsWithResponse call
+func ParseGetApiModelsResponse(rsp *http.Response) (*GetApiModelsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetApiModelsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ApiModelsResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetOffloadRecommendationResponse parses an HTTP response from a GetOffloadRecommendationWithResponse call
 func ParseGetOffloadRecommendationResponse(rsp *http.Response) (*GetOffloadRecommendationResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3659,6 +4107,58 @@ func ParseListTuningProfilesResponse(rsp *http.Response) (*ListTuningProfilesRes
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest TuningProfilesResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetHealthResponse parses an HTTP response from a GetHealthWithResponse call
+func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetHealthResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HealthResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetRunningResponse parses an HTTP response from a GetRunningWithResponse call
+func ParseGetRunningResponse(rsp *http.Response) (*GetRunningResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetRunningResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RunningResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

@@ -17,6 +17,7 @@ import (
 	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
+	"github.com/androidand/llama-skein/pkg/apicontract"
 )
 
 // stubRouter is a minimal router.LocalRouter for Server dispatch tests.
@@ -427,5 +428,46 @@ func TestServer_LogStream_UnknownID_Returns400(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status=%d want 400", w.Code)
+	}
+}
+
+// TestServer_HealthMatchesContract decodes the live handler response into the
+// generated contract type, so the handler and contracts/llama-skein.openapi.json
+// cannot drift apart silently. Without the contract entry, a cross-repo client
+// generated from the spec could not read readiness at all.
+func TestServer_HealthMatchesContract(t *testing.T) {
+	local := newStubRouter([]string{"broken"}, "")
+	local.running = map[string]process.ProcessState{"broken": process.StateFailed}
+	local.modelErrors = map[string]*process.LoadError{
+		"broken": {Message: "boom", Category: process.FailureStart, Attempts: 1},
+	}
+	s := newTestServer(local, newStubRouter(nil, ""))
+	s.cfg = config.Config{Models: map[string]config.ModelConfig{"broken": {Cmd: "llama-server"}}}
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	dec := json.NewDecoder(strings.NewReader(w.Body.String()))
+	dec.DisallowUnknownFields()
+	var got apicontract.HealthResponse
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("response does not match the contract schema: %v\nbody=%s", err, w.Body.String())
+	}
+
+	if got.Status != "ok" || !got.Busy == false {
+		t.Errorf("status=%q busy=%v", got.Status, got.Busy)
+	}
+	if got.AnyModelResident {
+		t.Error("any_model_resident=true with only a failed model")
+	}
+	mh, ok := got.Models["broken"]
+	if !ok {
+		t.Fatal("failed model missing from the contract-typed response")
+	}
+	if string(mh.State) != "failed" {
+		t.Errorf("state=%q want failed", mh.State)
+	}
+	if mh.LastError == nil || mh.LastError.Message != "boom" {
+		t.Errorf("last_error did not survive contract decoding: %+v", mh.LastError)
 	}
 }
