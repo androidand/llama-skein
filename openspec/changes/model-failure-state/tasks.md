@@ -21,9 +21,9 @@
 
 ## 3. Readiness before commitment
 
-- [ ] 3.1 `internal/router/loading.go:271-281` and `internal/router/base.go:842`: defer the `WriteHeader`/body commit until the load outcome is known. Buffer or withhold loading chatter until success is assured; on failure emit a real status code and typed error body. Verify: `go test ./internal/router/ -run LoadingCommit -count=1` asserts no bytes are written before the outcome resolves.
+- [x] 3.1 `internal/router/loading.go:271-281` and `internal/router/base.go:842`: defer the `WriteHeader`/body commit until the load outcome is known. Buffer or withhold loading chatter until success is assured; on failure emit a real status code and typed error body. Verify: `go test ./internal/router/ -run LoadingCommit -count=1` asserts no bytes are written before the outcome resolves.
 - [ ] 3.2 `internal/router/base.go:889` / `internal/router/router.go:192-207`: route load failure to the distinct code from 1.3 rather than the `default` 500 branch. Verify: `go test ./internal/router/ -run LoadFailureCode -count=1`.
-- [ ] 3.3 Regression test for the observed production signature: a streaming request against a model whose load fails must NOT produce status 200 with zero valid JSON deltas. Verify: `go test ./internal/router/ -run No200OnFailure -count=1` — this is the test that would have caught the reported hang.
+- [x] 3.3 Regression test for the observed production signature: a streaming request against a model whose load fails must NOT produce status 200 with zero valid JSON deltas. Verify: `go test ./internal/router/ -run No200OnFailure -count=1` — this is the test that would have caught the reported hang.
 
 ## 4. Readiness surface
 
