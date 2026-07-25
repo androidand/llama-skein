@@ -9,6 +9,7 @@ import (
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
 	"github.com/androidand/llama-skein/pkg/apicontract"
@@ -248,7 +249,56 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.perf.MetricsHandler().ServeHTTP(w, r)
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
+// handleHealth reports what the host can actually serve right now.
+//
+// It used to return a bare "OK", which said nothing about any model: a
+// provider whose model had failed to load looked exactly like a healthy one,
+// so an orchestrator would dispatch to it and block. The body lets a caller
+// preflight — distinguishing ready, loading, busy, failed, and idle-with-no-
+// model-resident — without spending an inference request to find out.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	type modelHealth struct {
+		State     string             `json:"state"`
+		LastError *process.LoadError `json:"last_error,omitempty"`
+	}
+	type healthBody struct {
+		Status           string                 `json:"status"`
+		AnyModelResident bool                   `json:"any_model_resident"`
+		Busy             bool                   `json:"busy"`
+		InFlight         int64                  `json:"in_flight"`
+		Models           map[string]modelHealth `json:"models"`
+	}
+
+	errs := s.local.ModelErrors()
+	models := make(map[string]modelHealth, len(s.cfg.Models))
+	anyResident := false
+	for id := range s.cfg.Models {
+		state, loaded := s.modelState(id)
+		models[id] = modelHealth{State: state, LastError: errs[id]}
+		if loaded {
+			anyResident = true
+		}
+	}
+
+	inFlight := s.inflight.Current()
+	body := healthBody{
+		Status:           "ok",
+		AnyModelResident: anyResident,
+		Busy:             inFlight > 0,
+		InFlight:         inFlight,
+		Models:           models,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		s.muxlog.Debugf("health: encode failed: %v", err)
+	}
+}
+
+// handleWolHealth stays a bare constant: wake-on-LAN probes only need to know
+// the host answers, and some of them do not parse a body.
+func handleWolHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
