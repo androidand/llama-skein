@@ -11,12 +11,20 @@
 
 ## A — global default maxRequestTimeSecs
 
-- [ ] 2. Add `MaxRequestTimeSecs int` (`yaml:"maxRequestTimeSecs"`) to the
+<!-- Verified complete 2026-07-25: the global field and its inheritance already
+     exist (config.go:133-136, :333-334), config.docker-default.yaml:31 sets 900
+     with a comment, and both are covered by TestConfig_MaxRequestTimeSecs*.
+     Deliberately NOT defaulted in code: "0 = no limit" is documented behaviour
+     and TestConfig_MaxRequestTimeSecsNoGlobalKeepsZero pins it, so an int field
+     cannot distinguish unset from an explicit 0. The remaining gap is therefore
+     deployment, not code — see task 13. -->
+
+- [x] 2. Add `MaxRequestTimeSecs int` (`yaml:"maxRequestTimeSecs"`) to the
        top-level `config.Config`; in load, copy it into any model whose own
        `MaxRequestTimeSecs == 0` (mirror the `HealthCheckTimeout` propagation
        at config.go ~316).
        Validation: `go test ./internal/config/ -run 'MaxRequestTime'`
-- [ ] 3. Set a recommended `maxRequestTimeSecs` in `config.docker-default.yaml`
+- [x] 3. Set a recommended `maxRequestTimeSecs` in `config.docker-default.yaml`
        with a comment. Document `0 = no limit`.
 
 ## C — GPU-stall watchdog
