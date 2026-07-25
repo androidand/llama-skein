@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install mlx-lm for Apple Silicon Macs.
 # After running, add backend: mlx models to your llama-skein config using:
-#   cmd: /Users/andreas/.venv/mlx/bin/mlx_lm.server --host 127.0.0.1 --port ${PORT} --model <hf-repo>
+#   cmd: $HOME/.venv/mlx/bin/mlx_lm.server --host 127.0.0.1 --port ${PORT} --model <hf-repo>
 set -euo pipefail
 
 if [[ "$(uname -m)" != "arm64" ]]; then
