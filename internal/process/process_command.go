@@ -139,6 +139,14 @@ type ProcessCommand struct {
 	// current ProcessState. Written only by run(); read by State() via atomic load.
 	state atomic.Value
 
+	// most recent start/load failure, retained after the process is gone so
+	// callers can distinguish a broken model from an idle one. Written only
+	// by run() via recordFailure; read by LastError() via atomic load.
+	lastError atomic.Pointer[LoadError]
+
+	// count of consecutive failures, reset on a successful start.
+	failAttempts atomic.Int64
+
 	// stores the active reverse-proxy handler when the process is running.
 	// Written only by run(); read by ServeHTTP via atomic load.
 	handler atomic.Pointer[http.HandlerFunc]
@@ -338,7 +346,9 @@ func (p *ProcessCommand) run() {
 			cmdDone = nil
 			cmdCancel = nil
 			p.handler.Store(nil)
-			setState(StateStopped)
+			// Ready then gone on its own is a failure, not an idle stop.
+			p.recordFailure(fmt.Errorf("[%s] upstream exited unexpectedly", p.id), FailureCrash)
+			setState(StateFailed)
 			crashes := p.recordUnexpectedExit()
 			p.proxyLogger.Warnf("<%s> upstream exited unexpectedly (%d unexpected exit(s) in the last %v)", p.id, crashes, crashLoopWindow)
 			respondRun(fmt.Errorf("[%s] upstream exited unexpectedly", p.id))
@@ -352,17 +362,24 @@ func (p *ProcessCommand) run() {
 				req.respond <- nil
 			case StateShutdown:
 				req.respond <- fmt.Errorf("[%s] shutdown", p.id)
+			case StateFailed:
+				// No start is in flight (Run sets Starting immediately), so
+				// nothing will ever wake this caller. Fail fast with the
+				// recorded cause instead of parking it forever.
+				req.respond <- p.failedWaitErr()
 			default:
 				readyWaiters = append(readyWaiters, req)
 			}
 
-		// Run: start the upstream process. Only valid from StateStopped.
+		// Run: start the upstream process. Valid from StateStopped and from
+		// StateFailed — a failed process is idle and restartable; refusing a
+		// restart is the crash-loop breaker's job, not the state gate's.
 		// doStart can take a long time (health-check polling), so it runs in
 		// a separate goroutine and we wait on resultCh. While waiting we also
 		// listen for an incoming Stop — that's how callers cancel an in-flight
 		// start.
 		case req := <-p.runCh:
-			if state != StateStopped {
+			if !startableFrom(state) {
 				req.respond <- fmt.Errorf("[%s] could not be started in %s state", p.id, state)
 				continue
 			}
@@ -399,6 +416,7 @@ func (p *ProcessCommand) run() {
 					cmdCancel = res.cancel
 					fn := res.handlerFn
 					p.handler.Store(&fn)
+					p.clearFailureStreak()
 					setState(StateReady)
 					notifyWaiters(nil)
 					// Park the Run response — Run blocks until the process
@@ -437,7 +455,12 @@ func (p *ProcessCommand) run() {
 						}()
 					}
 				} else {
-					setState(StateStopped)
+					// The load failed. Record it and report Failed, not
+					// Stopped — Stopped is indistinguishable from "never
+					// asked to load", which is what made a broken provider
+					// look healthy-idle to every caller.
+					p.recordFailure(res.err, FailureStart)
+					setState(StateFailed)
 					notifyWaiters(res.err)
 					req.respond <- res.err
 				}
@@ -1025,6 +1048,43 @@ func (p *ProcessCommand) State() ProcessState {
 		return s
 	}
 	return StateStopped
+}
+
+// LastError returns the most recent recorded failure, or nil if there has
+// never been one. Retained across a later successful start so the failure
+// stays auditable.
+func (p *ProcessCommand) LastError() *LoadError {
+	return p.lastError.Load()
+}
+
+// recordFailure retains err so a caller polling state can tell a broken model
+// from an idle one. Callers must still setState(StateFailed) — this only
+// stores the detail.
+func (p *ProcessCommand) recordFailure(err error, cat FailureCategory) {
+	if err == nil {
+		return
+	}
+	p.lastError.Store(&LoadError{
+		Message:  err.Error(),
+		Category: cat,
+		At:       time.Now(),
+		Attempts: int(p.failAttempts.Add(1)),
+	})
+}
+
+// clearFailureStreak resets the consecutive-failure count on a successful
+// start. The stored LoadError itself is deliberately kept as history.
+func (p *ProcessCommand) clearFailureStreak() {
+	p.failAttempts.Store(0)
+}
+
+// failedWaitErr describes why a WaitReady caller is being turned away, quoting
+// the recorded cause when there is one.
+func (p *ProcessCommand) failedWaitErr() error {
+	if le := p.lastError.Load(); le != nil {
+		return fmt.Errorf("[%s] last %s attempt failed: %s", p.id, le.Category, le.Message)
+	}
+	return fmt.Errorf("[%s] last start attempt failed", p.id)
 }
 
 func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {

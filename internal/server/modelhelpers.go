@@ -158,6 +158,10 @@ func (s *Server) modelState(realID string) (state string, loaded bool) {
 		return "stopping", false
 	case process.StateShutdown:
 		return "shutdown", false
+	case process.StateFailed:
+		// Distinct from "stopped": the last load attempt failed. Reporting
+		// it as stopped is what made a broken model look idle.
+		return "failed", false
 	default:
 		return "stopped", false
 	}

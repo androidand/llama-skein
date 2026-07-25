@@ -39,7 +39,10 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			rec.Description = &description
 		}
 		if state != "" {
-			rec.State = &state
+			// state is now a contract enum, not a bare string, since the
+			// schema declares the valid values (including "failed").
+			ms := apicontract.ModelState(state)
+			rec.State = &ms
 			rec.Loaded = &loaded
 		}
 		hints := map[string]any{}
