@@ -27,6 +27,7 @@ type stubRouter struct {
 	running       map[string]process.ProcessState
 	unloadCalls   atomic.Int32
 	loggers       map[string]*logmon.Monitor
+	modelErrors   map[string]*process.LoadError
 }
 
 func newStubRouter(models []string, response string) *stubRouter {
@@ -45,7 +46,9 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
-func (s *stubRouter) Unload(_ time.Duration, _ ...string)            { s.unloadCalls.Add(1) }
+
+func (s *stubRouter) ModelErrors() map[string]*process.LoadError { return s.modelErrors }
+func (s *stubRouter) Unload(_ time.Duration, _ ...string)        { s.unloadCalls.Add(1) }
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
 		if lg, ok := s.loggers[modelID]; ok {
@@ -164,15 +167,112 @@ func TestServer_UnknownPathReturns404(t *testing.T) {
 	}
 }
 
-func TestServer_Health(t *testing.T) {
+// TestServer_WolHealth pins /wol-health as a bare constant: wake-on-LAN probes
+// only need to know the host answers, and some do not parse a body.
+func TestServer_WolHealth(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 
-	for _, path := range []string{"/health", "/wol-health"} {
-		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if w.Code != http.StatusOK || w.Body.String() != "OK" {
-			t.Errorf("%s: status=%d body=%q", path, w.Code, w.Body.String())
-		}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/wol-health", nil))
+	if w.Code != http.StatusOK || w.Body.String() != "OK" {
+		t.Errorf("status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
+// TestServer_Health covers the readiness body. /health used to be a hardcoded
+// "OK" that said nothing about any model, so a provider whose model had failed
+// to load looked exactly like a healthy one and callers dispatched into it.
+func TestServer_Health(t *testing.T) {
+	local := newStubRouter([]string{"good", "broken"}, "")
+	local.running = map[string]process.ProcessState{
+		"good":   process.StateReady,
+		"broken": process.StateFailed,
+	}
+	local.modelErrors = map[string]*process.LoadError{
+		"broken": {Message: "exec: no such file", Category: process.FailureStart, Attempts: 2},
+	}
+	s := newTestServer(local, newStubRouter(nil, ""))
+	s.cfg = config.Config{Models: map[string]config.ModelConfig{
+		"good": {Cmd: "llama-server"}, "broken": {Cmd: "llama-server"},
+	}}
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+
+	var got struct {
+		Status           string `json:"status"`
+		AnyModelResident bool   `json:"any_model_resident"`
+		Busy             bool   `json:"busy"`
+		Models           map[string]struct {
+			State     string `json:"state"`
+			LastError *struct {
+				Message  string `json:"message"`
+				Category string `json:"category"`
+				Attempts int    `json:"attempts"`
+			} `json:"last_error"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v body=%q", err, w.Body.String())
+	}
+
+	if got.Status != "ok" {
+		t.Errorf("status=%q want ok", got.Status)
+	}
+	if !got.AnyModelResident {
+		t.Error("any_model_resident=false with a ready model")
+	}
+	if got.Busy {
+		t.Error("busy=true with nothing in flight")
+	}
+	if got.Models["good"].State != "ready" {
+		t.Errorf("good.state=%q want ready", got.Models["good"].State)
+	}
+	// The point of the change: a broken model is distinguishable from an idle
+	// one, and says why.
+	if got.Models["broken"].State != "failed" {
+		t.Errorf("broken.state=%q want failed", got.Models["broken"].State)
+	}
+	le := got.Models["broken"].LastError
+	if le == nil {
+		t.Fatal("broken model reported no last_error")
+	}
+	if le.Message != "exec: no such file" || le.Category != "start" || le.Attempts != 2 {
+		t.Errorf("last_error=%+v", *le)
+	}
+	if got.Models["good"].LastError != nil {
+		t.Error("healthy model carries a last_error")
+	}
+}
+
+// TestServer_HealthNoModelResident covers the reachable-but-not-serving case:
+// the control plane answers while nothing is loaded, which a bare "OK" could
+// never express.
+func TestServer_HealthNoModelResident(t *testing.T) {
+	local := newStubRouter([]string{"m"}, "")
+	s := newTestServer(local, newStubRouter(nil, ""))
+	s.cfg = config.Config{Models: map[string]config.ModelConfig{"m": {Cmd: "llama-server"}}}
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	var got struct {
+		AnyModelResident bool `json:"any_model_resident"`
+		Models           map[string]struct {
+			State string `json:"state"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AnyModelResident {
+		t.Error("any_model_resident=true with nothing loaded")
+	}
+	if got.Models["m"].State != "stopped" {
+		t.Errorf("state=%q want stopped", got.Models["m"].State)
 	}
 }
 

@@ -27,7 +27,7 @@
 
 ## 4. Readiness surface
 
-- [ ] 4.1 `internal/server/api.go:248-251`: replace the hardcoded `200 "OK"` with a body reporting per-model `state` and `last_error`, plus provider-level `any_model_resident` and `busy` (derived from occupied slots). Keep `/wol-health` a bare constant if anything depends on its current shape — check first. Verify: `curl -s localhost:11435/health | jq` shows per-model state; with nothing resident, `any_model_resident` is false.
+- [x] 4.1 `internal/server/api.go:248-251`: replace the hardcoded `200 "OK"` with a body reporting per-model `state` and `last_error`, plus provider-level `any_model_resident` and `busy` (derived from occupied slots). Keep `/wol-health` a bare constant if anything depends on its current shape — check first. Verify: `curl -s localhost:11435/health | jq` shows per-model state; with nothing resident, `any_model_resident` is false.
 - [ ] 4.2 Confirm the response matches the contract from 1.2 exactly. Verify: validate the live response against the contract schema.
 
 ## 5. Host-level session cap

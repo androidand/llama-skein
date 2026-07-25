@@ -688,6 +688,20 @@ func (b *baseRouter) RunningModels() map[string]process.ProcessState {
 	return running
 }
 
+// ModelErrors returns the most recent recorded failure for each model that has
+// one. Unlike RunningModels this deliberately includes stopped processes: a
+// failure's whole purpose is to outlive the process that produced it, so a
+// caller can tell a broken model from one that was never asked to load.
+func (b *baseRouter) ModelErrors() map[string]*process.LoadError {
+	out := make(map[string]*process.LoadError)
+	for id, p := range b.processes {
+		if le := p.LastError(); le != nil {
+			out[id] = le
+		}
+	}
+	return out
+}
+
 // Unload stops the named models, or every running model when none are named.
 // It blocks until each targeted process has stopped.
 //

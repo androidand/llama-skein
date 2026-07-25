@@ -298,8 +298,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))
 	mux.Handle("GET /logs/stream/{logMonitorID...}", apiChain.ThenFunc(s.handleLogStream))
 
-	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET /wol-health", handleHealth)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /wol-health", handleWolHealth)
 	mux.HandleFunc("GET /{$}", handleRootRedirect)
 
 	// Embedded UI.

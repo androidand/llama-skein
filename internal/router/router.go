@@ -80,6 +80,12 @@ type LocalRouter interface {
 	// stopped or shut down, keyed by model ID.
 	RunningModels() map[string]process.ProcessState
 
+	// ModelErrors returns the most recent recorded failure per model, for
+	// models that have one. Includes stopped processes: a failure must outlive
+	// the process that produced it or a caller cannot distinguish a broken
+	// model from one that was never requested.
+	ModelErrors() map[string]*process.LoadError
+
 	// Unload stops the named models, or every running model when none are
 	// named. It blocks until each targeted process has stopped.
 	Unload(timeout time.Duration, models ...string)
