@@ -2,7 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "llama-skein control API",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "description": "## Failure status codes\n\nA caller can distinguish failure classes by status code alone, without parsing prose:\n\n| code | meaning | raised by |\n|------|---------|-----------|\n| 429 | Concurrency limit reached; retry shortly. | HTTP concurrency middleware |\n| 503 | Queued behind a busy sibling past `swapQueueTimeoutSecs`. | swap queue |\n| 507 | Loading would exceed host memory; the load was refused before launching. | fit guard |\n| 500 | Unclassified internal error. | residual |\n\nReadiness is pollable at `GET /health` before dispatching, which is cheaper than\ndiscovering the state by issuing an inference request."
   },
   "paths": {
     "/api/system/version": {
@@ -541,6 +542,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TuningProfilesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Host and per-model readiness",
+        "description": "Reports per-model state and last_error plus provider-level residency and busyness. Previously a bare 200 \"OK\", which could not distinguish a healthy host from one whose model had failed to load.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Current readiness.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/running": {
+      "get": {
+        "summary": "Locally running models",
+        "description": "Every local process that is not stopped or shut down, joined against its config.",
+        "operationId": "getRunning",
+        "responses": {
+          "200": {
+            "description": "Running models.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunningResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models": {
+      "get": {
+        "summary": "Configured models with state",
+        "operationId": "getApiModels",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Pass 'running' to list only loaded models.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "running"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured models.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiModelsResponse"
                 }
               }
             }
@@ -1742,6 +1813,172 @@
           "attempts": {
             "type": "integer",
             "description": "Consecutive failures; reset on a successful start."
+          }
+        }
+      },
+      "ModelHealth": {
+        "type": "object",
+        "description": "Per-model readiness. 'failed' is distinct from 'stopped': stopped means idle with nothing wrong, failed means the last load attempt failed.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "starting",
+              "ready",
+              "stopping",
+              "shutdown",
+              "failed"
+            ]
+          },
+          "last_error": {
+            "$ref": "#/components/schemas/LastError"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "What the host can actually serve right now. Lets a caller preflight \u2014 distinguishing ready, loading, busy, failed and idle-with-no-model-resident \u2014 instead of discovering it by spending an inference request.",
+        "required": [
+          "status",
+          "any_model_resident",
+          "busy",
+          "models"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "any_model_resident": {
+            "type": "boolean",
+            "description": "True when at least one model is loaded and serving. False here with a reachable control plane is the 'up but not serving' case."
+          },
+          "busy": {
+            "type": "boolean",
+            "description": "True when at least one inference request is in flight. A single-slot host that is busy will queue a new request."
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "models": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelHealth"
+            }
+          }
+        }
+      },
+      "RunningModel": {
+        "type": "object",
+        "required": [
+          "model",
+          "state"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "cmd": {
+            "type": "string"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "RunningResponse": {
+        "type": "object",
+        "required": [
+          "running"
+        ],
+        "properties": {
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningModel"
+            }
+          }
+        }
+      },
+      "ApiModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "state",
+          "loaded",
+          "unlisted"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "starting",
+              "ready",
+              "stopping",
+              "shutdown",
+              "failed"
+            ]
+          },
+          "loaded": {
+            "type": "boolean"
+          },
+          "unlisted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ApiModelsResponse": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiModel"
+            }
           }
         }
       }

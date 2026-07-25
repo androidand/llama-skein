@@ -3,8 +3,8 @@
 ## 1. Contract first
 
 - [x] 1.1 Edit `contracts/llama-skein.openapi.json` **before** any Go change (cross-repo codegen protocol): add `LastError` schema (message, category, at, attempts); add `failed` to `Model.state`; add `last_error` to the model schema. Verify: the file parses as JSON and `Model.state` enum contains `failed`.
-- [ ] 1.2 Add the currently-undocumented paths to the contract: `GET /running`, `GET /api/models`, and the new `GET /health` response body (per-model state + last_error, provider-level `any_model_resident` and `busy`). Verify: contract has 18 paths; a generated client exposes `state` and `last_error`.
-- [ ] 1.3 Document the fail-fast status code table in the contract (`507` fit-guard, `503` swap-queue timeout, `429` concurrency, the new distinct load-failure code, `500` residual). Verify: each documented code appears on the relevant operation's responses.
+- [x] 1.2 Add the currently-undocumented paths to the contract: `GET /running`, `GET /api/models`, and the new `GET /health` response body (per-model state + last_error, provider-level `any_model_resident` and `busy`). Verify: contract has 18 paths; a generated client exposes `state` and `last_error`.
+- [x] 1.3 Document the fail-fast status code table in the contract (`507` fit-guard, `503` swap-queue timeout, `429` concurrency, the new distinct load-failure code, `500` residual). Verify: each documented code appears on the relevant operation's responses.
 
 ## 2. Failure state and retained error
 
@@ -28,7 +28,7 @@
 ## 4. Readiness surface
 
 - [x] 4.1 `internal/server/api.go:248-251`: replace the hardcoded `200 "OK"` with a body reporting per-model `state` and `last_error`, plus provider-level `any_model_resident` and `busy` (derived from occupied slots). Keep `/wol-health` a bare constant if anything depends on its current shape — check first. Verify: `curl -s localhost:11435/health | jq` shows per-model state; with nothing resident, `any_model_resident` is false.
-- [ ] 4.2 Confirm the response matches the contract from 1.2 exactly. Verify: validate the live response against the contract schema.
+- [x] 4.2 Confirm the response matches the contract from 1.2 exactly. Verify: validate the live response against the contract schema.
 
 ## 5. Host-level session cap
 
