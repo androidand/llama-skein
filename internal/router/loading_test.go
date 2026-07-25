@@ -20,6 +20,7 @@ func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 
 	if ct := lw.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type: want text/event-stream, got %q", ct)
@@ -51,6 +52,7 @@ func TestLoadingWriter_WriteHeaderOnce(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.WriteHeader(http.StatusCreated)
 
 	if w.Code != http.StatusOK {
@@ -64,6 +66,7 @@ func TestLoadingWriter_WritePassthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.Write([]byte("hello"))
 	lw.Flush()
 
@@ -79,6 +82,7 @@ func TestLoadingWriter_StartStopsOnCancel(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.tickDuration = 10 * time.Millisecond
 	lw.loopStarted = make(chan struct{})
 
@@ -104,6 +108,7 @@ func TestLoadingWriter_StartShowsSetUpdate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.tickDuration = 10 * time.Millisecond
 	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
@@ -133,6 +138,7 @@ func TestLoadingWriter_SendDataFormat(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.sendData("hello world")
 
 	body := w.Body.String()
@@ -150,6 +156,7 @@ func TestLoadingWriter_SendLine(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.charPerSecond = 0
 
 	// Capture only the content from this sendLine call
@@ -170,6 +177,7 @@ func TestLoadingWriter_FlushesPeriodicallyDuringStatusUpdates(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.tickDuration = 10 * time.Millisecond
 	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
@@ -199,6 +207,7 @@ func TestLoadingWriter_ReqStored(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	if lw.req != req {
 		t.Fatal("req not stored")
 	}
@@ -336,10 +345,112 @@ func TestLoadingWriter_MarksChunksSkeinLoading(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.commit() // these tests predate the commit gate: flush and stream immediately
 	lw.sendData("loading...")
 
 	body := w.Body.String()
 	if !strings.Contains(body, `"skein_loading":true`) {
 		t.Errorf("loading chunk must carry skein_loading marker, got: %s", body)
+	}
+}
+
+// TestLoadingWriter_NoCommitBeforeOutcome is the regression guard for the
+// reported hang. The 200 used to go out at construction, before the load
+// outcome was known, so a subsequent failure could not set a status code and
+// was appended into the SSE body instead. The caller saw HTTP 200, a long
+// duration and zero valid deltas — a success-shaped non-answer.
+func TestLoadingWriter_NoCommitBeforeOutcome(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.charPerSecond = 0
+	lw.sendData("still loading")
+
+	if w.Body.Len() != 0 {
+		t.Fatalf("wrote %d bytes before the load outcome was known: %q", w.Body.Len(), w.Body.String())
+	}
+
+	// Nothing committed, so the status is still ours to choose.
+	if !lw.discard() {
+		t.Fatal("discard reported the response as already committed")
+	}
+	w.WriteHeader(http.StatusInternalServerError)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected a real error status after discard, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "still loading") {
+		t.Error("discarded loading chatter leaked into the response")
+	}
+}
+
+// TestLoadingWriter_CommitFlushesBufferedState proves the buffered chatter is
+// not lost when the load succeeds.
+func TestLoadingWriter_CommitFlushesBufferedState(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.charPerSecond = 0
+	lw.sendData("progress")
+	if w.Body.Len() != 0 {
+		t.Fatal("expected buffering before commit")
+	}
+
+	lw.commit()
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 after commit, got %d", w.Code)
+	}
+	// Decode: sendInline chunks text across several SSE messages, so the
+	// preamble is not contiguous in the raw body.
+	content := extractStreamedContent(w.Body.String())
+	if !strings.Contains(content, "progress") {
+		t.Errorf("buffered state lost on commit: %q", content)
+	}
+	if !strings.Contains(content, "test-model") {
+		t.Errorf("constructor preamble lost on commit: %q", content)
+	}
+}
+
+// TestLoadingWriter_CommitSurvivesRelease guards the ordering trap: ServeHTTP
+// calls release() (fencing the background goroutine) before it knows the
+// outcome, then commits. Gating commit on released would silently drop the
+// buffer on every successful load.
+func TestLoadingWriter_CommitSurvivesRelease(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.charPerSecond = 0
+	lw.sendData("progress")
+	lw.release()
+	lw.commit()
+
+	if !strings.Contains(w.Body.String(), "progress") {
+		t.Errorf("buffer dropped because release() preceded commit(): %q", w.Body.String())
+	}
+}
+
+// TestLoadingWriter_CommitsAfterDeadline proves a slow-but-healthy load is not
+// starved of bytes: past commitAfter the writer commits so the client's own
+// header timeout does not fire on a load that was going to succeed.
+func TestLoadingWriter_CommitsAfterDeadline(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", LoadingThemeDefault, w, req)
+	lw.charPerSecond = 0
+	lw.commitAfter = 0 // deadline already passed
+	lw.sendData("slow load")
+
+	if w.Body.Len() == 0 {
+		t.Fatal("expected commitment once the buffering deadline elapsed")
+	}
+	if lw.discard() {
+		t.Error("discard should report the response as already committed")
 	}
 }

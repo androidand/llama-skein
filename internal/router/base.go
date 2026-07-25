@@ -887,8 +887,20 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if resp.err != nil {
+		// Drop the buffered loading chatter so the status code is still ours.
+		// Committing it first is what produced the 200-with-no-deltas
+		// signature: SendError's WriteHeader is a no-op once the response is
+		// committed, so the error ended up inside the SSE body.
+		if lw != nil && !lw.discard() {
+			b.logger.Warnf("<%s> load failed after the response was already committed (%v); "+
+				"the client sees a 200 with the error in-stream", data.ModelID, resp.err)
+		}
 		SendError(w, req, resp.err)
 		return
+	}
+	// Load succeeded: release the buffered loading state, then stream normally.
+	if lw != nil {
+		lw.commit()
 	}
 	resp.handleFunc(w, req)
 }
