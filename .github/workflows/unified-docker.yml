@@ -67,7 +67,10 @@ jobs:
 
   build:
     needs: setup
-    if: ${{ needs.setup.outputs.matrix != '[]' }}
+    # This workflow pushes to ghcr.io/mostlygeek/llama-swap, a registry this
+    # fork does not own. Keep it inert on the fork until retargeted to a
+    # fork-owned registry (see openspec/changes/launch-readiness, task 15).
+    if: ${{ needs.setup.outputs.matrix != '[]' && github.repository == 'mostlygeek/llama-swap' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
