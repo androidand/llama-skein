@@ -88,7 +88,8 @@ func TestServer_Fit_UnknownModel404(t *testing.T) {
 	}
 }
 
-// MLX models report a clear "llamacpp only" reason rather than a wrong number.
+// An MLX model we cannot locate reports a clear reason rather than a wrong number —
+// and reports it as "unknown", not as a negative fit verdict.
 func TestServer_Fit_MLXReportsUnsupported(t *testing.T) {
 	cfg := config.Config{Models: map[string]config.ModelConfig{
 		"mlx1": {Cmd: "mlx_lm.server --model mlx-community/x", Backend: config.BackendMLX},
@@ -100,8 +101,32 @@ func TestServer_Fit_MLXReportsUnsupported(t *testing.T) {
 	}
 	var mf apicontract.ModelFit
 	json.Unmarshal(w.Body.Bytes(), &mf)
-	if mf.FitLevel != apicontract.No || mf.Reason == nil {
-		t.Errorf("expected fit=no with a reason for mlx, got level=%q reason=%v", mf.FitLevel, mf.Reason)
+	// "unknown", not "no": nothing was measured (no useModelName means we cannot find
+	// the weights). "no" is a verdict meaning the model will not fit this host, and
+	// consumers surface it that way.
+	if mf.FitLevel != apicontract.Unknown || mf.Reason == nil {
+		t.Errorf("expected fit=unknown with a reason for mlx, got level=%q reason=%v", mf.FitLevel, mf.Reason)
+	}
+}
+
+// A backend whose weights are not modeled at all must also report "unknown" rather
+// than a negative verdict — every backend: vllm model was previously reported as "no".
+func TestServer_Fit_UnmodeledBackendReportsUnknown(t *testing.T) {
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"vllm1": {Cmd: "vllm serve some/model --port 1234", Backend: config.BackendVLLM},
+	}}
+	s := fitTestServer(t, cfg)
+	w := getJSON(t, s, "/api/fit/vllm1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	var mf apicontract.ModelFit
+	json.Unmarshal(w.Body.Bytes(), &mf)
+	if mf.FitLevel != apicontract.Unknown {
+		t.Errorf("expected fit=unknown for an unmodeled backend, got %q", mf.FitLevel)
+	}
+	if mf.Reason == nil {
+		t.Error("expected a reason explaining why fit was not computed")
 	}
 }
 

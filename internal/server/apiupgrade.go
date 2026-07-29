@@ -509,7 +509,7 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 	}
 
 	s.sendUpgradeEvent(w, "restart", "restarting llama-server process")
-	if err := restartLlamaServer(); err != nil {
+	if err := restartLlamaServer(serverPath); err != nil {
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("restart: %v", err))
 	}
 
@@ -668,28 +668,74 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 	}
 
 	s.sendUpgradeEvent(w, "restart", "restarting llama-server processes")
-	if err := restartLlamaServer(); err != nil {
+	if err := restartLlamaServer(serverPath); err != nil {
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("restart: %v", err))
 	}
 
 	return nil
 }
 
-// currentServerPath returns the filesystem path to the running llama-server binary.
-// It inspects pgrep output first; falls back to the standard user install path.
-func (s *Server) currentServerPath() (string, error) {
-	cmd := exec.Command("pgrep", "-a", "llama-server")
-	out, err := cmd.Output()
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) > 0 {
-			fields := strings.Fields(lines[0])
-			// pgrep -a output: <PID> <binary> [args...]
-			if len(fields) >= 2 {
-				return fields[1], nil
-			}
+// managedServerBasename is the exact binary basename that process discovery will
+// accept as the managed engine. Matching on the basename rather than a pgrep pattern
+// is deliberate: `pgrep -a llama-server` also matches names like
+// "llama-server-instella", and an upgrade aimed at such a build overwrites its binary
+// AND copies the release's shared libraries over its directory (see libDir uses
+// below). The binary-only .bak cannot undo that, so a second engine build must never
+// become a candidate by accident.
+const managedServerBasename = "llama-server"
+
+// runningLlamaServerPaths returns the distinct binary paths of running processes whose
+// basename is exactly managedServerBasename, in first-seen order.
+func runningLlamaServerPaths() ([]string, error) {
+	out, err := exec.Command("pgrep", "-a", managedServerBasename).Output()
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		// pgrep -a output: <PID> <binary> [args...]
+		if len(fields) < 2 {
+			continue
+		}
+		p := fields[1]
+		if filepath.Base(p) != managedServerBasename {
+			continue
+		}
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
 		}
 	}
+	return paths, nil
+}
+
+// currentServerPath returns the filesystem path of the llama-server binary that the
+// upgrade API manages.
+//
+// Resolution order:
+//  1. the configured enginePath, verbatim. This is the only deterministic option and
+//     is required on any host running more than one engine build.
+//  2. running processes whose binary basename is exactly "llama-server". Conflicting
+//     candidates are an error rather than an arbitrary pick — installing over the
+//     wrong engine is destructive and not fully reversible.
+//  3. the standard user install path, when it exists.
+func (s *Server) currentServerPath() (string, error) {
+	if p := strings.TrimSpace(s.cfg.EnginePath); p != "" {
+		return p, nil
+	}
+
+	if paths, err := runningLlamaServerPaths(); err == nil && len(paths) > 0 {
+		if len(paths) == 1 {
+			return paths[0], nil
+		}
+		return "", fmt.Errorf(
+			"cannot determine which llama-server to upgrade: %d running candidates (%s); "+
+				"set the top-level enginePath in config.yaml to the binary this host should manage",
+			len(paths), strings.Join(paths, ", "))
+	}
+
 	// Fallback: standard user installation path
 	if home, err := os.UserHomeDir(); err == nil {
 		candidate := filepath.Join(home, ".local", "lib", "llama-cpp", "llama-server")
@@ -697,7 +743,7 @@ func (s *Server) currentServerPath() (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("cannot determine llama-server path: no running process and ~/.local/lib/llama-cpp/llama-server not found")
+	return "", fmt.Errorf("cannot determine llama-server path: no running %q process, no enginePath configured, and ~/.local/lib/llama-cpp/llama-server not found", managedServerBasename)
 }
 
 // detectROCmRoot returns the ROCm dev-toolchain root (where hipcc/amdclang++
@@ -836,24 +882,40 @@ func smokeTest(serverPath, libDir string) error {
 	return nil
 }
 
-func restartLlamaServer() error {
-	cmd := exec.Command("pgrep", "-a", "llama-server")
-	out, err := cmd.Output()
+// restartLlamaServer kills the engine process(es) at managedPath so the supervisor
+// restarts them against the newly installed binary.
+//
+// Only processes whose binary path equals managedPath are killed. The previous
+// implementation killed every `pgrep -a llama-server` match by PID, which on a host
+// running a second, differently-named engine build terminated an unrelated model
+// mid-request.
+func restartLlamaServer(managedPath string) error {
+	out, err := exec.Command("pgrep", "-a", managedServerBasename).Output()
 	if err != nil {
-		return fmt.Errorf("no llama-server process found to restart")
+		return fmt.Errorf("no %q process found to restart", managedServerBasename)
 	}
+	killed := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 1 {
+		if len(fields) < 2 {
+			continue
+		}
+		if managedPath != "" && fields[1] != managedPath {
+			continue
+		}
+		if filepath.Base(fields[1]) != managedServerBasename {
 			continue
 		}
 		pid, _ := strconv.Atoi(fields[0])
 		if pid > 0 {
-			proc, err := os.FindProcess(pid)
-			if err == nil {
+			if proc, err := os.FindProcess(pid); err == nil {
 				_ = proc.Kill()
+				killed++
 			}
 		}
+	}
+	if killed == 0 {
+		return fmt.Errorf("no process running %s to restart", managedPath)
 	}
 	time.Sleep(2 * time.Second)
 	return nil

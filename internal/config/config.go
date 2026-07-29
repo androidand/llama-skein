@@ -188,6 +188,20 @@ type Config struct {
 	// model to use when a request omits the "model" field. Must be a
 	// configured model ID or alias.
 	DefaultModel string `yaml:"defaultModel"`
+
+	// absolute path of the llama-server binary that POST /api/system/upgrade
+	// manages. When set, the upgrade API installs there and never inspects the
+	// process list to pick a destination.
+	//
+	// Set this on any host running more than one engine build. Upgrade replaces
+	// the binary AND copies the release's shared libraries into its directory, so
+	// an install aimed at the wrong path overwrites a self-contained engine's
+	// bundled runtime — which a binary-only .bak cannot undo.
+	//
+	// When unset, the destination is discovered from running processes whose
+	// binary basename is exactly "llama-server"; conflicting candidates are an
+	// error rather than a guess.
+	EnginePath string `yaml:"enginePath"`
 }
 
 // SilentModeConfig controls automatic silent mode scheduling.
