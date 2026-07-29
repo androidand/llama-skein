@@ -58,8 +58,9 @@ process, identified by the same rule used to choose the install destination.
 
 ### Requirement: A rollback restores a consistent engine
 
-Because an upgrade replaces shared libraries alongside the binary, the upgrade API
-SHALL NOT write shared libraries into a directory it was not directed at.
+The upgrade API SHALL NOT write shared libraries into a directory it was not directed
+at, because an upgrade replaces those libraries alongside the binary and a
+binary-only backup cannot undo it.
 
 #### Scenario: Libraries follow the declared path
 

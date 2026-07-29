@@ -43,8 +43,8 @@ NOT be able to increase a requested value.
 
 ### Requirement: Both spellings of the field are honoured
 
-Because the request schema accepts the context size under more than one field name,
-the endpoint SHALL apply the same guard regardless of which the caller used.
+The endpoint SHALL apply the same guard regardless of which field name the caller
+used, since the request schema accepts the context size under more than one.
 
 #### Scenario: Either field alone
 
