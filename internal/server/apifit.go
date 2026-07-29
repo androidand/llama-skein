@@ -143,10 +143,18 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	if backend == "" {
 		backend = config.BackendLlamaCpp
 	}
+	// Default to "unknown", not "no". Every early return below is a cannot-compute
+	// case (no useModelName, unreadable metadata, a backend whose weights aren't
+	// modeled). "no" is a *verdict* — it means the model will not fit this host —
+	// and consumers act on it: skein and the UI surface it as a warning, and it
+	// reads as "this host can't run this". Reporting a verdict we never computed is
+	// worse than admitting ignorance, and the contract already defines "unknown"
+	// for exactly this case. fillModelFit always overwrites FitLevel, so a real
+	// computation is unaffected.
 	mf := apicontract.ModelFit{
 		Model:    realName,
 		Backend:  apicontract.ModelFitBackend(backend),
-		FitLevel: apicontract.No,
+		FitLevel: apicontract.Unknown,
 	}
 
 	// MLX: weights are safetensors in the HF cache, not GGUF. Resolve the cache
