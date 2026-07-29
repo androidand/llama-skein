@@ -1,8 +1,11 @@
 package fit
 
 import (
+	"runtime"
 	"testing"
+	"time"
 
+	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
 
@@ -288,5 +291,115 @@ func TestAnalyzeShape_BudgetNeverExceedsPhysicalVRAM(t *testing.T) {
 	if impliedRequiredMB > 24560 {
 		t.Errorf("MaxFitCtx=%d implies %dMB required — exceeds the 24560MB physical card (the exact rocky OOM pattern)",
 			res.MaxFitCtx, impliedRequiredMB)
+	}
+}
+
+func TestFromSnapshot_DiscreteGPU(t *testing.T) {
+	sys := []perf.SysStat{{MemTotalMB: 65536, MemAvailableMB: 40000}}
+	gpus := []perf.GpuStat{{ID: 0, MemTotalMB: 24576, MemUsedMB: 8000}}
+	spec := FromSnapshot("llamacpp", sys, gpus, 0)
+	if spec.Backend != "llamacpp" {
+		t.Errorf("backend = %q, want %q", spec.Backend, "llamacpp")
+	}
+	if spec.RAMTotalMB != 65536 {
+		t.Errorf("ramTotal = %d, want 65536", spec.RAMTotalMB)
+	}
+	if spec.Cores <= 0 {
+		t.Errorf("cores = %d, want > 0", spec.Cores)
+	}
+	// On darwin/arm64 the platform is always unified — GPU stats come from ioreg
+	// overlay of the same pool, not a discrete card. Only assert discrete behavior
+	// on platforms that actually have discrete GPUs.
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		if spec.UnifiedMemory {
+			t.Error("discrete GPU must not be unified")
+		}
+		if spec.VRAMTotalMB != 24576 {
+			t.Errorf("vramTotal = %d, want 24576", spec.VRAMTotalMB)
+		}
+		if spec.VRAMFreeMB != 16576 {
+			t.Errorf("vramFree = %d, want 16576", spec.VRAMFreeMB)
+		}
+	}
+}
+
+func TestFromSnapshot_Unified_NoGPUs(t *testing.T) {
+	sys := []perf.SysStat{{MemTotalMB: 36864, MemAvailableMB: 20000}}
+	spec := FromSnapshot("mlx", sys, nil, 0)
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if !spec.UnifiedMemory {
+			t.Error("Apple Silicon with no GPUs should be unified")
+		}
+		wantBudget := 36864 * 70 / 100
+		if spec.VRAMTotalMB != wantBudget {
+			t.Errorf("vramTotal = %d, want ~%d", spec.VRAMTotalMB, wantBudget)
+		}
+	}
+}
+
+func TestFromSnapshot_Unified_WithGpuWiredLimit(t *testing.T) {
+	wiredLimit := 30000
+	sys := []perf.SysStat{{MemTotalMB: 36864, MemAvailableMB: 25000}}
+	gpus := []perf.GpuStat{{ID: 0, MemTotalMB: 36864, MemUsedMB: 10000}}
+	spec := FromSnapshot("mlx", sys, gpus, wiredLimit)
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if !spec.UnifiedMemory {
+			t.Error("should be unified on Apple Silicon")
+		}
+		if spec.VRAMTotalMB != wiredLimit {
+			t.Errorf("vramTotal = %d, want wiredLimit %d", spec.VRAMTotalMB, wiredLimit)
+		}
+		free := wiredLimit - 10000
+		if spec.RAMAvailableMB < free {
+			free = spec.RAMAvailableMB
+		}
+		if spec.VRAMFreeMB != free {
+			t.Errorf("vramFree = %d, want %d", spec.VRAMFreeMB, free)
+		}
+	}
+}
+
+func TestFromSnapshot_NoStats(t *testing.T) {
+	spec := FromSnapshot("vllm", nil, nil, 0)
+	if spec.Backend != "vllm" {
+		t.Errorf("backend = %q, want %q", spec.Backend, "vllm")
+	}
+	if spec.VRAMTotalMB != 0 {
+		t.Errorf("vramTotal = %d, want 0 with no stats", spec.VRAMTotalMB)
+	}
+	if spec.Cores <= 0 {
+		t.Errorf("cores = %d, want > 0", spec.Cores)
+	}
+}
+
+func TestFromSnapshot_MultipleGPUSummed(t *testing.T) {
+	sys := []perf.SysStat{{MemTotalMB: 128000, MemAvailableMB: 80000}}
+	gpus := []perf.GpuStat{
+		{ID: 0, MemTotalMB: 24576, MemUsedMB: 4000},
+		{ID: 1, MemTotalMB: 24576, MemUsedMB: 8000},
+	}
+	spec := FromSnapshot("llamacpp", sys, gpus, 0)
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		if spec.VRAMTotalMB != 49152 {
+			t.Errorf("vramTotal = %d, want 49152 (sum of two 24GB cards)", spec.VRAMTotalMB)
+		}
+		if spec.VRAMFreeMB != 37152 {
+			t.Errorf("vramFree = %d, want 37152", spec.VRAMFreeMB)
+		}
+	}
+}
+
+func TestFromSnapshot_LatestGPUDeduplication(t *testing.T) {
+	now := time.Now()
+	sys := []perf.SysStat{{MemTotalMB: 65536, MemAvailableMB: 40000}}
+	gpus := []perf.GpuStat{
+		{ID: 0, Timestamp: now.Add(-time.Minute), MemTotalMB: 24576, MemUsedMB: 5000},
+		{ID: 0, Timestamp: now, MemTotalMB: 24576, MemUsedMB: 8000},
+	}
+	spec := FromSnapshot("llamacpp", sys, gpus, 0)
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		if spec.VRAMFreeMB != 16576 {
+			t.Errorf("vramFree = %d, want 16576 (must use latest sample, not stale 5000)", spec.VRAMFreeMB)
+		}
 	}
 }

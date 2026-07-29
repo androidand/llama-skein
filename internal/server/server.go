@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,11 +32,12 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf       *perf.Monitor
-	inflight   *inflightCounter
-	metrics    *metricsMonitor
-	silentMode *thermal.Manager
-	build      BuildInfo
+	perf         *perf.Monitor
+	inflight     *inflightCounter
+	metrics      *metricsMonitor
+	silentMode   *thermal.Manager
+	profileStore *ProfileStore
+	build        BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -79,6 +82,11 @@ type Server struct {
 	tuningDB      *tuning.Database
 	tunedGfx      string
 	tunedDeviceID uint32
+
+	// GPU-stall watchdog observability: active state and reason for being inactive.
+	// Set once during startWedgeWatchdog() so the reason is logged and queryable.
+	watchdogActive bool
+	watchdogReason string
 }
 
 // SetTuning wires the loaded tuning database and detected GPU into the server
@@ -158,18 +166,30 @@ type BuildInfo struct {
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
 	silentMgr := thermal.NewManager()
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			homeDir = h
+		}
+	}
+	if homeDir == "" {
+		homeDir = "/tmp"
+	}
+	profilePath := filepath.Join(homeDir, ".llama-skein", "skein", "profile.json")
+
 	s := &Server{
-		cfg:         cfg,
-		muxlog:      muxlog,
-		proxylog:    proxylog,
-		upstreamlog: upstreamlog,
-		perf:        perfMon,
-		inflight:    &inflightCounter{},
-		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		silentMode:  silentMgr,
-		build:       build,
-		shutdownCtx: shutdownCtx,
-		shutdownFn:  shutdownFn,
+		cfg:          cfg,
+		muxlog:       muxlog,
+		proxylog:     proxylog,
+		upstreamlog:  upstreamlog,
+		perf:         perfMon,
+		inflight:     &inflightCounter{},
+		metrics:      newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		silentMode:   silentMgr,
+		profileStore: NewProfileStore(profilePath),
+		build:        build,
+		shutdownCtx:  shutdownCtx,
+		shutdownFn:   shutdownFn,
 	}
 
 	// Fit guard (proactive half): shrink over-large contexts and flag models
@@ -358,6 +378,11 @@ func (s *Server) routes() {
 	mux.Handle("PUT "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerSet))
 	mux.Handle("DELETE "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
 
+	// Skein — persistent user profile for power/silent-mode preferences.
+	mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
+	mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
+	mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
+
 	// Legacy fork paths — still consumed by skein (llamaswap client, ollama
 	// adapter, provider probing) and Ollama-mode frontends. /api/events,
 	// /api/resources and /api/storage are aliases of the relocated handlers;
@@ -378,6 +403,21 @@ func (s *Server) routes() {
 	mux.Handle("GET "+api.RouteSystemCaptures, apiChain.ThenFunc(s.handleAPISystemCaptures))
 	mux.Handle("POST "+api.RouteSystemUpgrade, apiChain.ThenFunc(s.handleAPISystemUpgrade))
 	mux.Handle("GET "+api.RouteSystemProvider, apiChain.ThenFunc(s.handleAPISystemProvider))
+
+	// Runtime — list, install, upgrade, health.
+	mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
+	mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleInstallRuntime(w, r, backend)
+	}))
+	mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleUpgradeRuntime(w, r, backend)
+	}))
+	mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleCheckRuntimeHealth(w, r, backend)
+	}))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

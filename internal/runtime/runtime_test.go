@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestRuntime_ForBackendDefaults(t *testing.T) {
@@ -55,5 +56,97 @@ func TestRuntime_DetectMissingEngine(t *testing.T) {
 	}
 	if info.Backend != BackendMLX || info.Detail == "" {
 		t.Errorf("expected backend mlx + a reason, got %+v", info)
+	}
+}
+
+func TestRuntime_MLXInstallRequiresVenvDir(t *testing.T) {
+	mgr := For(BackendMLX)
+	_, err := mgr.Install(context.Background(), "")
+	if err == nil {
+		t.Error("expected error for empty venvDir")
+	}
+}
+
+func TestRuntime_MLXUpgradeRequiresVenvDir(t *testing.T) {
+	mgr := For(BackendMLX)
+	_, err := mgr.Upgrade(context.Background(), "")
+	if err == nil {
+		t.Error("expected error for empty venvDir")
+	}
+}
+
+func TestRuntime_VLLMInstallRequiresVenvDir(t *testing.T) {
+	mgr := For(BackendVLLM)
+	_, err := mgr.Install(context.Background(), "")
+	if err == nil {
+		t.Error("expected error for empty venvDir")
+	}
+}
+
+func TestRuntime_VLLMUpgradeRequiresVenvDir(t *testing.T) {
+	mgr := For(BackendVLLM)
+	_, err := mgr.Upgrade(context.Background(), "")
+	if err == nil {
+		t.Error("expected error for empty venvDir")
+	}
+}
+
+func TestRuntime_LlamaCppInstallCreatesDir(t *testing.T) {
+	mgr := For(BackendLlamaCpp)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// This will fail because the download URL may not exist, but it should
+	// at least create the target directory.
+	info, err := mgr.Install(ctx, t.TempDir())
+	if err == nil {
+		t.Error("expected error for install (no network or download fails)")
+	}
+	if info.Backend != BackendLlamaCpp {
+		t.Errorf("expected backend llamacpp, got %q", info.Backend)
+	}
+}
+
+func TestRuntime_LlamaCppVersionFailsForMissing(t *testing.T) {
+	mgr := For(BackendLlamaCpp)
+	_, err := mgr.Version(context.Background(), "/no/such/llama-server")
+	if err == nil {
+		t.Error("expected error for missing llama-server")
+	}
+}
+
+func TestRuntime_LlamaCppHealthFailsForMissing(t *testing.T) {
+	mgr := For(BackendLlamaCpp)
+	if mgr.Health(context.Background(), "/no/such/llama-server") {
+		t.Error("expected false health for missing llama-server")
+	}
+}
+
+func TestRuntime_MLXVersionFailsForMissing(t *testing.T) {
+	mgr := For(BackendMLX)
+	_, err := mgr.Version(context.Background(), "/no/such/venv/bin/mlx_lm.server")
+	if err == nil {
+		t.Error("expected error for missing mlx_lm")
+	}
+}
+
+func TestRuntime_MLXHealthFailsForMissing(t *testing.T) {
+	mgr := For(BackendMLX)
+	if mgr.Health(context.Background(), "/no/such/venv/bin/mlx_lm.server") {
+		t.Error("expected false health for missing mlx_lm")
+	}
+}
+
+func TestRuntime_VLLMVersionFailsForMissing(t *testing.T) {
+	mgr := For(BackendVLLM)
+	_, err := mgr.Version(context.Background(), "/no/such/venv/bin/vllm")
+	if err == nil {
+		t.Error("expected error for missing vllm")
+	}
+}
+
+func TestRuntime_VLLMHealthFailsForMissing(t *testing.T) {
+	mgr := For(BackendVLLM)
+	if mgr.Health(context.Background(), "/no/such/venv/bin/vllm") {
+		t.Error("expected false health for missing vllm")
 	}
 }

@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	commit        = "abcd1234"
+	commit        = "unbuilt-devbuild"
 	date          = "unknown"
 	llamaCppBuild = "unknown"
 	llamaCppGit   = "unknown"
@@ -162,6 +162,10 @@ func main() {
 		perfMon.Start()
 	} else {
 		proxyLog.Info("performance monitoring is disabled")
+	}
+
+	if commit == "unbuilt-devbuild" {
+		slog.Warn("commit hash not set — likely built with plain 'go build' instead of a Makefile target; run 'make mac' or 'make linux-amd64' for a proper release build")
 	}
 
 	buildInfo := server.BuildInfo{

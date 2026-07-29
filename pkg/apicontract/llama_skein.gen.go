@@ -316,19 +316,61 @@ func (e MtpMetadataSpecType) Valid() bool {
 
 // Defines values for OffloadRecommendationBackend.
 const (
-	Llamacpp OffloadRecommendationBackend = "llamacpp"
-	Mlx      OffloadRecommendationBackend = "mlx"
-	Vllm     OffloadRecommendationBackend = "vllm"
+	OffloadRecommendationBackendLlamacpp OffloadRecommendationBackend = "llamacpp"
+	OffloadRecommendationBackendMlx      OffloadRecommendationBackend = "mlx"
+	OffloadRecommendationBackendVllm     OffloadRecommendationBackend = "vllm"
 )
 
 // Valid indicates whether the value is a known member of the OffloadRecommendationBackend enum.
 func (e OffloadRecommendationBackend) Valid() bool {
 	switch e {
-	case Llamacpp:
+	case OffloadRecommendationBackendLlamacpp:
 		return true
-	case Mlx:
+	case OffloadRecommendationBackendMlx:
 		return true
-	case Vllm:
+	case OffloadRecommendationBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RuntimeHealthBackend.
+const (
+	RuntimeHealthBackendLlamacpp RuntimeHealthBackend = "llamacpp"
+	RuntimeHealthBackendMlx      RuntimeHealthBackend = "mlx"
+	RuntimeHealthBackendVllm     RuntimeHealthBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the RuntimeHealthBackend enum.
+func (e RuntimeHealthBackend) Valid() bool {
+	switch e {
+	case RuntimeHealthBackendLlamacpp:
+		return true
+	case RuntimeHealthBackendMlx:
+		return true
+	case RuntimeHealthBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RuntimeInfoBackend.
+const (
+	RuntimeInfoBackendLlamacpp RuntimeInfoBackend = "llamacpp"
+	RuntimeInfoBackendMlx      RuntimeInfoBackend = "mlx"
+	RuntimeInfoBackendVllm     RuntimeInfoBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the RuntimeInfoBackend enum.
+func (e RuntimeInfoBackend) Valid() bool {
+	switch e {
+	case RuntimeInfoBackendLlamacpp:
+		return true
+	case RuntimeInfoBackendMlx:
+		return true
+	case RuntimeInfoBackendVllm:
 		return true
 	default:
 		return false
@@ -362,6 +404,69 @@ const (
 func (e GetApiModelsParamsState) Valid() bool {
 	switch e {
 	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CheckRuntimeHealthParamsBackend.
+const (
+	CheckRuntimeHealthParamsBackendLlamacpp CheckRuntimeHealthParamsBackend = "llamacpp"
+	CheckRuntimeHealthParamsBackendMlx      CheckRuntimeHealthParamsBackend = "mlx"
+	CheckRuntimeHealthParamsBackendVllm     CheckRuntimeHealthParamsBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the CheckRuntimeHealthParamsBackend enum.
+func (e CheckRuntimeHealthParamsBackend) Valid() bool {
+	switch e {
+	case CheckRuntimeHealthParamsBackendLlamacpp:
+		return true
+	case CheckRuntimeHealthParamsBackendMlx:
+		return true
+	case CheckRuntimeHealthParamsBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstallRuntimeParamsBackend.
+const (
+	InstallRuntimeParamsBackendLlamacpp InstallRuntimeParamsBackend = "llamacpp"
+	InstallRuntimeParamsBackendMlx      InstallRuntimeParamsBackend = "mlx"
+	InstallRuntimeParamsBackendVllm     InstallRuntimeParamsBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the InstallRuntimeParamsBackend enum.
+func (e InstallRuntimeParamsBackend) Valid() bool {
+	switch e {
+	case InstallRuntimeParamsBackendLlamacpp:
+		return true
+	case InstallRuntimeParamsBackendMlx:
+		return true
+	case InstallRuntimeParamsBackendVllm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpgradeRuntimeParamsBackend.
+const (
+	UpgradeRuntimeParamsBackendLlamacpp UpgradeRuntimeParamsBackend = "llamacpp"
+	UpgradeRuntimeParamsBackendMlx      UpgradeRuntimeParamsBackend = "mlx"
+	UpgradeRuntimeParamsBackendVllm     UpgradeRuntimeParamsBackend = "vllm"
+)
+
+// Valid indicates whether the value is a known member of the UpgradeRuntimeParamsBackend enum.
+func (e UpgradeRuntimeParamsBackend) Valid() bool {
+	switch e {
+	case UpgradeRuntimeParamsBackendLlamacpp:
+		return true
+	case UpgradeRuntimeParamsBackendMlx:
+		return true
+	case UpgradeRuntimeParamsBackendVllm:
 		return true
 	default:
 		return false
@@ -565,6 +670,11 @@ type ConfigModelResponse struct {
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 
+// ErrorResponse defines model for ErrorResponse.
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
 // FitReport Fit of every configured model to this host. Aggregated by skein across providers for fleet placement.
 type FitReport struct {
 	// Models Per-model fit results.
@@ -617,6 +727,9 @@ type HealthResponse struct {
 	InFlight *int64                 `json:"in_flight,omitempty"`
 	Models   map[string]ModelHealth `json:"models"`
 	Status   string                 `json:"status"`
+
+	// Watchdog GPU-stall watchdog observability. Active means the watchdog is monitoring for wedged backends.
+	Watchdog *WatchdogStatus `json:"watchdog,omitempty"`
 }
 
 // InferenceInfo Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
@@ -868,6 +981,15 @@ type OffloadRecommendation struct {
 // OffloadRecommendationBackend Inference backend the recommendation targets.
 type OffloadRecommendationBackend string
 
+// PowerProfile defines model for PowerProfile.
+type PowerProfile struct {
+	// PowerLimitPct Percentage of default TDP to cap at (1-99).
+	PowerLimitPct int `json:"power_limit_pct"`
+
+	// TempTargetCelsius GPU temperature target while in silent mode (40-100).
+	TempTargetCelsius int `json:"temp_target_celsius"`
+}
+
 // ReloadResponse defines model for ReloadResponse.
 type ReloadResponse struct {
 	Status string `json:"status"`
@@ -900,6 +1022,33 @@ type RunningModel struct {
 // RunningResponse defines model for RunningResponse.
 type RunningResponse struct {
 	Running []RunningModel `json:"running"`
+}
+
+// RuntimeHealth defines model for RuntimeHealth.
+type RuntimeHealth struct {
+	Backend RuntimeHealthBackend `json:"backend"`
+	Healthy bool                 `json:"healthy"`
+}
+
+// RuntimeHealthBackend defines model for RuntimeHealth.Backend.
+type RuntimeHealthBackend string
+
+// RuntimeInfo defines model for RuntimeInfo.
+type RuntimeInfo struct {
+	Backend   RuntimeInfoBackend `json:"backend"`
+	Detail    *string            `json:"detail,omitempty"`
+	Error     *string            `json:"error,omitempty"`
+	Installed bool               `json:"installed"`
+	Version   *string            `json:"version,omitempty"`
+}
+
+// RuntimeInfoBackend defines model for RuntimeInfo.Backend.
+type RuntimeInfoBackend string
+
+// RuntimeInstallRequest defines model for RuntimeInstallRequest.
+type RuntimeInstallRequest struct {
+	// VenvDir Directory for the Python venv (required for mlx and vllm). For llamacpp, target directory for the binary.
+	VenvDir *string `json:"venvDir,omitempty"`
 }
 
 // StorageInfo defines model for StorageInfo.
@@ -1010,6 +1159,29 @@ type TuningStatus struct {
 // TuningStatusProvenance defines model for TuningStatus.Provenance.
 type TuningStatusProvenance string
 
+// UserProfile defines model for UserProfile.
+type UserProfile struct {
+	// Name Human-readable label for the profile.
+	Name  string       `json:"name"`
+	Power PowerProfile `json:"power"`
+
+	// Schedule Optional time window in HH:MM-HH:MM format for automatic silent mode toggling. Empty means always follow silent_mode setting.
+	Schedule *string `json:"schedule,omitempty"`
+
+	// SilentMode Whether GPU power limits are applied.
+	SilentMode bool `json:"silent_mode"`
+}
+
+// UserProfileState defines model for UserProfileState.
+type UserProfileState struct {
+	// Active Whether silent mode is currently active.
+	Active bool `json:"active"`
+
+	// Available Whether GPU power control is available on this host.
+	Available bool        `json:"available"`
+	Profile   UserProfile `json:"profile"`
+}
+
 // VRAMInfo defines model for VRAMInfo.
 type VRAMInfo struct {
 	FreeMb  *int `json:"free_mb,omitempty"`
@@ -1032,6 +1204,15 @@ type VersionInfo struct {
 	Version       string                 `json:"version"`
 }
 
+// WatchdogStatus GPU-stall watchdog observability. Active means the watchdog is monitoring for wedged backends.
+type WatchdogStatus struct {
+	// Active True when the watchdog is actively monitoring GPU stall signatures.
+	Active bool `json:"active"`
+
+	// Reason Human-readable reason when inactive (e.g., 'disabled by config', 'no perf monitor', 'GPU does not report memory-activity telemetry'). Omitted when active.
+	Reason *string `json:"reason,omitempty"`
+}
+
 // GetModelFitParams defines parameters for GetModelFit.
 type GetModelFitParams struct {
 	// Ctx Score this context size instead of computing max_safe_ctx.
@@ -1047,6 +1228,15 @@ type GetApiModelsParams struct {
 // GetApiModelsParamsState defines parameters for GetApiModels.
 type GetApiModelsParamsState string
 
+// CheckRuntimeHealthParamsBackend defines parameters for CheckRuntimeHealth.
+type CheckRuntimeHealthParamsBackend string
+
+// InstallRuntimeParamsBackend defines parameters for InstallRuntime.
+type InstallRuntimeParamsBackend string
+
+// UpgradeRuntimeParamsBackend defines parameters for UpgradeRuntime.
+type UpgradeRuntimeParamsBackend string
+
 // SetDefaultModelJSONRequestBody defines body for SetDefaultModel for application/json ContentType.
 type SetDefaultModelJSONRequestBody = ConfigDefaultModelRequest
 
@@ -1058,6 +1248,15 @@ type AddConfigModelJSONRequestBody = ConfigModelRequest
 
 // PatchConfigModelJSONRequestBody defines body for PatchConfigModel for application/json ContentType.
 type PatchConfigModelJSONRequestBody = ConfigModelPatchRequest
+
+// InstallRuntimeJSONRequestBody defines body for InstallRuntime for application/json ContentType.
+type InstallRuntimeJSONRequestBody = RuntimeInstallRequest
+
+// UpgradeRuntimeJSONRequestBody defines body for UpgradeRuntime for application/json ContentType.
+type UpgradeRuntimeJSONRequestBody = RuntimeInstallRequest
+
+// SetSkeinConfigJSONRequestBody defines body for SetSkeinConfig for application/json ContentType.
+type SetSkeinConfigJSONRequestBody = UserProfile
 
 // PatchTuningJSONRequestBody defines body for PatchTuning for application/json ContentType.
 type PatchTuningJSONRequestBody = TuningPatchRequest
@@ -1392,6 +1591,33 @@ type ClientInterface interface {
 	// GetOffloadRecommendation request
 	GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListRuntimes request
+	ListRuntimes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CheckRuntimeHealth request
+	CheckRuntimeHealth(ctx context.Context, backend CheckRuntimeHealthParamsBackend, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// InstallRuntimeWithBody request with any body
+	InstallRuntimeWithBody(ctx context.Context, backend InstallRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	InstallRuntime(ctx context.Context, backend InstallRuntimeParamsBackend, body InstallRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpgradeRuntimeWithBody request with any body
+	UpgradeRuntimeWithBody(ctx context.Context, backend UpgradeRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpgradeRuntime(ctx context.Context, backend UpgradeRuntimeParamsBackend, body UpgradeRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSkeinConfig request
+	GetSkeinConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetSkeinConfigWithBody request with any body
+	SetSkeinConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetSkeinConfig(ctx context.Context, body SetSkeinConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetDefaultSkeinConfig request
+	GetDefaultSkeinConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetSystemCapabilities request
 	GetSystemCapabilities(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1637,6 +1863,126 @@ func (c *Client) GetApiModels(ctx context.Context, params *GetApiModelsParams, r
 
 func (c *Client) GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetOffloadRecommendationRequest(c.Server, model)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListRuntimes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRuntimesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckRuntimeHealth(ctx context.Context, backend CheckRuntimeHealthParamsBackend, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckRuntimeHealthRequest(c.Server, backend)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) InstallRuntimeWithBody(ctx context.Context, backend InstallRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInstallRuntimeRequestWithBody(c.Server, backend, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) InstallRuntime(ctx context.Context, backend InstallRuntimeParamsBackend, body InstallRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInstallRuntimeRequest(c.Server, backend, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpgradeRuntimeWithBody(ctx context.Context, backend UpgradeRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpgradeRuntimeRequestWithBody(c.Server, backend, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpgradeRuntime(ctx context.Context, backend UpgradeRuntimeParamsBackend, body UpgradeRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpgradeRuntimeRequest(c.Server, backend, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSkeinConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSkeinConfigRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetSkeinConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetSkeinConfigRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetSkeinConfig(ctx context.Context, body SetSkeinConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetSkeinConfigRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetDefaultSkeinConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDefaultSkeinConfigRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -2308,6 +2654,255 @@ func NewGetOffloadRecommendationRequest(server string, model string) (*http.Requ
 	return req, nil
 }
 
+// NewListRuntimesRequest generates requests for ListRuntimes
+func NewListRuntimesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/runtime")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCheckRuntimeHealthRequest generates requests for CheckRuntimeHealth
+func NewCheckRuntimeHealthRequest(server string, backend CheckRuntimeHealthParamsBackend) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "backend", backend, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/runtime/%s/health", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewInstallRuntimeRequest calls the generic InstallRuntime builder with application/json body
+func NewInstallRuntimeRequest(server string, backend InstallRuntimeParamsBackend, body InstallRuntimeJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewInstallRuntimeRequestWithBody(server, backend, "application/json", bodyReader)
+}
+
+// NewInstallRuntimeRequestWithBody generates requests for InstallRuntime with any type of body
+func NewInstallRuntimeRequestWithBody(server string, backend InstallRuntimeParamsBackend, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "backend", backend, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/runtime/%s/install", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewUpgradeRuntimeRequest calls the generic UpgradeRuntime builder with application/json body
+func NewUpgradeRuntimeRequest(server string, backend UpgradeRuntimeParamsBackend, body UpgradeRuntimeJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpgradeRuntimeRequestWithBody(server, backend, "application/json", bodyReader)
+}
+
+// NewUpgradeRuntimeRequestWithBody generates requests for UpgradeRuntime with any type of body
+func NewUpgradeRuntimeRequestWithBody(server string, backend UpgradeRuntimeParamsBackend, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "backend", backend, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/runtime/%s/upgrade", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetSkeinConfigRequest generates requests for GetSkeinConfig
+func NewGetSkeinConfigRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/skein/config")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSetSkeinConfigRequest calls the generic SetSkeinConfig builder with application/json body
+func NewSetSkeinConfigRequest(server string, body SetSkeinConfigJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetSkeinConfigRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewSetSkeinConfigRequestWithBody generates requests for SetSkeinConfig with any type of body
+func NewSetSkeinConfigRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/skein/config")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetDefaultSkeinConfigRequest generates requests for GetDefaultSkeinConfig
+func NewGetDefaultSkeinConfigRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/skein/config/default")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetSystemCapabilitiesRequest generates requests for GetSystemCapabilities
 func NewGetSystemCapabilitiesRequest(server string) (*http.Request, error) {
 	var err error
@@ -2632,6 +3227,33 @@ type ClientWithResponsesInterface interface {
 
 	// GetOffloadRecommendationWithResponse request
 	GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error)
+
+	// ListRuntimesWithResponse request
+	ListRuntimesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRuntimesResponse, error)
+
+	// CheckRuntimeHealthWithResponse request
+	CheckRuntimeHealthWithResponse(ctx context.Context, backend CheckRuntimeHealthParamsBackend, reqEditors ...RequestEditorFn) (*CheckRuntimeHealthResponse, error)
+
+	// InstallRuntimeWithBodyWithResponse request with any body
+	InstallRuntimeWithBodyWithResponse(ctx context.Context, backend InstallRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InstallRuntimeResponse, error)
+
+	InstallRuntimeWithResponse(ctx context.Context, backend InstallRuntimeParamsBackend, body InstallRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*InstallRuntimeResponse, error)
+
+	// UpgradeRuntimeWithBodyWithResponse request with any body
+	UpgradeRuntimeWithBodyWithResponse(ctx context.Context, backend UpgradeRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeRuntimeResponse, error)
+
+	UpgradeRuntimeWithResponse(ctx context.Context, backend UpgradeRuntimeParamsBackend, body UpgradeRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*UpgradeRuntimeResponse, error)
+
+	// GetSkeinConfigWithResponse request
+	GetSkeinConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetSkeinConfigResponse, error)
+
+	// SetSkeinConfigWithBodyWithResponse request with any body
+	SetSkeinConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetSkeinConfigResponse, error)
+
+	SetSkeinConfigWithResponse(ctx context.Context, body SetSkeinConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*SetSkeinConfigResponse, error)
+
+	// GetDefaultSkeinConfigWithResponse request
+	GetDefaultSkeinConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetDefaultSkeinConfigResponse, error)
 
 	// GetSystemCapabilitiesWithResponse request
 	GetSystemCapabilitiesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetSystemCapabilitiesResponse, error)
@@ -3110,6 +3732,220 @@ func (r GetOffloadRecommendationResponse) ContentType() string {
 	return ""
 }
 
+type ListRuntimesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]RuntimeInfo
+}
+
+// Status returns HTTPResponse.Status
+func (r ListRuntimesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListRuntimesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListRuntimesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CheckRuntimeHealthResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuntimeHealth
+}
+
+// Status returns HTTPResponse.Status
+func (r CheckRuntimeHealthResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CheckRuntimeHealthResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CheckRuntimeHealthResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type InstallRuntimeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuntimeInfo
+	JSON400      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r InstallRuntimeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r InstallRuntimeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r InstallRuntimeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UpgradeRuntimeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuntimeInfo
+	JSON400      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r UpgradeRuntimeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpgradeRuntimeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpgradeRuntimeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetSkeinConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *UserProfileState
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSkeinConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSkeinConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSkeinConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type SetSkeinConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *UserProfileState
+}
+
+// Status returns HTTPResponse.Status
+func (r SetSkeinConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetSkeinConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SetSkeinConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetDefaultSkeinConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *UserProfile
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDefaultSkeinConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDefaultSkeinConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDefaultSkeinConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetSystemCapabilitiesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3515,6 +4351,93 @@ func (c *ClientWithResponses) GetOffloadRecommendationWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseGetOffloadRecommendationResponse(rsp)
+}
+
+// ListRuntimesWithResponse request returning *ListRuntimesResponse
+func (c *ClientWithResponses) ListRuntimesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRuntimesResponse, error) {
+	rsp, err := c.ListRuntimes(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRuntimesResponse(rsp)
+}
+
+// CheckRuntimeHealthWithResponse request returning *CheckRuntimeHealthResponse
+func (c *ClientWithResponses) CheckRuntimeHealthWithResponse(ctx context.Context, backend CheckRuntimeHealthParamsBackend, reqEditors ...RequestEditorFn) (*CheckRuntimeHealthResponse, error) {
+	rsp, err := c.CheckRuntimeHealth(ctx, backend, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckRuntimeHealthResponse(rsp)
+}
+
+// InstallRuntimeWithBodyWithResponse request with arbitrary body returning *InstallRuntimeResponse
+func (c *ClientWithResponses) InstallRuntimeWithBodyWithResponse(ctx context.Context, backend InstallRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InstallRuntimeResponse, error) {
+	rsp, err := c.InstallRuntimeWithBody(ctx, backend, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInstallRuntimeResponse(rsp)
+}
+
+func (c *ClientWithResponses) InstallRuntimeWithResponse(ctx context.Context, backend InstallRuntimeParamsBackend, body InstallRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*InstallRuntimeResponse, error) {
+	rsp, err := c.InstallRuntime(ctx, backend, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInstallRuntimeResponse(rsp)
+}
+
+// UpgradeRuntimeWithBodyWithResponse request with arbitrary body returning *UpgradeRuntimeResponse
+func (c *ClientWithResponses) UpgradeRuntimeWithBodyWithResponse(ctx context.Context, backend UpgradeRuntimeParamsBackend, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeRuntimeResponse, error) {
+	rsp, err := c.UpgradeRuntimeWithBody(ctx, backend, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpgradeRuntimeResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpgradeRuntimeWithResponse(ctx context.Context, backend UpgradeRuntimeParamsBackend, body UpgradeRuntimeJSONRequestBody, reqEditors ...RequestEditorFn) (*UpgradeRuntimeResponse, error) {
+	rsp, err := c.UpgradeRuntime(ctx, backend, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpgradeRuntimeResponse(rsp)
+}
+
+// GetSkeinConfigWithResponse request returning *GetSkeinConfigResponse
+func (c *ClientWithResponses) GetSkeinConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetSkeinConfigResponse, error) {
+	rsp, err := c.GetSkeinConfig(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSkeinConfigResponse(rsp)
+}
+
+// SetSkeinConfigWithBodyWithResponse request with arbitrary body returning *SetSkeinConfigResponse
+func (c *ClientWithResponses) SetSkeinConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetSkeinConfigResponse, error) {
+	rsp, err := c.SetSkeinConfigWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetSkeinConfigResponse(rsp)
+}
+
+func (c *ClientWithResponses) SetSkeinConfigWithResponse(ctx context.Context, body SetSkeinConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*SetSkeinConfigResponse, error) {
+	rsp, err := c.SetSkeinConfig(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetSkeinConfigResponse(rsp)
+}
+
+// GetDefaultSkeinConfigWithResponse request returning *GetDefaultSkeinConfigResponse
+func (c *ClientWithResponses) GetDefaultSkeinConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetDefaultSkeinConfigResponse, error) {
+	rsp, err := c.GetDefaultSkeinConfig(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDefaultSkeinConfigResponse(rsp)
 }
 
 // GetSystemCapabilitiesWithResponse request returning *GetSystemCapabilitiesResponse
@@ -3977,6 +4900,216 @@ func ParseGetOffloadRecommendationResponse(rsp *http.Response) (*GetOffloadRecom
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest OffloadRecommendation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListRuntimesResponse parses an HTTP response from a ListRuntimesWithResponse call
+func ParseListRuntimesResponse(rsp *http.Response) (*ListRuntimesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListRuntimesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []RuntimeInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCheckRuntimeHealthResponse parses an HTTP response from a CheckRuntimeHealthWithResponse call
+func ParseCheckRuntimeHealthResponse(rsp *http.Response) (*CheckRuntimeHealthResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CheckRuntimeHealthResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuntimeHealth
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseInstallRuntimeResponse parses an HTTP response from a InstallRuntimeWithResponse call
+func ParseInstallRuntimeResponse(rsp *http.Response) (*InstallRuntimeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &InstallRuntimeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuntimeInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpgradeRuntimeResponse parses an HTTP response from a UpgradeRuntimeWithResponse call
+func ParseUpgradeRuntimeResponse(rsp *http.Response) (*UpgradeRuntimeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpgradeRuntimeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuntimeInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSkeinConfigResponse parses an HTTP response from a GetSkeinConfigWithResponse call
+func ParseGetSkeinConfigResponse(rsp *http.Response) (*GetSkeinConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSkeinConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserProfileState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetSkeinConfigResponse parses an HTTP response from a SetSkeinConfigWithResponse call
+func ParseSetSkeinConfigResponse(rsp *http.Response) (*SetSkeinConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetSkeinConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest UserProfileState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDefaultSkeinConfigResponse parses an HTTP response from a GetDefaultSkeinConfigWithResponse call
+func ParseGetDefaultSkeinConfigResponse(rsp *http.Response) (*GetDefaultSkeinConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDefaultSkeinConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserProfile
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

@@ -261,12 +261,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		State     string             `json:"state"`
 		LastError *process.LoadError `json:"last_error,omitempty"`
 	}
+	type watchdogStatus struct {
+		Active bool   `json:"active"`
+		Reason string `json:"reason,omitempty"`
+	}
 	type healthBody struct {
 		Status           string                 `json:"status"`
 		AnyModelResident bool                   `json:"any_model_resident"`
 		Busy             bool                   `json:"busy"`
 		InFlight         int64                  `json:"in_flight"`
 		Models           map[string]modelHealth `json:"models"`
+		Watchdog         *watchdogStatus        `json:"watchdog,omitempty"`
 	}
 
 	errs := s.local.ModelErrors()
@@ -287,6 +292,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Busy:             inFlight > 0,
 		InFlight:         inFlight,
 		Models:           models,
+	}
+	if s.watchdogActive {
+		body.Watchdog = &watchdogStatus{Active: true}
+	} else {
+		body.Watchdog = &watchdogStatus{Active: false, Reason: s.watchdogReason}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

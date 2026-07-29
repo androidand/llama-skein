@@ -21,5 +21,7 @@
        wiring, not just the isolated function.
 - [x] 7. `go build ./...`, `go test -short ./proxy/... ./internal/...`
        (992 ok), `docs/`/`config.docker-default.yaml` note.
+<!-- DEFERRED 2026-07-26: Deploy task — requires live infrastructure with forced wedge test. -->
+
 - [ ] 8. Deploy to the fleet; verify against a real forced wedge that a
-       competing model request now gets a 503 within ~10s instead of hanging.
+        competing model request now gets a 503 within ~10s instead of hanging.

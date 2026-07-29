@@ -13,18 +13,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/watcher"
 	"github.com/androidand/llama-skein/proxy"
+	"github.com/gin-gonic/gin"
 )
 
 var (
 	version string = "0"
-	commit  string = "abcd1234"
+	commit  string = "unbuilt-devbuild"
 	date    string = "unknown"
 )
 
@@ -66,6 +66,10 @@ func main() {
 		mainLogger.SetLogLevel(logmon.LevelError)
 	default:
 		mainLogger.SetLogLevel(logmon.LevelInfo)
+	}
+
+	if commit == "unbuilt-devbuild" {
+		mainLogger.Warn("commit hash not set — likely built with plain 'go build' instead of a Makefile target; run 'make mac' or 'make linux-amd64' for a proper release build")
 	}
 
 	mainLogger.Debugf("PID: %d", os.Getpid())

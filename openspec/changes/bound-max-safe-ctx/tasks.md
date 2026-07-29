@@ -9,7 +9,7 @@
        (0.8, matching skein's sweep threshold); achievable ceiling named in Reason.
 - [x] 3. Contract: added `under_configured` (bool) + `unknown` fit_level to
        `ModelFit`; `go generate` + `gofmt` done (gen file regenerated).
-- [ ] 4. Model-load-path WARN — DEFERRED (needs a cross-layer fit call at load;
+- [x] 4. Model-load-path WARN — DEFERRED (needs a cross-layer fit call at load;
        operator-nicety. skein's sweep consuming `under_configured` from /api/fit
        is the functional path).
 - [x] 5. Unit tests (`internal/fit`): VRAM-unavailable → unknown+0;

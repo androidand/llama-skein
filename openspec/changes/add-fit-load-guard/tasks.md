@@ -12,8 +12,10 @@
 - [x] 5. `startPreload` skips models `modelLoadRefusal` rejects.
 - [x] 6. Tests: `setCtxSizeInCmd`, `confidentNoFit`, `modelLoadRefusal`.
 - [x] 7. `go build ./...`, `go test -short ./proxy/... ./internal/...` (982 ok).
+<!-- DEFERRED 2026-07-26: Tasks 8-9 — deploy and follow-up — require live infrastructure and macOS calibration. -->
+
 - [ ] 8. Deploy to m5 (verify it does NOT over-refuse fittable models — load a
-       small model successfully; check /api/fit + fit-guard logs), then m3.
+        small model successfully; check /api/fit + fit-guard logs), then m3.
 - [ ] 9. Follow-up (separate): the reactive guard's macOS calibration
-       (`mlx-macos-gotchas`) and re-home the GPU-wedge safeguards onto the
-       live `internal/process` path (the `proxy` package is dead code).
+        (`mlx-macos-gotchas`) and re-home the GPU-wedge safeguards onto the
+        live `internal/process` path (the `proxy` package is dead code).

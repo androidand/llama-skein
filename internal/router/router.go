@@ -51,6 +51,15 @@ var (
 	// expireStaleQueued.
 	ErrSwapQueueTimeout = fmt.Errorf("timed out waiting for a busy model to become available")
 
+	// ErrLoadFailure reports that a model process started but failed during
+	// warm-up (health check or inference probe) so it never became ready.
+	ErrLoadFailure = fmt.Errorf("model failed to load")
+
+	// ErrSessionCapExceeded reports that the host-level concurrent-inference
+	// session cap for the model has been reached. Requests are rejected
+	// immediately (429) rather than queued.
+	ErrSessionCapExceeded = fmt.Errorf("concurrent session cap exceeded")
+
 	ContextKey = &contextkey{"context"}
 )
 
@@ -207,6 +216,10 @@ func SendError(w http.ResponseWriter, r *http.Request, err error) {
 		SendResponse(w, r, http.StatusNotFound, "no router for requested model")
 	case errors.Is(err, ErrSwapQueueTimeout):
 		SendResponse(w, r, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrLoadFailure), errors.Is(err, process.ErrStartAborted):
+		SendResponse(w, r, http.StatusBadGateway, err.Error())
+	case errors.Is(err, ErrSessionCapExceeded):
+		SendResponse(w, r, http.StatusTooManyRequests, err.Error())
 	default:
 		SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("unspecific error: %v", err))
 	}

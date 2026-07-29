@@ -16,9 +16,14 @@ Fork extensions over upstream:
 - `PATCH /api/config/models/:id` — live model config patch (ctx-size, n_gpu_layers)
 - `POST/DELETE /api/config/models` — add/remove models at runtime
 - `GET /api/config/info` — config path + file existence
+- `GET /api/fit` — fit report: how every configured model fits the host VRAM
+- `GET /api/fit/{model}` — per-model fit with max_safe_ctx, VRAM budget, under_configured flag
+- `GET /api/skein/config` — current persistent user profile for GPU power/silent-mode
+- `POST /api/skein/config` — save and apply persistent user profile
+- `GET /api/skein/config/default` — default profile template
 - mDNS registration (`_llamaswap._tcp.local.`) on startup
 - Ollama-compat endpoints
-- HTTP 413 on context size exceeded
+- HTTP 413 on context size exceeded (pre-flight guard against oversized prompts)
 - `context_length` / `max_output_tokens` in `/v1/models`
 - `autoUnload` config for model groups
 - Slot cancel on client disconnect (prevents zombie GPU allocations)

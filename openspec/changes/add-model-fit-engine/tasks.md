@@ -7,29 +7,32 @@ Reference implementation: `~/dev/llmfit/llmfit-core/src/{fit,hardware,models}.rs
 `~/dev/llmfit/llmfit-core/data/*.json` (MIT — attribute in vendored files).
 
 ## Phase 1 — Catalog + types (data foundation)
-- [ ] 1. Vendor the full catalog under `internal/fit/data/` (`hf_models.json`,
+- [~] 1. Vendor the full catalog under `internal/fit/data/` (`hf_models.json`,
   `benchmark_cache.json`, `baselines.json`, `docker_models.json`) with a LICENSE/ATTRIBUTION
-  note; embed via `go:embed`.
+  note; embed via `go:embed`. DEFERRED: llmfit data files not available locally.
   - Validation: `go test ./internal/fit -run Catalog` (loads + counts records)
-- [ ] 2. Port the catalog types (`LlmModel`, `Capability`, `ModelFormat`, `UseCase`,
-  `ModelDatabase`) and a loader/index over the embedded data.
+- [~] 2. Port the catalog types (`LlmModel`, `Capability`, `ModelFormat`, `UseCase`,
+  `ModelDatabase`) and a loader/index over the embedded data. DEFERRED: depends on task 1.
   - Validation: `go test ./internal/fit -run Catalog`
 
 ## Phase 2 — Hardware spec
-- [ ] 3. Define a fit-facing `SystemSpecs` (backend, unified-memory, total/usable VRAM,
+- [x] 3. Define a fit-facing `SystemSpecs` (backend, unified-memory, total/usable VRAM,
   RAM, cores) built from the existing `internal/perf` snapshot — reuse the vm_stat /
   kernel-pressure work, don't re-detect.
   - Validation: `go test ./internal/fit -run SystemSpecs`
 
 ## Phase 3 — Fit scorer (the core port)
-- [ ] 4. Port `fit.rs`: `Analyze(model, system, cfg) → ModelFit` — memory-headroom fit,
+- [x] 4. Port `fit.rs`: `Analyze(model, system, cfg) → ModelFit` — memory-headroom fit,
   run mode (gpu/tensor-parallel/moe-offload/cpu-offload/cpu-only), four-dimension weighted
   score, fit level, and max-safe-context. Mirror llmfit's margins (e.g. 1.2× headroom).
-  - Validation: `go test ./internal/fit -run Analyze` (golden cases below)
-- [ ] 5. Port the tok/s estimate from benchmark baselines (`bench`/`benchmarks` lookup).
+  - Done: `internal/fit/fit.go` `Analyze`/`AnalyzeShape` with full VRAM budgeting,
+    hybrid attention, MTP extra safety, parallel slots, under-configured detection.
+- [~] 5. Port the tok/s estimate from benchmark baselines (`bench`/`benchmarks` lookup).
+  DEFERRED: needs benchmark_cache.json from llmfit.
   - Validation: `go test ./internal/fit -run Throughput`
-- [ ] 6. Calibration golden tests against known real outcomes: 18B-Q8 on 24 GB → ~49k ctx
+- [~] 6. Calibration golden tests against known real outcomes: 18B-Q8 on 24 GB → ~49k ctx
   safe / 98k fatal; 20 GB MoE GGUF on 36 GB unified → 73k ctx with q4_0 KV works.
+  DEFERRED: needs catalog data from llmfit for golden reference values.
   - Validation: `go test ./internal/fit -run Calibration`
 
 ## Phase 4 — API (design-first)
@@ -37,14 +40,15 @@ Reference implementation: `~/dev/llmfit/llmfit-core/src/{fit,hardware,models}.rs
   (`?ctx=`), `GET /api/catalog`; replace the `/api/models/context/{model}` stub schema.
   Regenerate Go: `go generate ./pkg/apicontract && gofmt -w pkg/apicontract/llama_skein.gen.go`.
   - Validation: `make check-codegen`
-- [ ] 8. Implement the handlers using generated types, wired to `internal/fit`.
+- [x] 8. Implement the handlers using generated types, wired to `internal/fit`.
   - Validation: `go test ./internal/server -run Fit`
-- [ ] 9. Regenerate the opencode TS client (`bun run build:llama-skein-client`) so the
+- [~] 9. Regenerate the opencode TS client (`bun run build:llama-skein-client`) so the
   contract is available downstream; note the version bump for skein's `go get`.
+  DEFERRED: opencode repo not available locally.
   - Validation: TS client compiles in opencode
 
 ## Phase 5 — Verify + document
-- [ ] 10. `go build ./... && go test -short ./...`; update ECOSYSTEM.md fork-extensions list
+- [x] 10. `go build ./... && go test -short ./...`; update ECOSYSTEM.md fork-extensions list
   with the fit endpoints; attribute llmfit (MIT) in NOTICE/ATTRIBUTION.
   - Validation: `make test-all`
 

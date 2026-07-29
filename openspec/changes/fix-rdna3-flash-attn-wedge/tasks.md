@@ -100,6 +100,8 @@
 
 ## Follow-ups (not done, explicitly out of scope here)
 
+<!-- DEFERRED 2026-07-26: Follow-up tasks — require live infrastructure monitoring and tuning database consideration. -->
+
 - [ ] 26. Watch proxmox for a recurrence of the crash above; `.prev` backup
         is in place if a rollback is needed.
 - [ ] 27. Consider whether llama-skein's tuning database should stop

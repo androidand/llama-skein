@@ -8,6 +8,8 @@
 - [x] 4. Test `computeModelSizeBytes` (GGUF file, missing path, mlx/vllm → 0).
 - [x] 5. `go build`, `go test -short ./proxy/... ./internal/...`,
        `make check-codegen`.
+<!-- DEFERRED 2026-07-26: External repos (opencode, skein) not available locally; deploy requires live infrastructure. -->
+
 - [ ] 6. opencode-skein: regen client; show size in the model picker.
 - [ ] 7. skein: show size in the model / provider-models listing.
 - [ ] 8. Deploy llama-skein so `/v1/models` returns `size_bytes` fleet-wide.

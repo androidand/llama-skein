@@ -52,6 +52,8 @@
        GPU with measured memory-activity telemetry (fails open otherwise).
        Tests: `TestGpuStalled` (thresholds incl. real observed z4 values:
        14%/56% healthy vs 2% wedge), `TestWedgeWatchdogTick_ConsecutiveSamples`.
+<!-- DEFERRED 2026-07-26: Follow-up — re-home dead-proxy safeguards, global default, and GPU contention investigation require live infrastructure. -->
+
 - [ ] 10. Follow-up: re-home remaining dead-`proxy` safeguards; set a global
        `maxRequestTimeSecs` default on the hosts; investigate whether two
        different models' processes can genuinely contend for the same

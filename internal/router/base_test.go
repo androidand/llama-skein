@@ -829,6 +829,152 @@ func TestBaseRouter_ModelNotFound(t *testing.T) {
 	}
 }
 
+func TestBaseRouter_SessionCapRejectsAtLimit(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	a.serveBlock = make(chan struct{})
+
+	conf := config.Config{
+		HealthCheckTimeout: 5,
+		Models: map[string]config.ModelConfig{
+			"a": {ConcurrencyLimit: 1},
+		},
+	}
+	b := newBaseRouter("test", conf, map[string]process.Process{"a": a}, &stubPlanner{}, logmon.NewWriter(io.Discard))
+	b.testProcessed = make(chan struct{}, 64)
+	go b.run()
+	t.Cleanup(func() {
+		if !b.shuttingDown.Load() {
+			_ = b.Shutdown(time.Second)
+		}
+	})
+
+	// First request — should be served and block inside ServeHTTP.
+	w1 := httptest.NewRecorder()
+	done1 := make(chan struct{})
+	go func() {
+		b.ServeHTTP(w1, newRequest("a"))
+		close(done1)
+	}()
+	<-a.serveStarted
+	waitProcessed(t, b.testProcessed, 1)
+
+	// Second request — should be rejected with 429 because inFlight["a"] == 1 >= limit 1.
+	w2 := httptest.NewRecorder()
+	b.ServeHTTP(w2, newRequest("a"))
+	waitProcessed(t, b.testProcessed, 1)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%q", w2.Code, w2.Body.String())
+	}
+
+	// Release first request.
+	close(a.serveBlock)
+	<-done1
+	if w1.Code != http.StatusOK {
+		t.Errorf("first request status=%d", w1.Code)
+	}
+}
+
+func TestBaseRouter_SessionCapAllowsUnderLimit(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	a.serveBlock = make(chan struct{})
+
+	conf := config.Config{
+		HealthCheckTimeout: 5,
+		Models: map[string]config.ModelConfig{
+			"a": {ConcurrencyLimit: 2},
+		},
+	}
+	b := newBaseRouter("test", conf, map[string]process.Process{"a": a}, &stubPlanner{}, logmon.NewWriter(io.Discard))
+	b.testProcessed = make(chan struct{}, 64)
+	go b.run()
+	t.Cleanup(func() {
+		if !b.shuttingDown.Load() {
+			_ = b.Shutdown(time.Second)
+		}
+	})
+
+	// First request — served and blocked.
+	w1 := httptest.NewRecorder()
+	done1 := make(chan struct{})
+	go func() {
+		b.ServeHTTP(w1, newRequest("a"))
+		close(done1)
+	}()
+	<-a.serveStarted
+	waitProcessed(t, b.testProcessed, 1)
+
+	// Second request — should succeed (1 < 2).
+	w2 := httptest.NewRecorder()
+	done2 := make(chan struct{})
+	go func() {
+		b.ServeHTTP(w2, newRequest("a"))
+		close(done2)
+	}()
+	waitProcessed(t, b.testProcessed, 1)
+
+	// Third request — should be rejected (2 >= 2).
+	w3 := httptest.NewRecorder()
+	b.ServeHTTP(w3, newRequest("a"))
+	waitProcessed(t, b.testProcessed, 1)
+	if w3.Code != http.StatusTooManyRequests {
+		t.Fatalf("third request status=%d body=%q", w3.Code, w3.Body.String())
+	}
+
+	// Release both requests.
+	close(a.serveBlock)
+	<-done1
+	<-done2
+	if w1.Code != http.StatusOK {
+		t.Errorf("first request status=%d", w1.Code)
+	}
+	if w2.Code != http.StatusOK {
+		t.Errorf("second request status=%d", w2.Code)
+	}
+}
+
+func TestBaseRouter_SessionCapUsesDefaultLimit(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+
+	conf := config.Config{
+		HealthCheckTimeout: 5,
+		Models: map[string]config.ModelConfig{
+			"a": {}, // no ConcurrencyLimit set — defaults to 10
+		},
+	}
+	b := newBaseRouter("test", conf, map[string]process.Process{"a": a}, &stubPlanner{}, logmon.NewWriter(io.Discard))
+	b.testProcessed = make(chan struct{}, 64)
+	go b.run()
+	t.Cleanup(func() {
+		if !b.shuttingDown.Load() {
+			_ = b.Shutdown(time.Second)
+		}
+	})
+
+	// Send 10 requests — all should succeed (default limit is 10).
+	var wg sync.WaitGroup
+	codes := make([]int, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			b.ServeHTTP(w, newRequest("a"))
+			codes[i] = w.Code
+		}(i)
+	}
+	waitProcessed(t, b.testProcessed, 10)
+	wg.Wait()
+
+	for i, c := range codes {
+		if c != http.StatusOK {
+			t.Errorf("request %d: status=%d want 200", i, c)
+		}
+	}
+}
+
 func TestBaseRouter_Shutdown_StopsAllProcesses(t *testing.T) {
 	a := newFakeProcess("a")
 	a.markReady()

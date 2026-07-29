@@ -134,6 +134,11 @@ type ProxyManager struct {
 
 	// Skein companion: session metrics accumulator keyed by reservation ID
 	sessionMetricsStore *SessionMetricsStore
+
+	// GPU-stall watchdog observability: active state and reason for being inactive.
+	// Set once during startWedgeWatchdog() so the reason is logged and queryable.
+	watchdogActive bool
+	watchdogReason string
 }
 
 // SetConfigFile stores the path to the on-disk config YAML so that the
@@ -255,7 +260,7 @@ func New(proxyConfig config.Config) *ProxyManager {
 		shutdownCancel: shutdownCancel,
 
 		buildDate: "unknown",
-		commit:    "abcd1234",
+		commit:    "unbuilt-devbuild",
 		version:   "0",
 
 		peerProxy:  peerProxy,
@@ -1609,8 +1614,30 @@ func (pm *ProxyManager) SetPerfMonitor(m *perf.Monitor) {
 func (pm *ProxyManager) startWedgeWatchdog() {
 	wd := pm.config.WedgeWatchdog
 	if wd.Enabled != nil && !*wd.Enabled {
+		pm.watchdogActive = false
+		pm.watchdogReason = "disabled by config"
+		pm.proxyLogger.Infof("GPU-stall watchdog inactive: disabled by config")
 		return
 	}
+
+	_, gpus := pm.perfMonitor.Current()
+	if len(gpus) != 1 {
+		pm.watchdogActive = false
+		pm.watchdogReason = fmt.Sprintf("requires exactly 1 GPU, found %d", len(gpus))
+		pm.proxyLogger.Infof("GPU-stall watchdog inactive: requires exactly 1 GPU, found %d", len(gpus))
+		return
+	}
+	if !gpus[0].MemActivityKnown {
+		pm.watchdogActive = false
+		pm.watchdogReason = "GPU does not report memory-activity telemetry"
+		pm.proxyLogger.Infof("GPU-stall watchdog inactive: GPU does not report memory-activity telemetry")
+		return
+	}
+
+	pm.watchdogActive = true
+	pm.watchdogReason = ""
+	pm.proxyLogger.Infof("GPU-stall watchdog active")
+
 	grace := time.Duration(intOr(wd.GraceSecs, 60)) * time.Second
 	interval := time.Duration(intOr(wd.IntervalSecs, 10)) * time.Second
 	needSamples := intOr(wd.Samples, 3)

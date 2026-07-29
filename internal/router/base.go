@@ -275,15 +275,26 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 //  1. Unknown model — respond with ErrNoLocalModelFound and move on.
 //  2. A swap to the same model is already in flight — attach this waiter so
 //     one swap serves all callers that asked for the same model.
-//  3. Fast path — the target process is already ready, the planner sees
+//  3. Session-cap — process is ready, nothing to evict, no collision, but
+//     inFlight count has reached the concurrency limit. Reject with 429.
+//  4. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
 //     ServeHTTP immediately (wrapped so the run loop knows when it ends).
-//  4. Would collide with an in-flight swap (we'd stop their target, or
+//  5. Would collide with an in-flight swap (we'd stop their target, or
 //     they're stopping us) — park in the queue for handleSwapDone to drain.
-//  5. Would evict a process that is still handling requests — park in the
+//  6. Would evict a process that is still handling requests — park in the
 //     queue. handleServeDone will retry when the busy process drains.
-//  6. Otherwise — start a new swap. This may run in parallel with other
+//  7. Otherwise — start a new swap. This may run in parallel with other
 //     active swaps when their evict sets don't intersect.
+// effectiveLimit returns the concurrency cap for a model: explicit
+// ConcurrencyLimit from the config if set, otherwise the default of 10.
+func effectiveLimit(mc config.ModelConfig) int {
+	if mc.ConcurrencyLimit > 0 {
+		return mc.ConcurrencyLimit
+	}
+	return 10
+}
+
 func (b *baseRouter) handleRequest(req handlerReq, active map[string]*activeSwap, inFlight map[string]int, queued *[]handlerReq) {
 	// (1) Unknown model.
 	p, ok := b.processes[req.model]
@@ -302,7 +313,15 @@ func (b *baseRouter) handleRequest(req handlerReq, active map[string]*activeSwap
 
 	evict := b.planner.EvictionFor(req.model, activeTargets(active, req.model))
 
-	// (3) Fast path: ready, nothing to evict, and nobody is evicting us.
+	// (3) Session-cap: ready, nothing to evict, no collision but at concurrency
+	// limit — reject immediately instead of serving.
+	if p.State() == process.StateReady && len(evict) == 0 && !collidesWith(req.model, evict, active) && inFlight[req.model] >= effectiveLimit(b.config.Models[req.model]) {
+		b.logger.Debugf("%s: session-cap exceeded for model %s (%d/%d)", b.name, req.model, inFlight[req.model], effectiveLimit(b.config.Models[req.model]))
+		b.grant(req, handlerResp{err: ErrSessionCapExceeded})
+		return
+	}
+
+	// (4) Fast path: ready, nothing to evict, and nobody is evicting us.
 	if p.State() == process.StateReady && len(evict) == 0 && !collidesWith(req.model, evict, active) {
 		b.logger.Debugf("%s: fast-path serving model %s (already ready)", b.name, req.model)
 		b.grantHandler(req, req.model, p, inFlight)

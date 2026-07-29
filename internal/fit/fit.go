@@ -10,9 +10,95 @@ package fit
 
 import (
 	"fmt"
+	"runtime"
 
+	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/pkg/gguf"
 )
+
+// SystemSpecs is the fit-facing host hardware description built from the
+// existing perf snapshot. It reuses vm_stat / kernel-pressure telemetry and
+// GPU stats — no re-detection. The WiredLimitMB field is platform-specific:
+// on macOS it is the iogpu.wired_limit_mb value (0 = OS default ~70% of RAM).
+type SystemSpecs struct {
+	Backend        string // "llamacpp", "mlx", "vllm", etc.
+	UnifiedMemory  bool   // Apple Silicon unified pool
+	VRAMTotalMB    int    // total VRAM / unified GPU budget
+	VRAMFreeMB     int    // currently free VRAM (0 = unknown)
+	RAMTotalMB     int    // total system RAM
+	RAMAvailableMB int    // available for new allocations without paging
+	Cores          int    // logical CPU cores
+}
+
+// FromSnapshot builds SystemSpecs from the latest perf snapshot and the
+// configured backend. The wiredLimitMB is the macOS GPU wired-memory limit
+// (0 on non-Apple platforms). GPU stats are deduplicated to one sample per
+// GPU ID before aggregation.
+func FromSnapshot(backend string, sysStats []perf.SysStat, gpuStats []perf.GpuStat, wiredLimitMB int) SystemSpecs {
+	spec := SystemSpecs{
+		Backend: backend,
+		Cores:   runtime.NumCPU(),
+	}
+	if len(sysStats) == 0 {
+		return spec
+	}
+	sys := sysStats[len(sysStats)-1]
+	spec.RAMTotalMB = sys.MemTotalMB
+	spec.RAMAvailableMB = sys.MemAvailableMB
+	if spec.RAMAvailableMB == 0 {
+		spec.RAMAvailableMB = sys.MemFreeMB
+	}
+
+	unified := runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+	gpus := perf.LatestGPUs(gpuStats)
+	if len(gpus) == 0 {
+		if unified {
+			// No discrete GPU stats — Apple Silicon with no ioreg overlay.
+			// Budget is the wired limit (or ~70% of RAM).
+			budget := unifiedBudgetMB(spec.RAMTotalMB, wiredLimitMB)
+			spec.UnifiedMemory = true
+			spec.VRAMTotalMB = budget
+			spec.VRAMFreeMB = clamp0(budget - spec.RAMTotalMB + spec.RAMAvailableMB)
+		}
+		return spec
+	}
+
+	var totalMB, usedMB int
+	for _, g := range gpus {
+		totalMB += g.MemTotalMB
+		usedMB += g.MemUsedMB
+	}
+	if unified {
+		// GpuStat totals on Apple report the whole unified pool; used is the
+		// GPU-attributed slice (ioreg overlay).
+		budget := unifiedBudgetMB(totalMB, wiredLimitMB)
+		free := budget - usedMB
+		if spec.RAMAvailableMB > 0 && spec.RAMAvailableMB < free {
+			free = spec.RAMAvailableMB
+		}
+		spec.UnifiedMemory = true
+		spec.VRAMTotalMB = budget
+		spec.VRAMFreeMB = clamp0(free)
+		return spec
+	}
+	spec.VRAMTotalMB = totalMB
+	spec.VRAMFreeMB = clamp0(totalMB - usedMB)
+	return spec
+}
+
+func unifiedBudgetMB(totalRAM, wiredLimitMB int) int {
+	if wiredLimitMB > 0 {
+		return wiredLimitMB
+	}
+	return totalRAM * 70 / 100
+}
+
+func clamp0(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
 
 // BitsPerElement returns the bits used per KV-cache element for a llama.cpp
 // cache-type flag value. Defaults to FP16 (16) for unknown/empty types, which

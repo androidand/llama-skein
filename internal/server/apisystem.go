@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/router"
+	"github.com/androidand/llama-skein/internal/runtime"
 	"github.com/androidand/llama-skein/internal/shared"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 )
@@ -31,6 +33,19 @@ func (s *Server) handleAPISystemVersion(w http.ResponseWriter, r *http.Request) 
 			"go_os":   goOS(),
 			"go_arch": goArch(),
 		},
+	}
+	// Detect runtime versions for all backends.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	for _, backend := range []string{runtime.BackendLlamaCpp, runtime.BackendMLX, runtime.BackendVLLM} {
+		mgr := runtime.For(backend)
+		info := mgr.Detect(ctx, "")
+		if info.Installed {
+			resp[backend] = map[string]string{
+				"version": info.Version,
+				"detail":  info.Detail,
+			}
+		}
 	}
 	if s.build.LlamaCppBuild != "" && s.build.LlamaCppBuild != "unknown" {
 		var features []string

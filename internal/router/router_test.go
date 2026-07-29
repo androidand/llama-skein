@@ -3,12 +3,16 @@ package router
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/androidand/llama-skein/internal/process"
 )
 
 func TestExtractContext_GET(t *testing.T) {
@@ -269,6 +273,32 @@ func TestReadContext(t *testing.T) {
 			gotData, ok := ReadContext(tt.ctx)
 			if gotData.Model != tt.wantReq || gotData.ModelID != tt.wantReal || ok != tt.wantBool {
 				t.Errorf("want (%q, %q, %v) got (%q, %q, %v)", tt.wantReq, tt.wantReal, tt.wantBool, gotData.Model, gotData.ModelID, ok)
+			}
+		})
+	}
+}
+
+func TestSendError_LoadFailureCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"ErrLoadFailure direct", ErrLoadFailure, http.StatusBadGateway},
+		{"ErrLoadFailure wrapped", fmt.Errorf("model xyz failed: %w", ErrLoadFailure), http.StatusBadGateway},
+		{"ErrStartAborted", process.ErrStartAborted, http.StatusBadGateway},
+		{"ErrStartAborted wrapped", fmt.Errorf("warm-up failed: %w", process.ErrStartAborted), http.StatusBadGateway},
+		{"ErrSwapQueueTimeout", ErrSwapQueueTimeout, http.StatusServiceUnavailable},
+		{"generic error", fmt.Errorf("something broke"), http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			r, _ := http.NewRequest(http.MethodGet, "/", nil)
+			SendError(rec, r, tt.err)
+			if rec.Code != tt.wantCode {
+				t.Errorf("want %d got %d (body: %s)", tt.wantCode, rec.Code, rec.Body.String())
 			}
 		})
 	}

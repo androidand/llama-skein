@@ -3,7 +3,7 @@
   "info": {
     "title": "llama-skein control API",
     "version": "1.0.0",
-    "description": "## Failure status codes\n\nA caller can distinguish failure classes by status code alone, without parsing prose:\n\n| code | meaning | raised by |\n|------|---------|-----------|\n| 429 | Concurrency limit reached; retry shortly. | HTTP concurrency middleware |\n| 503 | Queued behind a busy sibling past `swapQueueTimeoutSecs`. | swap queue |\n| 507 | Loading would exceed host memory; the load was refused before launching. | fit guard |\n| 500 | Unclassified internal error. | residual |\n\nReadiness is pollable at `GET /health` before dispatching, which is cheaper than\ndiscovering the state by issuing an inference request."
+    "description": "## Failure status codes\n\nA caller can distinguish failure classes by status code alone, without parsing prose:\n\n| code | meaning | raised by |\n|------|---------|-----------|\n| 429 | Concurrency limit reached; retry shortly. | router session-cap / HTTP concurrency middleware |\n| 502 | Model process started but failed warm-up; never became ready. | load failure |\n| 503 | Queued behind a busy sibling past `swapQueueTimeoutSecs`. | swap queue |\n| 507 | Loading would exceed host memory; the load was refused before launching. | fit guard |\n| 500 | Unclassified internal error. | residual |\n\nReadiness is pollable at `GET /health` before dispatching, which is cheaper than\ndiscovering the state by issuing an inference request."
   },
   "paths": {
     "/api/system/version": {
@@ -16,6 +16,174 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime": {
+      "get": {
+        "operationId": "listRuntimes",
+        "summary": "List all runtime backends and their status.",
+        "responses": {
+          "200": {
+            "description": "Runtime status for all backends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/{backend}/install": {
+      "post": {
+        "operationId": "installRuntime",
+        "summary": "Install a runtime backend.",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["llamacpp", "mlx", "vllm"]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeInstallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Install completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Install failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/{backend}/upgrade": {
+      "post": {
+        "operationId": "upgradeRuntime",
+        "summary": "Upgrade a runtime backend.",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["llamacpp", "mlx", "vllm"]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeInstallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upgrade completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Upgrade failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/{backend}/health": {
+      "get": {
+        "operationId": "checkRuntimeHealth",
+        "summary": "Check if a runtime backend is healthy.",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["llamacpp", "mlx", "vllm"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Health status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealth"
                 }
               }
             }
@@ -428,6 +596,77 @@
         }
       }
     },
+    "/api/skein/config": {
+      "get": {
+        "operationId": "getSkeinConfig",
+        "summary": "Returns the current persistent user profile for GPU power and silent-mode preferences.",
+        "responses": {
+          "200": {
+            "description": "Current user profile with active state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfileState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "setSkeinConfig",
+        "summary": "Saves a persistent user profile and applies it to the thermal manager. Accepts a profile payload with power settings and optional schedule.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Profile saved and applied successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfileState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile."
+          },
+          "500": {
+            "description": "Failed to apply profile."
+          },
+          "503": {
+            "description": "GPU power control not available on this host."
+          }
+        }
+      }
+    },
+    "/api/skein/config/default": {
+      "get": {
+        "operationId": "getDefaultSkeinConfig",
+        "summary": "Returns a default profile template for the host.",
+        "responses": {
+          "200": {
+            "description": "Default user profile template.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/fit": {
       "get": {
         "operationId": "getFitReport",
@@ -684,6 +923,67 @@
             "type": "boolean"
           },
           "rocm_version": {
+            "type": "string"
+          }
+        }
+      },
+      "RuntimeInfo": {
+        "type": "object",
+        "required": [
+          "backend",
+          "installed"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": ["llamacpp", "mlx", "vllm"]
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "RuntimeInstallRequest": {
+        "type": "object",
+        "properties": {
+          "venvDir": {
+            "type": "string",
+            "description": "Directory for the Python venv (required for mlx and vllm). For llamacpp, target directory for the binary."
+          }
+        }
+      },
+      "RuntimeHealth": {
+        "type": "object",
+        "required": [
+          "backend",
+          "healthy"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": ["llamacpp", "mlx", "vllm"]
+          },
+          "healthy": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
             "type": "string"
           }
         }
@@ -1870,6 +2170,27 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ModelHealth"
             }
+          },
+          "watchdog": {
+            "$ref": "#/components/schemas/WatchdogStatus",
+            "description": "GPU-stall watchdog status. Present even when inactive — reason explains why."
+          }
+        }
+      },
+      "WatchdogStatus": {
+        "type": "object",
+        "description": "GPU-stall watchdog observability. Active means the watchdog is monitoring for wedged backends.",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "True when the watchdog is actively monitoring GPU stall signatures."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason when inactive (e.g., 'disabled by config', 'no perf monitor', 'GPU does not report memory-activity telemetry'). Omitted when active."
           }
         }
       },
@@ -1979,6 +2300,74 @@
             "items": {
               "$ref": "#/components/schemas/ApiModel"
             }
+          }
+        }
+      },
+      "UserProfile": {
+        "type": "object",
+        "required": [
+          "name",
+          "silent_mode",
+          "power"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable label for the profile."
+          },
+          "silent_mode": {
+            "type": "boolean",
+            "description": "Whether GPU power limits are applied."
+          },
+          "power": {
+            "$ref": "#/components/schemas/PowerProfile",
+            "description": "Thermal profile applied when silent_mode is true."
+          },
+          "schedule": {
+            "type": "string",
+            "description": "Optional time window in HH:MM-HH:MM format for automatic silent mode toggling. Empty means always follow silent_mode setting."
+          }
+        }
+      },
+      "PowerProfile": {
+        "type": "object",
+        "required": [
+          "power_limit_pct",
+          "temp_target_celsius"
+        ],
+        "properties": {
+          "power_limit_pct": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99,
+            "description": "Percentage of default TDP to cap at (1-99)."
+          },
+          "temp_target_celsius": {
+            "type": "integer",
+            "minimum": 40,
+            "maximum": 100,
+            "description": "GPU temperature target while in silent mode (40-100)."
+          }
+        }
+      },
+      "UserProfileState": {
+        "type": "object",
+        "required": [
+          "profile",
+          "available",
+          "active"
+        ],
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/UserProfile"
+          },
+          "available": {
+            "type": "boolean",
+            "description": "Whether GPU power control is available on this host."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether silent mode is currently active."
           }
         }
       }
