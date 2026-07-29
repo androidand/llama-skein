@@ -28,7 +28,7 @@
     {%- for tool in tools %}
         {%- set ns.system_prompt = ns.system_prompt + '\n' + (tool | tojson) %}
     {%- endfor %}
-    {%- set ns.system_prompt = ns.system_prompt + '\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>' %}
+    {%- set ns.system_prompt = ns.system_prompt + '\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>\n\nTool results arrive wrapped in <tool_response> tags. Never write <tool_response> or </tool_response> yourself; when answering after a tool result, start directly with your answer text.' %}
 {%- endif %}
 {{- bos_token }}{{ ns.system_prompt }}
 {%- for message in messages %}
