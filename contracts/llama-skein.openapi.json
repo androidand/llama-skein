@@ -1809,7 +1809,7 @@
           },
           "max_fit_ctx": {
             "type": "integer",
-            "description": "Largest --ctx-size (hard n_ctx) that fits this host's VRAM, capped at the trained context. The grow target for an under-configured model. 0 when VRAM is unknown."
+            "description": "Largest --ctx-size (hard n_ctx) that fits this host's VRAM. The grow target for an under-configured model. 0 when VRAM is unknown."
           },
           "run_mode": {
             "type": "string",

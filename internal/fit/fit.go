@@ -436,14 +436,11 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		res.KVMBAtMaxSafeCtx = 0
 	}
 
-	// The largest hard ctx that fits VRAM, capped at the trained context — the
-	// grow target skein's sweep patches an under-configured model up to. 0 when
-	// VRAM is unknown (vramMaxCtx == 0), so the sweep knows not to grow blindly.
+	// The largest hard ctx that fits VRAM — the grow target skein's sweep patches
+	// an under-configured model up to. 0 when VRAM is unknown (vramMaxCtx == 0),
+	// so the sweep knows not to grow blindly.
 	if vramMaxCtx > 0 {
 		res.MaxFitCtx = vramMaxCtx
-		if g.TrainedCtx > 0 && res.MaxFitCtx > int(g.TrainedCtx) {
-			res.MaxFitCtx = int(g.TrainedCtx)
-		}
 	}
 
 	// Flag a configured model whose --ctx-size is materially below what VRAM

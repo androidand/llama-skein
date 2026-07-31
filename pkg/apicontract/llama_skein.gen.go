@@ -862,7 +862,7 @@ type ModelFit struct {
 	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
 	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
 
-	// MaxFitCtx Largest --ctx-size (hard n_ctx) that fits this host's VRAM, capped at the trained context. The grow target for an under-configured model. 0 when VRAM is unknown.
+	// MaxFitCtx Largest --ctx-size (hard n_ctx) that fits this host's VRAM. The grow target for an under-configured model. 0 when VRAM is unknown.
 	MaxFitCtx *int `json:"max_fit_ctx,omitempty"`
 
 	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx, and accounts for llama-server dividing n_ctx across --parallel slots (per-request share). THIS is the number opencode/skein should trim to, not configured_ctx.

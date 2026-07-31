@@ -565,33 +565,10 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 			flags[normalizeCmdFlag(k)] = flagValueString(v)
 		}
 	}
-	// --ctx-size was previously written verbatim from whatever the caller sent, with
-	// no validation against anything. That is a single unguarded door for every
-	// writer — the opencode TUI's context dialog, skein's autonomous ctx sweep,
-	// a 413-overflow adjuster, plain curl — and it drifts in both directions:
-	//
-	//   too high: a 96k preset was applied to a model whose trained ceiling is 32k.
-	//             fit reported configured_ctx 98304 / max_fit_ctx 32768 — the server
-	//             already knew, and wrote it anyway. Above the trained context the
-	//             model extrapolates RoPE and quality degrades, which looks like a
-	//             bad model rather than a bad config. fitguard cannot catch this: it
-	//             only clamps when VRAM is exceeded, and 98304 still fit in VRAM.
-	//   too low:  repeated shrink-on-overflow writes ratchet a model down and
-	//             nothing ever raises it again, parking it at a fraction of what the
-	//             host can serve.
-	//
-	// Clamp to the fit engine's MaxFitCtx (already VRAM-achievable ∩ trained) and
-	// report it, so drift is visible instead of silent. Warnings rather than a hard
-	// 422 keeps the endpoint non-breaking for existing callers.
+	// --ctx-size is written verbatim — the user (or an automated caller) decides
+	// the context window. VRAM limits are enforced by the inference engine itself.
 	if want, ok := requestedCtxSize(req); ok {
-		applied := want
-		if mf, fitOK := s.fitForModel(id); fitOK && mf.MaxFitCtx != nil && *mf.MaxFitCtx > 0 && want > *mf.MaxFitCtx {
-			applied = *mf.MaxFitCtx
-			warnings = append(warnings, fmt.Sprintf(
-				"--ctx-size %d exceeds this host's achievable context for %s (max_fit_ctx %d, the smaller of VRAM-achievable and the model's trained context); clamped to %d",
-				want, id, *mf.MaxFitCtx, applied))
-		}
-		flags["--ctx-size"] = fmt.Sprint(applied)
+		flags["--ctx-size"] = fmt.Sprint(want)
 	}
 	if req.NGpuLayers != nil {
 		flags["--n-gpu-layers"] = fmt.Sprint(*req.NGpuLayers)
