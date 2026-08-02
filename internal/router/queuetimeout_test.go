@@ -44,7 +44,7 @@ func TestExpireStaleQueued_PartitionsExpiredFromFresh(t *testing.T) {
 	fresh := newQueuedReq("a", now.Add(-3*time.Second))    // queued 3s ago, within bound
 
 	queued := []handlerReq{expired, fresh}
-	b.expireStaleQueued(now, timeout, map[string]*activeSwap{}, &queued)
+	b.expireStaleQueued(now, timeout, map[string]*activeSwap{}, map[string]int{}, &queued)
 
 	if len(queued) != 1 || queued[0].queuedAt != fresh.queuedAt {
 		t.Fatalf("expected only the fresh request to remain queued, got %d entries", len(queued))
@@ -72,7 +72,7 @@ func TestExpireStaleQueued_ErrorNamesBlockingModel(t *testing.T) {
 
 	req := newQueuedReq("a", now.Add(-20*time.Second))
 	queued := []handlerReq{req}
-	b.expireStaleQueued(now, 10*time.Second, map[string]*activeSwap{}, &queued)
+	b.expireStaleQueued(now, 10*time.Second, map[string]*activeSwap{}, map[string]int{}, &queued)
 
 	resp := <-req.respond
 	if resp.err == nil || !errors.Is(resp.err, ErrSwapQueueTimeout) {
@@ -84,13 +84,28 @@ func TestExpireStaleQueued_ErrorNamesBlockingModel(t *testing.T) {
 	}
 }
 
+func TestExpireStaleQueued_ErrorNamesInFlightCount(t *testing.T) {
+	b := newExpireTestRouter(map[string][]string{"a": {"busy-model"}})
+	now := time.Now()
+
+	req := newQueuedReq("a", now.Add(-20*time.Second))
+	queued := []handlerReq{req}
+	b.expireStaleQueued(now, 10*time.Second, map[string]*activeSwap{}, map[string]int{"busy-model": 3}, &queued)
+
+	resp := <-req.respond
+	msg := resp.err.Error()
+	if !strings.Contains(msg, "3 request") {
+		t.Errorf("error message %q does not name the in-flight count (3)", msg)
+	}
+}
+
 func TestExpireStaleQueued_ZeroTimeoutDisablesBound(t *testing.T) {
 	b := newExpireTestRouter(nil)
 	now := time.Now()
 
 	req := newQueuedReq("a", now.Add(-time.Hour)) // queued for an hour
 	queued := []handlerReq{req}
-	b.expireStaleQueued(now, 0, map[string]*activeSwap{}, &queued) // timeout disabled
+	b.expireStaleQueued(now, 0, map[string]*activeSwap{}, map[string]int{}, &queued) // timeout disabled
 
 	if len(queued) != 1 {
 		t.Errorf("timeout=0 must disable the bound entirely; queue should be untouched, got %d entries", len(queued))
@@ -157,7 +172,7 @@ func TestBaseRouter_QueueTimeoutEndToEnd(t *testing.T) {
 func TestExpireStaleQueued_EmptyQueueIsNoop(t *testing.T) {
 	b := newExpireTestRouter(nil)
 	var queued []handlerReq
-	b.expireStaleQueued(time.Now(), 10*time.Second, map[string]*activeSwap{}, &queued)
+	b.expireStaleQueued(time.Now(), 10*time.Second, map[string]*activeSwap{}, map[string]int{}, &queued)
 	if len(queued) != 0 {
 		t.Errorf("expected empty queue to stay empty, got %d entries", len(queued))
 	}

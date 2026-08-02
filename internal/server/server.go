@@ -30,11 +30,11 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf         *perf.Monitor
-	inflight     *inflightCounter
-	metrics      *metricsMonitor
-	silentMode   *thermal.Manager
-	build        BuildInfo
+	perf       *perf.Monitor
+	inflight   *inflightCounter
+	metrics    *metricsMonitor
+	silentMode *thermal.Manager
+	build      BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -50,6 +50,13 @@ type Server struct {
 	configFile string
 	configMu   sync.Mutex
 	reloadFn   func()
+
+	// runtimeState is config-health state that must survive hot reloads even
+	// though Server itself is rebuilt from scratch on every one. Created once
+	// in main and handed to every Server instance via SetRuntimeState — see
+	// internal/config.RuntimeState for why. nil in tests that construct a
+	// Server directly; callers must handle that (see runtimeStateOrDefault).
+	runtimeState *config.RuntimeState
 
 	// maxSafeCtxCache memoizes the fit engine's max_safe_ctx per real model id
 	// for the pre-flight prompt guard (computing it reads GGUF / the HF cache +
@@ -101,6 +108,23 @@ func (s *Server) SetConfigFile(path string) { s.configFile = path }
 // SetReloadFn injects the reload callback so POST /api/config/reload can
 // trigger it.
 func (s *Server) SetReloadFn(fn func()) { s.reloadFn = fn }
+
+// SetRuntimeState wires the cross-reload config-health state (see
+// internal/config.RuntimeState) so /health, /api/config/reload,
+// /api/config/validate, /api/config/history, and /api/config/rollback can
+// read and update it. The same pointer must be handed to every Server
+// instance across a hot reload — never replaced.
+func (s *Server) SetRuntimeState(rs *config.RuntimeState) { s.runtimeState = rs }
+
+// runtimeStateOrDefault returns s.runtimeState, or a fresh, unshared
+// RuntimeState when unset (tests that build a Server directly rather than
+// through main's wiring). Never nil, so callers need no nil check.
+func (s *Server) runtimeStateOrDefault() *config.RuntimeState {
+	if s.runtimeState == nil {
+		s.runtimeState = config.NewRuntimeState()
+	}
+	return s.runtimeState
+}
 
 // modelPostJSONRoutes are endpoints with a model id in the JSON request body.
 var modelPostJSONRoutes = []string{
@@ -165,17 +189,17 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 
 	s := &Server{
-		cfg:          cfg,
-		muxlog:       muxlog,
-		proxylog:     proxylog,
-		upstreamlog:  upstreamlog,
-		perf:         perfMon,
-		inflight:     &inflightCounter{},
-		metrics:      newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		silentMode:   silentMgr,
-		build:        build,
-		shutdownCtx:  shutdownCtx,
-		shutdownFn:   shutdownFn,
+		cfg:         cfg,
+		muxlog:      muxlog,
+		proxylog:    proxylog,
+		upstreamlog: upstreamlog,
+		perf:        perfMon,
+		inflight:    &inflightCounter{},
+		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		silentMode:  silentMgr,
+		build:       build,
+		shutdownCtx: shutdownCtx,
+		shutdownFn:  shutdownFn,
 	}
 
 	// Fit guard (proactive half): shrink over-large contexts and flag models
@@ -347,6 +371,9 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
 	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
+	mux.Handle("POST /api/config/validate", apiChain.ThenFunc(s.handleAPIConfigValidate))
+	mux.Handle("GET /api/config/history", apiChain.ThenFunc(s.handleAPIConfigHistory))
+	mux.Handle("POST /api/config/rollback", apiChain.ThenFunc(s.handleAPIConfigRollback))
 	mux.Handle("GET /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
 	mux.Handle("PUT /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
 	mux.Handle("DELETE /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))

@@ -202,6 +202,13 @@ type Config struct {
 	// binary basename is exactly "llama-server"; conflicting candidates are an
 	// error rather than a guess.
 	EnginePath string `yaml:"enginePath"`
+
+	// ConfigHistory controls the config-history/ snapshot directory: a
+	// bounded, timestamped archive of every config this one replaced, so any
+	// actor's mistake (a bad hand edit, an agent's wholesale replacement, a
+	// corrupt PATCH) is one rollback call away instead of a manual recovery.
+	// See internal/config/history.go.
+	ConfigHistory ConfigHistoryConfig `yaml:"configHistory"`
 }
 
 // SilentModeConfig controls automatic silent mode scheduling.

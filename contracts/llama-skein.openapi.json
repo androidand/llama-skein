@@ -55,7 +55,11 @@
             "required": true,
             "schema": {
               "type": "string",
-              "enum": ["llamacpp", "mlx", "vllm"]
+              "enum": [
+                "llamacpp",
+                "mlx",
+                "vllm"
+              ]
             }
           }
         ],
@@ -114,7 +118,11 @@
             "required": true,
             "schema": {
               "type": "string",
-              "enum": ["llamacpp", "mlx", "vllm"]
+              "enum": [
+                "llamacpp",
+                "mlx",
+                "vllm"
+              ]
             }
           }
         ],
@@ -173,7 +181,11 @@
             "required": true,
             "schema": {
               "type": "string",
-              "enum": ["llamacpp", "mlx", "vllm"]
+              "enum": [
+                "llamacpp",
+                "mlx",
+                "vllm"
+              ]
             }
           }
         ],
@@ -514,6 +526,16 @@
           },
           "503": {
             "description": "Reload not available."
+          },
+          "422": {
+            "description": "Config is invalid — not reloaded; the previously-active config keeps serving.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -857,6 +879,87 @@
           }
         }
       }
+    },
+    "/api/config/validate": {
+      "post": {
+        "operationId": "validateConfig",
+        "summary": "Dry-run validate a config without applying it.",
+        "description": "Validates the on-disk config file, or the YAML in the request body when provided. Never writes anything and never triggers a reload — use POST /api/config/reload to actually apply a change.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigValidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation result (valid may be true or false — this endpoint always returns 200; check the body).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigValidateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/history": {
+      "get": {
+        "operationId": "getConfigHistory",
+        "summary": "List retained config snapshots, newest first.",
+        "responses": {
+          "200": {
+            "description": "Retained snapshots.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/rollback": {
+      "post": {
+        "operationId": "rollbackConfig",
+        "summary": "Restore the config to a previous snapshot and reload.",
+        "description": "The config active immediately before the rollback is itself snapshotted first — a rollback is a change like any other and can itself be undone.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigRollbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Rollback applied; reload triggered asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown snapshot ref."
+          },
+          "503": {
+            "description": "Reload not available."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -936,7 +1039,11 @@
         "properties": {
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx", "vllm"]
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ]
           },
           "installed": {
             "type": "boolean"
@@ -970,7 +1077,11 @@
         "properties": {
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx", "vllm"]
+            "enum": [
+              "llamacpp",
+              "mlx",
+              "vllm"
+            ]
           },
           "healthy": {
             "type": "boolean"
@@ -1019,7 +1130,7 @@
       },
       "InferenceInfo": {
         "type": "object",
-        "description": "Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers \u2014 GPU utilization is sampled over a window and reads low between tokens; this does not.",
+        "description": "Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.",
         "properties": {
           "in_flight": {
             "type": "integer",
@@ -1031,7 +1142,7 @@
           },
           "busy": {
             "type": "boolean",
-            "description": "True when every slot of every running model is occupied (in_flight >= slots_total > 0) \u2014 a new request would queue. False when no model is running: the host is idle, it just needs a swap-in."
+            "description": "True when every slot of every running model is occupied (in_flight >= slots_total > 0) — a new request would queue. False when no model is running: the host is idle, it just needs a swap-in."
           }
         }
       },
@@ -1040,7 +1151,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) \u2014 selection is deterministic across calls."
+            "description": "Model ID as defined in config. With several models loaded, the one with the largest weights is reported (ties: smallest ID) — selection is deterministic across calls."
           },
           "model_mb": {
             "type": "integer",
@@ -1624,6 +1735,20 @@
         "properties": {
           "status": {
             "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Present on a 422 response: why the config was rejected. Absent on success."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigWarning"
+            },
+            "description": "Risky-but-loadable settings detected in the config that was (or would be) applied."
           }
         }
       },
@@ -2136,17 +2261,25 @@
           },
           "last_error": {
             "$ref": "#/components/schemas/LastError"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigWarning"
+            },
+            "description": "Risky-but-loadable settings detected for this model (e.g. flash-attn on a GPU known to wedge with it). Informational only."
           }
         }
       },
       "HealthResponse": {
         "type": "object",
-        "description": "What the host can actually serve right now. Lets a caller preflight \u2014 distinguishing ready, loading, busy, failed and idle-with-no-model-resident \u2014 instead of discovering it by spending an inference request.",
+        "description": "What the host can actually serve right now. Lets a caller preflight — distinguishing ready, loading, busy, failed and idle-with-no-model-resident — instead of discovering it by spending an inference request.",
         "required": [
           "status",
           "any_model_resident",
           "busy",
-          "models"
+          "models",
+          "config_status"
         ],
         "properties": {
           "status": {
@@ -2174,6 +2307,9 @@
           "watchdog": {
             "$ref": "#/components/schemas/WatchdogStatus",
             "description": "GPU-stall watchdog status. Present even when inactive — reason explains why."
+          },
+          "config_status": {
+            "$ref": "#/components/schemas/ConfigStatus"
           }
         }
       },
@@ -2368,6 +2504,137 @@
           "active": {
             "type": "boolean",
             "description": "Whether silent mode is currently active."
+          }
+        }
+      },
+      "ConfigWarning": {
+        "type": "object",
+        "description": "A risky-but-loadable piece of configuration, surfaced for awareness. Never causes a config or model to be rejected — see ConfigStatus for what IS rejected (parse/validation failures).",
+        "required": [
+          "message",
+          "source"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model ID this warning concerns, absent for a config-wide warning."
+          },
+          "flag": {
+            "type": "string",
+            "description": "The specific flag/setting the warning is about, if applicable."
+          },
+          "message": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Stable identifier for what produced the warning, e.g. \"flash-attn-gfx\", so a client can key on it instead of parsing message text."
+          }
+        }
+      },
+      "ConfigStatus": {
+        "type": "object",
+        "description": "Whether the on-disk config is currently valid. A previous invalid edit or reload never breaks serving — the last valid config keeps running — but must be visible here until fixed.",
+        "required": [
+          "valid"
+        ],
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "description": "Present when valid is false: the parse/validation error from the most recent failed reload attempt."
+          },
+          "stale_since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the config first went invalid. Absent when valid."
+          }
+        }
+      },
+      "ConfigValidateRequest": {
+        "type": "object",
+        "description": "Optional dry-run body. Omit to validate the on-disk config file as-is.",
+        "properties": {
+          "config": {
+            "type": "string",
+            "description": "Raw YAML to validate instead of reading the on-disk file. Never written anywhere — this is a pure dry run."
+          }
+        }
+      },
+      "ConfigValidateResponse": {
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigWarning"
+            }
+          }
+        }
+      },
+      "ConfigHistoryEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "time",
+          "actor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Snapshot identifier — pass as ref to POST /api/config/rollback."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string",
+            "description": "What produced this snapshot: \"reload\" (file edit/SIGHUP/API write), \"rollback\", \"legacy-bak\" (migrated from an old config.yaml.bak* file), or an API-specific tag."
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigHistoryResponse": {
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigHistoryEntry"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "ConfigRollbackRequest": {
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "A snapshot id from GET /api/config/history."
           }
         }
       }
