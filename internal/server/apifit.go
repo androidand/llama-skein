@@ -257,7 +257,7 @@ func modelGetsWholeGPU(cfg config.Config, modelID string) bool {
 // fillModelFit copies an engine Result onto the generated ModelFit DTO. Shared
 // by the llama.cpp and MLX paths so both report identically.
 func fillModelFit(mf *apicontract.ModelFit, r fit.Result) {
-	mf.FitLevel = apicontract.ModelFitFitLevel(r.FitLevel)
+	mf.FitLevel = apicontract.FitLevel(r.FitLevel)
 	mf.MaxSafeCtx = r.MaxSafeCtx
 	mf.ConfiguredCtx = ptrOf(r.ConfiguredCtx)
 	mf.ModelMb = ptrOf(r.ModelMB)

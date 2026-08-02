@@ -1,0 +1,9 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "14",
+    "url": "https://github.com/androidand/llama-skein/issues/14",
+    "base_sha": "16b9f7d1fec26b8d1b2573f5f49dabb072c6a841b46d612cac3d30111d9678ac",
+    "base": "# Tasks\n\n- [ ] Define model descriptor type (params, arch family, quant variants with file sizes, requested ctx) in `internal/fit`\n- [ ] Descriptor-based scoring entry point reusing existing llama.cpp fit math; estimated-metadata fallback (layers/heads from params+arch) with `estimated: true` flag in the verdict\n- [ ] MLX path: score descriptor against unified-memory budget in `fit/mlx.go`\n- [ ] `POST /api/fit/hypothetical`: multi-variant request → per-variant verdicts, max safe ctx, recommended variant; same vocabulary as `/api/fit`\n- [ ] Unit tests: known GGUF models scored via descriptor match their file-based scores within tolerance; estimated path sane for common arch families\n- [ ] Update `contracts/llama-skein.openapi.json` + regenerate clients\n- [ ] Live smoke test on one CUDA/ROCm host and one MLX host\n"
+  }
+}

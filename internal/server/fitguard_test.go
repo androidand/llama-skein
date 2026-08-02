@@ -28,7 +28,7 @@ func TestSetCtxSizeInCmd(t *testing.T) {
 
 func TestConfidentNoFit(t *testing.T) {
 	s := &Server{}
-	mk := func(level apicontract.ModelFitFitLevel, vram, model *int) apicontract.ModelFit {
+	mk := func(level apicontract.FitLevel, vram, model *int) apicontract.ModelFit {
 		return apicontract.ModelFit{FitLevel: level, VramTotalMb: vram, ModelMb: model}
 	}
 	cases := []struct {

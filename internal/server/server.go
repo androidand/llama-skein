@@ -345,6 +345,7 @@ func (s *Server) routes() {
 	// skein/opencode trim to). See internal/fit, add-model-fit-engine.
 	mux.Handle("GET /api/fit", apiChain.ThenFunc(s.handleAPIFitReport))
 	mux.Handle("GET /api/fit/{model...}", apiChain.ThenFunc(s.handleAPIModelFit))
+	mux.Handle("POST /api/fit/hypothetical", apiChain.ThenFunc(s.handleAPIHypotheticalFit))
 	mux.Handle("GET /api/models/offload/{model...}", apiChain.ThenFunc(s.handleAPIOffloadRecommendation))
 	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
 	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
