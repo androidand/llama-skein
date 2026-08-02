@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +34,6 @@ type Server struct {
 	inflight     *inflightCounter
 	metrics      *metricsMonitor
 	silentMode   *thermal.Manager
-	profileStore *ProfileStore
 	build        BuildInfo
 
 	local router.LocalRouter
@@ -166,16 +163,6 @@ type BuildInfo struct {
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
 	silentMgr := thermal.NewManager()
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
-	homeDir := os.Getenv("HOME")
-	if homeDir == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			homeDir = h
-		}
-	}
-	if homeDir == "" {
-		homeDir = "/tmp"
-	}
-	profilePath := filepath.Join(homeDir, ".llama-skein", "skein", "profile.json")
 
 	s := &Server{
 		cfg:          cfg,
@@ -186,7 +173,6 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		inflight:     &inflightCounter{},
 		metrics:      newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
 		silentMode:   silentMgr,
-		profileStore: NewProfileStore(profilePath),
 		build:        build,
 		shutdownCtx:  shutdownCtx,
 		shutdownFn:   shutdownFn,
@@ -379,9 +365,21 @@ func (s *Server) routes() {
 	mux.Handle("DELETE "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
 
 	// Skein — persistent user profile for power/silent-mode preferences.
-	mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
-	mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
-	mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
+	//
+	// DISABLED: server.go referenced handleAPIGetProfile/handleAPISetProfile/
+	// handleAPIProfileDefault and a ProfileStore type that do not exist
+	// anywhere in this repository's git history (verified with `git log -S`
+	// across all branches) — main HEAD did not build. This is unrelated to
+	// tonight's config-safety-net/swap-preemption work; routes are commented
+	// out here (not reimplemented blind) so the tree builds again. Restore
+	// alongside the real ProfileStore implementation — see
+	// openspec/changes/add-persistent-user-profile-saving if a proposal for
+	// it exists, and ECOSYSTEM.md which documents these three endpoints as
+	// already shipped (they are not, on this host's binary — verified: z4's
+	// running llama-skein 404s on all three).
+	// mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
+	// mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
+	// mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
 
 	// Legacy fork paths — still consumed by skein (llamaswap client, ollama
 	// adapter, provider probing) and Ollama-mode frontends. /api/events,
@@ -405,19 +403,26 @@ func (s *Server) routes() {
 	mux.Handle("GET "+api.RouteSystemProvider, apiChain.ThenFunc(s.handleAPISystemProvider))
 
 	// Runtime — list, install, upgrade, health.
-	mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
-	mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-		backend := r.PathValue("backend")
-		s.handleInstallRuntime(w, r, backend)
-	}))
-	mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-		backend := r.PathValue("backend")
-		s.handleUpgradeRuntime(w, r, backend)
-	}))
-	mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-		backend := r.PathValue("backend")
-		s.handleCheckRuntimeHealth(w, r, backend)
-	}))
+	//
+	// DISABLED: same situation as the skein-profile routes above —
+	// handleListRuntimes/handleInstallRuntime/handleUpgradeRuntime/
+	// handleCheckRuntimeHealth and an UpgradeOptions type are referenced here
+	// but were never committed (see openspec/changes/add-backend-runtime-
+	// management, which documents this as still Phase 1 — detection only).
+	// Commented out, not reimplemented blind, so the tree builds again.
+	// mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
+	// mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	backend := r.PathValue("backend")
+	// 	s.handleInstallRuntime(w, r, backend)
+	// }))
+	// mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	backend := r.PathValue("backend")
+	// 	s.handleUpgradeRuntime(w, r, backend)
+	// }))
+	// mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	backend := r.PathValue("backend")
+	// 	s.handleCheckRuntimeHealth(w, r, backend)
+	// }))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
