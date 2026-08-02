@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,9 +71,9 @@ func TestServer_ConfigReload_ValidConfigAccepted(t *testing.T) {
 	if err := os.WriteFile(cfgFile, []byte("models: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	called := false
+	var called atomic.Bool
 	s := newTestServerWithConfigFile(t, config.Config{}, cfgFile)
-	s.reloadFn = func() { called = true }
+	s.reloadFn = func() { called.Store(true) }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/config/reload", nil)
 	w := httptest.NewRecorder()
@@ -90,10 +91,10 @@ func TestServer_ConfigReload_ValidConfigAccepted(t *testing.T) {
 	}
 	// reloadFn runs in a goroutine; give it a moment.
 	deadline := time.Now().Add(time.Second)
-	for !called && time.Now().Before(deadline) {
+	for !called.Load() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if !called {
+	if !called.Load() {
 		t.Error("reloadFn was never invoked")
 	}
 }
