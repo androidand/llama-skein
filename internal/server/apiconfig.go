@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -122,6 +123,7 @@ func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.R
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
+	s.runtimeStateOrDefault().SetPending("api:set-default-model", "defaultModel -> "+req.Model)
 	s.triggerReload()
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: req.Model, Status: "updated"})
 }
@@ -137,6 +139,7 @@ func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
+	s.runtimeStateOrDefault().SetPending("api:clear-default-model", "")
 	s.triggerReload()
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: s.cfg.DefaultModel, Status: "removed"})
 }
@@ -201,6 +204,7 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
+	s.runtimeStateOrDefault().SetPending("api:add-model", "added model "+req.Id)
 	s.triggerReload()
 	resp := apicontract.ConfigModelResponse{Id: req.Id, Status: "added"}
 	if len(warnings) > 0 {
@@ -342,6 +346,7 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 	// Only reload when the file actually changed — a no-op patch (e.g. a flag
 	// filtered out for this backend) must not restart running models.
 	if changed {
+		s.runtimeStateOrDefault().SetPending("api:patch-model", "patched model "+realID)
 		s.triggerReload()
 	}
 	resp := apicontract.ConfigModelResponse{Id: realID, Status: "updated"}
@@ -368,6 +373,7 @@ func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Reque
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
+	s.runtimeStateOrDefault().SetPending("api:remove-model", "removed model "+realID)
 	s.triggerReload()
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: realID, Status: "removed"})
 }
@@ -394,18 +400,39 @@ func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Reques
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
+	s.runtimeStateOrDefault().SetPending("api:patch-group", "patched group "+id)
 	s.triggerReload()
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: id, Status: "updated"})
 }
 
-// handleAPIConfigReload implements POST /api/config/reload.
+// handleAPIConfigReload implements POST /api/config/reload. It validates the
+// on-disk config synchronously before accepting: an invalid config was
+// previously accepted with 202 "reloading" and then silently kept the old
+// config running forever, with nothing telling the caller it happened. Now
+// a syntactically/structurally invalid config gets a 422 immediately and
+// this call never triggers a reload; GET /health also reflects the failure
+// until it is fixed. A config that parses but produces new warnings still
+// proceeds (warnings never block) — the reload runs async as before, and
+// this response's Warnings preview what the caller triggered.
 func (s *Server) handleAPIConfigReload(w http.ResponseWriter, r *http.Request) {
 	if s.reloadFn == nil {
 		router.SendResponse(w, r, http.StatusServiceUnavailable,
 			"reload not available; restart llama-skein manually")
 		return
 	}
-	writeJSONStatus(w, http.StatusAccepted, apicontract.ReloadResponse{Status: "reloading"})
+	newCfg, err := config.LoadConfig(s.configFile)
+	if err != nil {
+		s.runtimeStateOrDefault().SetInvalid(err)
+		writeJSONStatus(w, http.StatusUnprocessableEntity, apicontract.ReloadResponse{
+			Status: "invalid",
+			Errors: ptrOf([]string{err.Error()}),
+		})
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ReloadResponse{
+		Status:   "reloading",
+		Warnings: warningsToAPI(s.configWarnings(newCfg)),
+	})
 	go s.reloadFn()
 }
 
@@ -414,6 +441,111 @@ func (s *Server) triggerReload() {
 	if s.reloadFn != nil {
 		go s.reloadFn()
 	}
+}
+
+// configWarnings collects every non-blocking warning for cfg. Extend here as
+// new warning sources are added — see internal/config/warnings.go for the
+// "informational only, never enforced" contract every source must honor.
+func (s *Server) configWarnings(cfg config.Config) []config.Warning {
+	return config.FlashAttnWarnings(cfg, s.tunedGfx)
+}
+
+func warningsToAPI(ws []config.Warning) *[]apicontract.ConfigWarning {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]apicontract.ConfigWarning, len(ws))
+	for i, w := range ws {
+		out[i] = apicontract.ConfigWarning{Message: w.Message, Source: w.Source}
+		if w.Model != "" {
+			out[i].Model = ptrOf(w.Model)
+		}
+		if w.Flag != "" {
+			out[i].Flag = ptrOf(w.Flag)
+		}
+	}
+	return &out
+}
+
+// handleAPIConfigValidate implements POST /api/config/validate: a pure dry
+// run. It never writes anything and never triggers a reload — it exists so
+// a caller (a UI, an autonomous agent, a human before committing a hand
+// edit) can check "would this be accepted" without any side effect.
+func (s *Server) handleAPIConfigValidate(w http.ResponseWriter, r *http.Request) {
+	var req apicontract.ConfigValidateRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req) // a missing/empty body just means "validate the file"
+	}
+
+	var cfg config.Config
+	var err error
+	if req.Config != nil {
+		cfg, err = config.LoadConfigFromReader(strings.NewReader(*req.Config))
+	} else {
+		cfg, err = config.LoadConfig(s.configFile)
+	}
+	if err != nil {
+		writeJSONStatus(w, http.StatusOK, apicontract.ConfigValidateResponse{
+			Valid:  false,
+			Errors: ptrOf([]string{err.Error()}),
+		})
+		return
+	}
+	writeJSONStatus(w, http.StatusOK, apicontract.ConfigValidateResponse{
+		Valid:    true,
+		Warnings: warningsToAPI(s.configWarnings(cfg)),
+	})
+}
+
+// handleAPIConfigHistory implements GET /api/config/history.
+func (s *Server) handleAPIConfigHistory(w http.ResponseWriter, r *http.Request) {
+	entries, err := config.ListHistory(s.configFile)
+	if err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]apicontract.ConfigHistoryEntry, len(entries))
+	for i, e := range entries {
+		out[i] = apicontract.ConfigHistoryEntry{Id: e.ID, Time: e.Time, Actor: e.Actor}
+		if e.Summary != "" {
+			out[i].Summary = ptrOf(e.Summary)
+		}
+	}
+	writeJSONStatus(w, http.StatusOK, apicontract.ConfigHistoryResponse{Entries: out})
+}
+
+// handleAPIConfigRollback implements POST /api/config/rollback. The restored
+// content becomes active the same way any other config write does: this
+// handler writes it, then triggers the normal reload, which is what actually
+// snapshots the content being replaced (see internal/config.RollbackConfig's
+// doc comment) — so the rollback itself is undoable with no special-casing.
+func (s *Server) handleAPIConfigRollback(w http.ResponseWriter, r *http.Request) {
+	if s.reloadFn == nil {
+		router.SendResponse(w, r, http.StatusServiceUnavailable,
+			"reload not available; restart llama-skein manually")
+		return
+	}
+	var req apicontract.ConfigRollbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Ref) == "" {
+		router.SendResponse(w, r, http.StatusBadRequest, "ref is required")
+		return
+	}
+
+	s.configMu.Lock()
+	err := config.RollbackConfig(s.configFile, req.Ref)
+	s.configMu.Unlock()
+	if errors.Is(err, config.ErrHistoryNotFound) {
+		router.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("no snapshot %q", req.Ref))
+		return
+	}
+	if err != nil {
+		router.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.runtimeStateOrDefault().SetPending("rollback", "restoring snapshot "+req.Ref)
+	writeJSONStatus(w, http.StatusAccepted, apicontract.ReloadResponse{Status: "reloading"})
+	go s.reloadFn()
 }
 
 // writeDefaultModelToConfig sets or removes (model == "") the top-level

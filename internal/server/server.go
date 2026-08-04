@@ -54,6 +54,13 @@ type Server struct {
 	configMu   sync.Mutex
 	reloadFn   func()
 
+	// runtimeState is config-health state that must survive hot reloads even
+	// though Server itself is rebuilt from scratch on every one. Created once
+	// in main and handed to every Server instance via SetRuntimeState — see
+	// internal/config.RuntimeState for why. nil in tests that construct a
+	// Server directly; callers must handle that (see runtimeStateOrDefault).
+	runtimeState *config.RuntimeState
+
 	// maxSafeCtxCache memoizes the fit engine's max_safe_ctx per real model id
 	// for the pre-flight prompt guard (computing it reads GGUF / the HF cache +
 	// the perf snapshot, too costly per request). Cleared on config reload.
@@ -104,6 +111,23 @@ func (s *Server) SetConfigFile(path string) { s.configFile = path }
 // SetReloadFn injects the reload callback so POST /api/config/reload can
 // trigger it.
 func (s *Server) SetReloadFn(fn func()) { s.reloadFn = fn }
+
+// SetRuntimeState wires the cross-reload config-health state (see
+// internal/config.RuntimeState) so /health, /api/config/reload,
+// /api/config/validate, /api/config/history, and /api/config/rollback can
+// read and update it. The same pointer must be handed to every Server
+// instance across a hot reload — never replaced.
+func (s *Server) SetRuntimeState(rs *config.RuntimeState) { s.runtimeState = rs }
+
+// runtimeStateOrDefault returns s.runtimeState, or a fresh, unshared
+// RuntimeState when unset (tests that build a Server directly rather than
+// through main's wiring). Never nil, so callers need no nil check.
+func (s *Server) runtimeStateOrDefault() *config.RuntimeState {
+	if s.runtimeState == nil {
+		s.runtimeState = config.NewRuntimeState()
+	}
+	return s.runtimeState
+}
 
 // modelPostJSONRoutes are endpoints with a model id in the JSON request body.
 var modelPostJSONRoutes = []string{
@@ -166,16 +190,11 @@ type BuildInfo struct {
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
 	silentMgr := thermal.NewManager()
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
-	homeDir := os.Getenv("HOME")
-	if homeDir == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			homeDir = h
-		}
+
+	profilePath := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		profilePath = filepath.Join(home, ".llama-skein", "skein", "profile.json")
 	}
-	if homeDir == "" {
-		homeDir = "/tmp"
-	}
-	profilePath := filepath.Join(homeDir, ".llama-skein", "skein", "profile.json")
 
 	s := &Server{
 		cfg:          cfg,
@@ -190,6 +209,19 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		build:        build,
 		shutdownCtx:  shutdownCtx,
 		shutdownFn:   shutdownFn,
+	}
+
+	// Re-apply the persisted profile (if the operator ever saved one via
+	// POST /api/skein/config) so silent mode survives a restart without the
+	// manual DPM/APU re-tuning this feature exists to avoid. YAML
+	// cfg.SilentMode.Schedule below is skipped once an API profile exists —
+	// the API-set profile takes over permanently, it doesn't just apply once.
+	hasStoredProfile := false
+	if profile, ok, err := s.profileStore.Load(); err == nil && ok {
+		hasStoredProfile = true
+		if err := s.applyProfile(profile); err != nil {
+			proxylog.Warnf("could not re-apply saved profile on startup: %v", err)
+		}
 	}
 
 	// Fit guard (proactive half): shrink over-large contexts and flag models
@@ -219,7 +251,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.local = local
 	s.peer = peer
 
-	if sched := cfg.SilentMode.Schedule; sched != "" {
+	if sched := cfg.SilentMode.Schedule; sched != "" && !hasStoredProfile {
 		pct := cfg.SilentMode.PowerLimitPct
 		if pct == 0 {
 			pct = thermal.DefaultSilentProfile.PowerLimitPct
@@ -362,6 +394,9 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
 	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
+	mux.Handle("POST /api/config/validate", apiChain.ThenFunc(s.handleAPIConfigValidate))
+	mux.Handle("GET /api/config/history", apiChain.ThenFunc(s.handleAPIConfigHistory))
+	mux.Handle("POST /api/config/rollback", apiChain.ThenFunc(s.handleAPIConfigRollback))
 	mux.Handle("GET /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
 	mux.Handle("PUT /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
 	mux.Handle("DELETE /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))
@@ -380,6 +415,10 @@ func (s *Server) routes() {
 	mux.Handle("DELETE "+api.RouteHardwarePower, apiChain.ThenFunc(s.handleAPIHardwarePowerRestore))
 
 	// Skein — persistent user profile for power/silent-mode preferences.
+	//
+	// Persistent user profile — GPU power/silent-mode preferences, set once
+	// via this API instead of hand-tuning DPM/APU settings after every
+	// restart (openspec/changes/add-persistent-user-profile-saving).
 	mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
 	mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
 	mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
@@ -406,6 +445,12 @@ func (s *Server) routes() {
 	mux.Handle("GET "+api.RouteSystemProvider, apiChain.ThenFunc(s.handleAPISystemProvider))
 
 	// Runtime — list, install, upgrade, health.
+	//
+	// Inference-engine runtime management (llama.cpp/mlx/vllm): detection for
+	// all three, install/upgrade for mlx+vllm (llama.cpp keeps its dedicated
+	// /api/system/upgrade — see runtime.ErrUseSystemUpgrade). Finishes
+	// openspec/changes/add-backend-runtime-management, which was blocked in
+	// the same hollow-progress state as the profile routes above.
 	mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
 	mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
 		backend := r.PathValue("backend")

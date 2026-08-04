@@ -565,6 +565,23 @@ type ConfigGroupPatchRequest struct {
 	Swap       *bool `json:"swap,omitempty"`
 }
 
+// ConfigHistoryEntry defines model for ConfigHistoryEntry.
+type ConfigHistoryEntry struct {
+	// Actor What produced this snapshot: "reload" (file edit/SIGHUP/API write), "rollback", "legacy-bak" (migrated from an old config.yaml.bak* file), or an API-specific tag.
+	Actor string `json:"actor"`
+
+	// Id Snapshot identifier — pass as ref to POST /api/config/rollback.
+	Id      string    `json:"id"`
+	Summary *string   `json:"summary,omitempty"`
+	Time    time.Time `json:"time"`
+}
+
+// ConfigHistoryResponse defines model for ConfigHistoryResponse.
+type ConfigHistoryResponse struct {
+	// Entries Newest first.
+	Entries []ConfigHistoryEntry `json:"entries"`
+}
+
 // ConfigInfoResponse defines model for ConfigInfoResponse.
 type ConfigInfoResponse struct {
 	ConfigFile string `json:"config_file"`
@@ -706,6 +723,48 @@ type ConfigModelResponse struct {
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 
+// ConfigRollbackRequest defines model for ConfigRollbackRequest.
+type ConfigRollbackRequest struct {
+	// Ref A snapshot id from GET /api/config/history.
+	Ref string `json:"ref"`
+}
+
+// ConfigStatus Whether the on-disk config is currently valid. A previous invalid edit or reload never breaks serving — the last valid config keeps running — but must be visible here until fixed.
+type ConfigStatus struct {
+	// Error Present when valid is false: the parse/validation error from the most recent failed reload attempt.
+	Error *string `json:"error,omitempty"`
+
+	// StaleSince When the config first went invalid. Absent when valid.
+	StaleSince *time.Time `json:"stale_since,omitempty"`
+	Valid      bool       `json:"valid"`
+}
+
+// ConfigValidateRequest Optional dry-run body. Omit to validate the on-disk config file as-is.
+type ConfigValidateRequest struct {
+	// Config Raw YAML to validate instead of reading the on-disk file. Never written anywhere — this is a pure dry run.
+	Config *string `json:"config,omitempty"`
+}
+
+// ConfigValidateResponse defines model for ConfigValidateResponse.
+type ConfigValidateResponse struct {
+	Errors   *[]string        `json:"errors,omitempty"`
+	Valid    bool             `json:"valid"`
+	Warnings *[]ConfigWarning `json:"warnings,omitempty"`
+}
+
+// ConfigWarning A risky-but-loadable piece of configuration, surfaced for awareness. Never causes a config or model to be rejected — see ConfigStatus for what IS rejected (parse/validation failures).
+type ConfigWarning struct {
+	// Flag The specific flag/setting the warning is about, if applicable.
+	Flag    *string `json:"flag,omitempty"`
+	Message string  `json:"message"`
+
+	// Model Model ID this warning concerns, absent for a config-wide warning.
+	Model *string `json:"model,omitempty"`
+
+	// Source Stable identifier for what produced the warning, e.g. "flash-attn-gfx", so a client can key on it instead of parsing message text.
+	Source string `json:"source"`
+}
+
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -762,10 +821,13 @@ type HealthResponse struct {
 	AnyModelResident bool `json:"any_model_resident"`
 
 	// Busy True when at least one inference request is in flight. A single-slot host that is busy will queue a new request.
-	Busy     bool                   `json:"busy"`
-	InFlight *int64                 `json:"in_flight,omitempty"`
-	Models   map[string]ModelHealth `json:"models"`
-	Status   string                 `json:"status"`
+	Busy bool `json:"busy"`
+
+	// ConfigStatus Whether the on-disk config is currently valid. A previous invalid edit or reload never breaks serving — the last valid config keeps running — but must be visible here until fixed.
+	ConfigStatus ConfigStatus           `json:"config_status"`
+	InFlight     *int64                 `json:"in_flight,omitempty"`
+	Models       map[string]ModelHealth `json:"models"`
+	Status       string                 `json:"status"`
 
 	// Watchdog GPU-stall watchdog observability. Active means the watchdog is monitoring for wedged backends.
 	Watchdog *WatchdogStatus `json:"watchdog,omitempty"`
@@ -1032,6 +1094,9 @@ type ModelHealth struct {
 	// LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
 	LastError *LastError       `json:"last_error,omitempty"`
 	State     ModelHealthState `json:"state"`
+
+	// Warnings Risky-but-loadable settings detected for this model (e.g. flash-attn on a GPU known to wedge with it). Informational only.
+	Warnings *[]ConfigWarning `json:"warnings,omitempty"`
 }
 
 // ModelHealthState defines model for ModelHealth.State.
@@ -1117,7 +1182,12 @@ type PowerProfile struct {
 
 // ReloadResponse defines model for ReloadResponse.
 type ReloadResponse struct {
-	Status string `json:"status"`
+	// Errors Present on a 422 response: why the config was rejected. Absent on success.
+	Errors *[]string `json:"errors,omitempty"`
+	Status string    `json:"status"`
+
+	// Warnings Risky-but-loadable settings detected in the config that was (or would be) applied.
+	Warnings *[]ConfigWarning `json:"warnings,omitempty"`
 }
 
 // ResourceSnapshot defines model for ResourceSnapshot.
@@ -1373,6 +1443,12 @@ type AddConfigModelJSONRequestBody = ConfigModelRequest
 
 // PatchConfigModelJSONRequestBody defines body for PatchConfigModel for application/json ContentType.
 type PatchConfigModelJSONRequestBody = ConfigModelPatchRequest
+
+// RollbackConfigJSONRequestBody defines body for RollbackConfig for application/json ContentType.
+type RollbackConfigJSONRequestBody = ConfigRollbackRequest
+
+// ValidateConfigJSONRequestBody defines body for ValidateConfig for application/json ContentType.
+type ValidateConfigJSONRequestBody = ConfigValidateRequest
 
 // PostHypotheticalFitJSONRequestBody defines body for PostHypotheticalFit for application/json ContentType.
 type PostHypotheticalFitJSONRequestBody = HypotheticalFitRequest
@@ -1682,6 +1758,9 @@ type ClientInterface interface {
 
 	PatchConfigGroup(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetConfigHistory request
+	GetConfigHistory(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetConfigInfo request
 	GetConfigInfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1703,6 +1782,16 @@ type ClientInterface interface {
 
 	// ReloadConfig request
 	ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RollbackConfigWithBody request with any body
+	RollbackConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RollbackConfig(ctx context.Context, body RollbackConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ValidateConfigWithBody request with any body
+	ValidateConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ValidateConfig(ctx context.Context, body ValidateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetFitReport request
 	GetFitReport(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1850,6 +1939,18 @@ func (c *Client) PatchConfigGroup(ctx context.Context, id string, body PatchConf
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetConfigHistory(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetConfigHistoryRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetConfigInfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetConfigInfoRequest(c.Server)
 	if err != nil {
@@ -1936,6 +2037,54 @@ func (c *Client) PatchConfigModel(ctx context.Context, id string, body PatchConf
 
 func (c *Client) ReloadConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReloadConfigRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RollbackConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRollbackConfigRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RollbackConfig(ctx context.Context, body RollbackConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRollbackConfigRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ValidateConfigWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewValidateConfigRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ValidateConfig(ctx context.Context, body ValidateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewValidateConfigRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2399,6 +2548,33 @@ func NewPatchConfigGroupRequestWithBody(server string, id string, contentType st
 	return req, nil
 }
 
+// NewGetConfigHistoryRequest generates requests for GetConfigHistory
+func NewGetConfigHistoryRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/history")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetConfigInfoRequest generates requests for GetConfigInfo
 func NewGetConfigInfoRequest(server string) (*http.Request, error) {
 	var err error
@@ -2604,6 +2780,86 @@ func NewReloadConfigRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewRollbackConfigRequest calls the generic RollbackConfig builder with application/json body
+func NewRollbackConfigRequest(server string, body RollbackConfigJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRollbackConfigRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewRollbackConfigRequestWithBody generates requests for RollbackConfig with any type of body
+func NewRollbackConfigRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/rollback")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewValidateConfigRequest calls the generic ValidateConfig builder with application/json body
+func NewValidateConfigRequest(server string, body ValidateConfigJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewValidateConfigRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewValidateConfigRequestWithBody generates requests for ValidateConfig with any type of body
+func NewValidateConfigRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/config/validate")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -3388,6 +3644,9 @@ type ClientWithResponsesInterface interface {
 
 	PatchConfigGroupWithResponse(ctx context.Context, id string, body PatchConfigGroupJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchConfigGroupResponse, error)
 
+	// GetConfigHistoryWithResponse request
+	GetConfigHistoryWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigHistoryResponse, error)
+
 	// GetConfigInfoWithResponse request
 	GetConfigInfoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigInfoResponse, error)
 
@@ -3409,6 +3668,16 @@ type ClientWithResponsesInterface interface {
 
 	// ReloadConfigWithResponse request
 	ReloadConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReloadConfigResponse, error)
+
+	// RollbackConfigWithBodyWithResponse request with any body
+	RollbackConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RollbackConfigResponse, error)
+
+	RollbackConfigWithResponse(ctx context.Context, body RollbackConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*RollbackConfigResponse, error)
+
+	// ValidateConfigWithBodyWithResponse request with any body
+	ValidateConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ValidateConfigResponse, error)
+
+	ValidateConfigWithResponse(ctx context.Context, body ValidateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*ValidateConfigResponse, error)
 
 	// GetFitReportWithResponse request
 	GetFitReportWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFitReportResponse, error)
@@ -3604,6 +3873,36 @@ func (r PatchConfigGroupResponse) ContentType() string {
 	return ""
 }
 
+type GetConfigHistoryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ConfigHistoryResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetConfigHistoryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetConfigHistoryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetConfigHistoryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetConfigInfoResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3758,6 +4057,7 @@ type ReloadConfigResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *ReloadResponse
+	JSON422      *ReloadResponse
 }
 
 // Status returns HTTPResponse.Status
@@ -3778,6 +4078,66 @@ func (r ReloadConfigResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ReloadConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RollbackConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ReloadResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RollbackConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RollbackConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RollbackConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ValidateConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ConfigValidateResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r ValidateConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ValidateConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ValidateConfigResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4470,6 +4830,15 @@ func (c *ClientWithResponses) PatchConfigGroupWithResponse(ctx context.Context, 
 	return ParsePatchConfigGroupResponse(rsp)
 }
 
+// GetConfigHistoryWithResponse request returning *GetConfigHistoryResponse
+func (c *ClientWithResponses) GetConfigHistoryWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigHistoryResponse, error) {
+	rsp, err := c.GetConfigHistory(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetConfigHistoryResponse(rsp)
+}
+
 // GetConfigInfoWithResponse request returning *GetConfigInfoResponse
 func (c *ClientWithResponses) GetConfigInfoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetConfigInfoResponse, error) {
 	rsp, err := c.GetConfigInfo(ctx, reqEditors...)
@@ -4538,6 +4907,40 @@ func (c *ClientWithResponses) ReloadConfigWithResponse(ctx context.Context, reqE
 		return nil, err
 	}
 	return ParseReloadConfigResponse(rsp)
+}
+
+// RollbackConfigWithBodyWithResponse request with arbitrary body returning *RollbackConfigResponse
+func (c *ClientWithResponses) RollbackConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RollbackConfigResponse, error) {
+	rsp, err := c.RollbackConfigWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRollbackConfigResponse(rsp)
+}
+
+func (c *ClientWithResponses) RollbackConfigWithResponse(ctx context.Context, body RollbackConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*RollbackConfigResponse, error) {
+	rsp, err := c.RollbackConfig(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRollbackConfigResponse(rsp)
+}
+
+// ValidateConfigWithBodyWithResponse request with arbitrary body returning *ValidateConfigResponse
+func (c *ClientWithResponses) ValidateConfigWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ValidateConfigResponse, error) {
+	rsp, err := c.ValidateConfigWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseValidateConfigResponse(rsp)
+}
+
+func (c *ClientWithResponses) ValidateConfigWithResponse(ctx context.Context, body ValidateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*ValidateConfigResponse, error) {
+	rsp, err := c.ValidateConfig(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseValidateConfigResponse(rsp)
 }
 
 // GetFitReportWithResponse request returning *GetFitReportResponse
@@ -4873,6 +5276,32 @@ func ParsePatchConfigGroupResponse(rsp *http.Response) (*PatchConfigGroupRespons
 	return response, nil
 }
 
+// ParseGetConfigHistoryResponse parses an HTTP response from a GetConfigHistoryWithResponse call
+func ParseGetConfigHistoryResponse(rsp *http.Response) (*GetConfigHistoryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetConfigHistoryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConfigHistoryResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetConfigInfoResponse parses an HTTP response from a GetConfigInfoWithResponse call
 func ParseGetConfigInfoResponse(rsp *http.Response) (*GetConfigInfoResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -5023,6 +5452,65 @@ func ParseReloadConfigResponse(rsp *http.Response) (*ReloadConfigResponse, error
 			return nil, err
 		}
 		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ReloadResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRollbackConfigResponse parses an HTTP response from a RollbackConfigWithResponse call
+func ParseRollbackConfigResponse(rsp *http.Response) (*RollbackConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RollbackConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ReloadResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseValidateConfigResponse parses an HTTP response from a ValidateConfigWithResponse call
+func ParseValidateConfigResponse(rsp *http.Response) (*ValidateConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ValidateConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConfigValidateResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	}
 

@@ -193,7 +193,7 @@ func (b *baseRouter) run() {
 			// Intentionally does not call notifyProcessed(): this is a
 			// time-driven tick, not a request/event tests synchronize on (same
 			// reasoning as serveDoneCh above).
-			b.expireStaleQueued(now, swapQueueTimeout, active, &queued)
+			b.expireStaleQueued(now, swapQueueTimeout, active, inFlight, &queued)
 		}
 	}
 }
@@ -286,6 +286,7 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 //     queue. handleServeDone will retry when the busy process drains.
 //  7. Otherwise — start a new swap. This may run in parallel with other
 //     active swaps when their evict sets don't intersect.
+//
 // effectiveLimit returns the concurrency cap for a model: explicit
 // ConcurrencyLimit from the config if set, otherwise the default of 10.
 func effectiveLimit(mc config.ModelConfig) int {
@@ -440,7 +441,7 @@ func (b *baseRouter) drainQueue(active map[string]*activeSwap, inFlight map[stri
 // feedback. Called on every tick of run()'s scan ticker; now is the tick's
 // timestamp (not time.Now(), so this stays a pure, directly testable
 // function). timeout <= 0 disables the bound entirely (legacy behavior).
-func (b *baseRouter) expireStaleQueued(now time.Time, timeout time.Duration, active map[string]*activeSwap, queued *[]handlerReq) {
+func (b *baseRouter) expireStaleQueued(now time.Time, timeout time.Duration, active map[string]*activeSwap, inFlight map[string]int, queued *[]handlerReq) {
 	if timeout <= 0 || len(*queued) == 0 {
 		return
 	}
@@ -453,21 +454,38 @@ func (b *baseRouter) expireStaleQueued(now time.Time, timeout time.Duration, act
 		}
 		evict := b.planner.EvictionFor(req.model, activeTargets(active, req.model))
 		waited := now.Sub(req.queuedAt)
-		b.logger.Warnf("%s: model %s queued for %v without becoming available (blocked by %v) — refusing", b.name, req.model, waited, evict)
-		b.grant(req, handlerResp{err: swapQueueTimeoutError(req.model, evict, waited)})
+		blockedInFlight := inFlightFor(inFlight, evict)
+		b.logger.Warnf("%s: model %s queued for %v without becoming available (blocked by %v, %d request(s) in flight there) — refusing",
+			b.name, req.model, waited, evict, blockedInFlight)
+		b.grant(req, handlerResp{err: swapQueueTimeoutError(req.model, evict, waited, blockedInFlight)})
 	}
 	*queued = remaining
 	b.broadcastQueuePositions(*queued)
 }
 
+// inFlightFor sums in-flight requests across the given model IDs — the
+// caller wants to know how busy what it's blocked on actually is, not just
+// its name; a single stuck generation reads differently from ten.
+func inFlightFor(inFlight map[string]int, models []string) int {
+	total := 0
+	for _, m := range models {
+		total += inFlight[m]
+	}
+	return total
+}
+
 // swapQueueTimeoutError builds the client-facing error for expireStaleQueued,
-// naming which model(s) it was waiting on so the message is actionable.
-func swapQueueTimeoutError(model string, blockedBy []string, waited time.Duration) error {
+// naming which model(s) it was waiting on, how many requests are in flight
+// there, and how long this request waited — so a caller (or the human
+// reading the error) knows immediately whether this is "busy, try later" or
+// "something is stuck" without a separate round trip to /health.
+func swapQueueTimeoutError(model string, blockedBy []string, waited time.Duration, blockedInFlight int) error {
 	waited = waited.Round(time.Second)
 	if len(blockedBy) == 0 {
 		return fmt.Errorf("model %q could not be loaded after waiting %v: %w", model, waited, ErrSwapQueueTimeout)
 	}
-	return fmt.Errorf("model %q could not be loaded after waiting %v for %v to become available: %w", model, waited, blockedBy, ErrSwapQueueTimeout)
+	return fmt.Errorf("model %q could not be loaded after waiting %v for %v to become available (%d request(s) in flight there): %w",
+		model, waited, blockedBy, blockedInFlight, ErrSwapQueueTimeout)
 }
 
 // broadcastQueuePositions sends each queued request its current 1-indexed

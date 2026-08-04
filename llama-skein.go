@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -92,10 +93,32 @@ func main() {
 	}
 
 	configPath := *flagConfig
-	cfg, err := config.LoadConfig(configPath)
+	// Read raw bytes ourselves (rather than config.LoadConfig, which opens the
+	// file itself) so the exact bytes can seed histState.lastGood below — the
+	// config-history snapshot-before-replace mechanism needs the true
+	// "previously active" content, which by the time a LATER reload runs may
+	// already be gone from disk (an external edit, not just our own writes).
+	rawCfg, err := os.ReadFile(configPath)
+	if err != nil {
+		slog.Error("failed to read config", "path", configPath, "error", err)
+		os.Exit(1)
+	}
+	cfg, err := config.LoadConfigFromReader(bytes.NewReader(rawCfg))
 	if err != nil {
 		slog.Error("failed to load config", "path", configPath, "error", err)
 		os.Exit(1)
+	}
+
+	// histState is config-health state that must survive every hot reload —
+	// see internal/config.RuntimeState. Created once, handed to every Server
+	// instance (initial and reloaded) via SetRuntimeState; never replaced.
+	histState := config.NewRuntimeState()
+	histState.SetLastGood(rawCfg)
+	histState.SetValid()
+	if n, err := config.MigrateLegacyBackups(configPath, cfg.ConfigHistory); err != nil {
+		slog.Warn("config history: legacy .bak migration failed", "error", err)
+	} else if n > 0 {
+		slog.Info("config history: migrated legacy backup files", "count", n)
 	}
 
 	// GPU tuning: detect the host arch once and load the tuning database, then
@@ -186,6 +209,7 @@ func main() {
 		os.Exit(1)
 	}
 	initialSrv.SetConfigFile(configPath)
+	initialSrv.SetRuntimeState(histState)
 	if tuningDB != nil {
 		initialSrv.SetTuning(tuningDB, tunedGfx, tunedDev)
 	}
@@ -234,8 +258,22 @@ func main() {
 
 		proxyLog.Info("reloading configuration")
 
-		newCfg, err := config.LoadConfig(configPath)
+		// Read raw bytes ourselves rather than via config.LoadConfig, which
+		// opens the file internally — the raw bytes are what config-history
+		// snapshots (see histState.SetLastGood below), and by the time ANY
+		// later reload runs, whatever was on disk before may already be gone:
+		// an external actor overwriting the file is exactly the case this
+		// exists to recover from, so we cannot re-read "the previous state"
+		// from disk at this point — only the cached copy has it.
+		rawNew, err := os.ReadFile(configPath)
 		if err != nil {
+			histState.SetInvalid(err)
+			proxyLog.Warnf("failed to reload config: %v", err)
+			return
+		}
+		newCfg, err := config.LoadConfigFromReader(bytes.NewReader(rawNew))
+		if err != nil {
+			histState.SetInvalid(err)
 			proxyLog.Warnf("failed to reload config: %v", err)
 			return
 		}
@@ -253,10 +291,15 @@ func main() {
 
 		newSrv, err := server.New(newCfg, muxLog, proxyLog, upstreamLog, perfMon, buildInfo)
 		if err != nil {
+			// The config text itself was valid — server construction failed
+			// for some other reason (e.g. a resource problem) — so this is
+			// NOT a config validity failure; the previously-active config
+			// keeps serving unchanged and histState is left exactly as-is.
 			proxyLog.Warnf("failed to build new server during reload: %v", err)
 			return
 		}
 		newSrv.SetConfigFile(configPath)
+		newSrv.SetRuntimeState(histState)
 		if tuningDB != nil {
 			newSrv.SetTuning(tuningDB, tunedGfx, tunedDev)
 		}
@@ -266,6 +309,20 @@ func main() {
 		// first one for the rest of the process's life. The config file gets
 		// rewritten correctly each time; nothing downstream ever picks it up.
 		newSrv.SetReloadFn(reload)
+
+		// The transition is now certain to happen: snapshot whatever config
+		// was active immediately before it, so any actor's mistake (a bad
+		// hand edit, an agent's wholesale replacement, a corrupt PATCH) is
+		// one rollback call away. actor/summary come from whichever API
+		// handler staged them before triggering this reload (SetPending);
+		// an external file edit, SIGHUP, or `-watch-config` leaves nothing
+		// staged and gets the generic "reload" attribution.
+		actor, summary := histState.TakePending()
+		if err := config.SnapshotConfig(configPath, newCfg.ConfigHistory, actor, summary, histState.LastGood()); err != nil {
+			proxyLog.Warnf("config history: snapshot failed (reload proceeds anyway): %v", err)
+		}
+		histState.SetLastGood(rawNew)
+		histState.SetValid()
 
 		activeMu.Lock()
 		old := activeSrv

@@ -265,6 +265,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Active bool   `json:"active"`
 		Reason string `json:"reason,omitempty"`
 	}
+	type configStatusBody struct {
+		Valid      bool       `json:"valid"`
+		Error      string     `json:"error,omitempty"`
+		StaleSince *time.Time `json:"stale_since,omitempty"`
+	}
 	type healthBody struct {
 		Status           string                 `json:"status"`
 		AnyModelResident bool                   `json:"any_model_resident"`
@@ -272,6 +277,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		InFlight         int64                  `json:"in_flight"`
 		Models           map[string]modelHealth `json:"models"`
 		Watchdog         *watchdogStatus        `json:"watchdog,omitempty"`
+		ConfigStatus     configStatusBody       `json:"config_status"`
 	}
 
 	errs := s.local.ModelErrors()
@@ -286,12 +292,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inFlight := s.inflight.Current()
+	cfgValid, cfgErr, cfgStale := s.runtimeStateOrDefault().Status()
 	body := healthBody{
 		Status:           "ok",
 		AnyModelResident: anyResident,
 		Busy:             inFlight > 0,
 		InFlight:         inFlight,
 		Models:           models,
+		ConfigStatus:     configStatusBody{Valid: cfgValid, Error: cfgErr, StaleSince: cfgStale},
 	}
 	if s.watchdogActive {
 		body.Watchdog = &watchdogStatus{Active: true}

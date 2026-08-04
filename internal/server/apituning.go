@@ -133,6 +133,7 @@ func (s *Server) handlePatchTuning(w http.ResponseWriter, r *http.Request) {
 	// before the async reload lands.
 	s.cfg.Tuning = patchToConfig(req)
 	if s.reloadFn != nil {
+		s.runtimeStateOrDefault().SetPending("api:patch-tuning", "GPU tuning override updated")
 		go s.reloadFn()
 	}
 	w.WriteHeader(http.StatusAccepted)
