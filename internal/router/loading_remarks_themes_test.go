@@ -4,8 +4,8 @@ import "testing"
 
 func TestLoadingThemeConstants(t *testing.T) {
 	tests := []struct {
-		theme  LoadingTheme
-		want   string
+		theme LoadingTheme
+		want  string
 	}{
 		{LoadingThemeDefault, "default"},
 		{LoadingThemeVaultBoy, "vault-boy"},

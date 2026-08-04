@@ -36,7 +36,7 @@ type reserveResponse struct {
 
 // ReservationStore holds active reservations with a cleanup goroutine.
 type ReservationStore struct {
-	mu   sync.RWMutex
+	mu           sync.RWMutex
 	reservations map[string]*Reservation // keyed by ID
 }
 

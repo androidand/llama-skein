@@ -357,7 +357,9 @@ func TestProcess_ConcurrencyLimit(t *testing.T) {
 	defer process.Stop()
 
 	// launch a goroutine first to take up the semaphore
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		req1 := httptest.NewRequest("GET", "/slow-respond?echo=12345&delay=75ms", nil)
 		w := httptest.NewRecorder()
 		process.ProxyRequest(w, req1)
@@ -371,6 +373,15 @@ func TestProcess_ConcurrencyLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	process.ProxyRequest(w, denied)
 	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+
+	// The denied request above only needs the semaphore to already be held
+	// (guaranteed by the 25ms sleep) — it completes well before the slow
+	// goroutine's own 75ms-delayed response. Without waiting here, this test
+	// function can return before that goroutine's own assert.Equal runs,
+	// and testing.T panics with "Fail in goroutine after Test... has
+	// completed" the moment it does. -race's added scheduling overhead was
+	// enough to expose this reliably; it was a real, if usually latent, bug.
+	<-done
 }
 
 func TestProcess_StopImmediately(t *testing.T) {

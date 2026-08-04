@@ -22,8 +22,8 @@ type SessionMetrics struct {
 // SessionMetricsStore accumulates metrics per reservation ID.
 // It listens to ActivityLogEvent and aggregates by the X-Skein-Reservation header.
 type SessionMetricsStore struct {
-	mu    sync.RWMutex
-	data  map[string]*sessionMetricsAccum
+	mu   sync.RWMutex
+	data map[string]*sessionMetricsAccum
 }
 
 // sessionMetricsAccum is the internal accumulator for a single reservation.
