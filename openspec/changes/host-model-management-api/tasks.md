@@ -41,8 +41,26 @@
       the same concept.
       — Full go build/vet/test ./... green, opencode-skein TS client
       regenerates and typechecks clean, 86/86 opencode-skein local tests pass.
-- [ ] 1.4 Add generated lifecycle and operation client methods; regenerate Go
+- [x] 1.4 Add generated lifecycle and operation client methods; regenerate Go
   clients and validate the opencode-skein TypeScript generation path.
+      — Added the operation CRUD paths (design.md decisions 2-3): `POST
+      /api/models/operations` (submit a plan, create the operation), `GET
+      /api/models/operations` (bounded history list), `GET
+      /api/models/operations/{id}` (snapshot), `POST
+      /api/models/operations/{id}/cancel` (idempotent), `GET
+      /api/models/operations/{id}/events` (SSE, each event a ModelOperation
+      snapshot — supplementary to the snapshot endpoint, not a replacement:
+      a client that missed events resyncs via GET rather than replaying the
+      stream). Added ModelOperationList for the list response. Contract only
+      — no handlers; that's section 2. No existing-schema collisions this
+      time (the Backend consolidation from 1.3 already absorbed the risk).
+      go build/vet/test ./... green; opencode-skein TS client regenerates
+      with all 5 new methods present and 86/86 opencode-skein local tests
+      still pass (one *unrelated* transient typecheck failure observed in
+      packages/opencode/src/session/prompt.ts — confirmed caused by a
+      concurrent live edit in that repo, not this change: the file's mtime
+      matched the exact moment of the typecheck run, and the failure has
+      nothing to do with local/llama-skein/gen).
 
 ## 2. Host operation domain
 

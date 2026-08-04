@@ -1164,6 +1164,12 @@ type ModelOperationError struct {
 // ModelOperationErrorCode "range_unsupported" means the origin could not honor a resume request and a full restart was required, not that the operation failed outright — it only becomes a terminal error if the restart itself then fails.
 type ModelOperationErrorCode string
 
+// ModelOperationList defines model for ModelOperationList.
+type ModelOperationList struct {
+	// Operations Most recent first.
+	Operations []ModelOperation `json:"operations"`
+}
+
 // ModelOperationPhase Host-local operation state machine (design.md decision 3). "succeeded", "cancelled", and "failed" are the only terminal phases; every other phase can still transition to "cancelled" or "failed".
 type ModelOperationPhase string
 
@@ -1517,6 +1523,9 @@ type ValidateConfigJSONRequestBody = ConfigValidateRequest
 
 // PostHypotheticalFitJSONRequestBody defines body for PostHypotheticalFit for application/json ContentType.
 type PostHypotheticalFitJSONRequestBody = HypotheticalFitRequest
+
+// CreateModelOperationJSONRequestBody defines body for CreateModelOperation for application/json ContentType.
+type CreateModelOperationJSONRequestBody = ModelInstallPlan
 
 // InstallRuntimeJSONRequestBody defines body for InstallRuntime for application/json ContentType.
 type InstallRuntimeJSONRequestBody = RuntimeInstallRequest
@@ -1878,6 +1887,23 @@ type ClientInterface interface {
 	// GetOffloadRecommendation request
 	GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListModelOperations request
+	ListModelOperations(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateModelOperationWithBody request with any body
+	CreateModelOperationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateModelOperation(ctx context.Context, body CreateModelOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetModelOperation request
+	GetModelOperation(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelModelOperation request
+	CancelModelOperation(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StreamModelOperationEvents request
+	StreamModelOperationEvents(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListRuntimes request
 	ListRuntimes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2234,6 +2260,78 @@ func (c *Client) GetApiModels(ctx context.Context, params *GetApiModelsParams, r
 
 func (c *Client) GetOffloadRecommendation(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetOffloadRecommendationRequest(c.Server, model)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListModelOperations(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListModelOperationsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateModelOperationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateModelOperationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateModelOperation(ctx context.Context, body CreateModelOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateModelOperationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetModelOperation(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetModelOperationRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelModelOperation(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelModelOperationRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StreamModelOperationEvents(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStreamModelOperationEventsRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -3172,6 +3270,175 @@ func NewGetOffloadRecommendationRequest(server string, model string) (*http.Requ
 	return req, nil
 }
 
+// NewListModelOperationsRequest generates requests for ListModelOperations
+func NewListModelOperationsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/operations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateModelOperationRequest calls the generic CreateModelOperation builder with application/json body
+func NewCreateModelOperationRequest(server string, body CreateModelOperationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateModelOperationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateModelOperationRequestWithBody generates requests for CreateModelOperation with any type of body
+func NewCreateModelOperationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/operations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetModelOperationRequest generates requests for GetModelOperation
+func NewGetModelOperationRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/operations/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelModelOperationRequest generates requests for CancelModelOperation
+func NewCancelModelOperationRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/operations/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStreamModelOperationEventsRequest generates requests for StreamModelOperationEvents
+func NewStreamModelOperationEventsRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/models/operations/%s/events", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListRuntimesRequest generates requests for ListRuntimes
 func NewListRuntimesRequest(server string) (*http.Request, error) {
 	var err error
@@ -3763,6 +4030,23 @@ type ClientWithResponsesInterface interface {
 
 	// GetOffloadRecommendationWithResponse request
 	GetOffloadRecommendationWithResponse(ctx context.Context, model string, reqEditors ...RequestEditorFn) (*GetOffloadRecommendationResponse, error)
+
+	// ListModelOperationsWithResponse request
+	ListModelOperationsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelOperationsResponse, error)
+
+	// CreateModelOperationWithBodyWithResponse request with any body
+	CreateModelOperationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateModelOperationResponse, error)
+
+	CreateModelOperationWithResponse(ctx context.Context, body CreateModelOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateModelOperationResponse, error)
+
+	// GetModelOperationWithResponse request
+	GetModelOperationWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetModelOperationResponse, error)
+
+	// CancelModelOperationWithResponse request
+	CancelModelOperationWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*CancelModelOperationResponse, error)
+
+	// StreamModelOperationEventsWithResponse request
+	StreamModelOperationEventsWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StreamModelOperationEventsResponse, error)
 
 	// ListRuntimesWithResponse request
 	ListRuntimesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRuntimesResponse, error)
@@ -4383,6 +4667,159 @@ func (r GetOffloadRecommendationResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetOffloadRecommendationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListModelOperationsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ModelOperationList
+}
+
+// Status returns HTTPResponse.Status
+func (r ListModelOperationsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListModelOperationsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListModelOperationsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateModelOperationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *ModelOperation
+	JSON400      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateModelOperationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateModelOperationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateModelOperationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetModelOperationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ModelOperation
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetModelOperationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetModelOperationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetModelOperationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CancelModelOperationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ModelOperation
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelModelOperationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelModelOperationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelModelOperationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StreamModelOperationEventsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r StreamModelOperationEventsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StreamModelOperationEventsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StreamModelOperationEventsResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -5070,6 +5507,59 @@ func (c *ClientWithResponses) GetOffloadRecommendationWithResponse(ctx context.C
 	return ParseGetOffloadRecommendationResponse(rsp)
 }
 
+// ListModelOperationsWithResponse request returning *ListModelOperationsResponse
+func (c *ClientWithResponses) ListModelOperationsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelOperationsResponse, error) {
+	rsp, err := c.ListModelOperations(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListModelOperationsResponse(rsp)
+}
+
+// CreateModelOperationWithBodyWithResponse request with arbitrary body returning *CreateModelOperationResponse
+func (c *ClientWithResponses) CreateModelOperationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateModelOperationResponse, error) {
+	rsp, err := c.CreateModelOperationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateModelOperationResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateModelOperationWithResponse(ctx context.Context, body CreateModelOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateModelOperationResponse, error) {
+	rsp, err := c.CreateModelOperation(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateModelOperationResponse(rsp)
+}
+
+// GetModelOperationWithResponse request returning *GetModelOperationResponse
+func (c *ClientWithResponses) GetModelOperationWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetModelOperationResponse, error) {
+	rsp, err := c.GetModelOperation(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetModelOperationResponse(rsp)
+}
+
+// CancelModelOperationWithResponse request returning *CancelModelOperationResponse
+func (c *ClientWithResponses) CancelModelOperationWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*CancelModelOperationResponse, error) {
+	rsp, err := c.CancelModelOperation(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelModelOperationResponse(rsp)
+}
+
+// StreamModelOperationEventsWithResponse request returning *StreamModelOperationEventsResponse
+func (c *ClientWithResponses) StreamModelOperationEventsWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StreamModelOperationEventsResponse, error) {
+	rsp, err := c.StreamModelOperationEvents(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStreamModelOperationEventsResponse(rsp)
+}
+
 // ListRuntimesWithResponse request returning *ListRuntimesResponse
 func (c *ClientWithResponses) ListRuntimesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRuntimesResponse, error) {
 	rsp, err := c.ListRuntimes(ctx, reqEditors...)
@@ -5732,6 +6222,157 @@ func ParseGetOffloadRecommendationResponse(rsp *http.Response) (*GetOffloadRecom
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListModelOperationsResponse parses an HTTP response from a ListModelOperationsWithResponse call
+func ParseListModelOperationsResponse(rsp *http.Response) (*ListModelOperationsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListModelOperationsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ModelOperationList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateModelOperationResponse parses an HTTP response from a CreateModelOperationWithResponse call
+func ParseCreateModelOperationResponse(rsp *http.Response) (*CreateModelOperationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateModelOperationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest ModelOperation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetModelOperationResponse parses an HTTP response from a GetModelOperationWithResponse call
+func ParseGetModelOperationResponse(rsp *http.Response) (*GetModelOperationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetModelOperationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ModelOperation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelModelOperationResponse parses an HTTP response from a CancelModelOperationWithResponse call
+func ParseCancelModelOperationResponse(rsp *http.Response) (*CancelModelOperationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelModelOperationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ModelOperation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStreamModelOperationEventsResponse parses an HTTP response from a StreamModelOperationEventsWithResponse call
+func ParseStreamModelOperationEventsResponse(rsp *http.Response) (*StreamModelOperationEventsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StreamModelOperationEventsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 

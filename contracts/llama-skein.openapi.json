@@ -991,6 +991,178 @@
           }
         }
       }
+    },
+    "/api/models/operations": {
+      "post": {
+        "operationId": "createModelOperation",
+        "summary": "Submit an install plan; creates a ModelOperation.",
+        "description": "Validates and snapshots the plan (design.md decision 2) before creating the operation. Returns immediately with the operation at phase \"queued\" — the caller polls GET /api/models/operations/{id} or watches the event stream for progress, and can disconnect/reconnect at any point without losing the operation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelInstallPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Operation created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid plan: untrusted source, malformed artifact set, or an already-configured model_id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listModelOperations",
+        "summary": "List operations (bounded history).",
+        "description": "Supports reconnect and diagnostics after a client or process restart — every operation the host still has a record of, not only ones the current connection created.",
+        "responses": {
+          "200": {
+            "description": "Operations, most recent first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOperationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/operations/{id}": {
+      "get": {
+        "operationId": "getModelOperation",
+        "summary": "Get one operation's current snapshot.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOperation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown operation id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/operations/{id}/cancel": {
+      "post": {
+        "operationId": "cancelModelOperation",
+        "summary": "Cancel an operation.",
+        "description": "Idempotent: cancelling an already-cancelled or already-terminal operation returns its current snapshot rather than an error. Partial artifacts are retained for later resume unless the operation record's retention policy says otherwise — cancellation itself never deletes them.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation requested; the operation transitions to \"cancelled\" asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOperation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown operation id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/operations/{id}/events": {
+      "get": {
+        "operationId": "streamModelOperationEvents",
+        "summary": "Stream operation updates as they happen.",
+        "description": "Server-sent events; each event's data is one ModelOperation snapshot, same vocabulary as GET /api/models/operations/{id}. Supplementary to the snapshot endpoint, not a replacement for it — a client that reconnects after missing events GETs the snapshot to resynchronize rather than trying to replay the stream.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream open. Each event's data is a ModelOperation.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOperation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown operation id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3042,6 +3214,21 @@
               "type": "string"
             },
             "description": "Non-terminal warnings, e.g. a digest that could not be verified but size matched."
+          }
+        }
+      },
+      "ModelOperationList": {
+        "type": "object",
+        "required": [
+          "operations"
+        ],
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelOperation"
+            },
+            "description": "Most recent first."
           }
         }
       }
