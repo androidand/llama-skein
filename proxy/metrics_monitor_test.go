@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fxamacker/cbor/v2"
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/cache"
 	"github.com/androidand/llama-skein/internal/event"
+	"github.com/fxamacker/cbor/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )

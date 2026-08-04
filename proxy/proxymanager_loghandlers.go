@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/gin-gonic/gin"
 )
 
 func (pm *ProxyManager) sendLogsHandlers(c *gin.Context) {

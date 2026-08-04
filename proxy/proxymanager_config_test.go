@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 func TestPatchCommandFlags(t *testing.T) {

@@ -98,5 +98,3 @@ func TestServer_SilentMode_Put_EmptyBody_503(t *testing.T) {
 		t.Errorf("PUT empty body status = %d, want 503", w.Code)
 	}
 }
-
-

@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/pkg/gguf"
+	"github.com/gin-gonic/gin"
 )
 
 type Model struct {

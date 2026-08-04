@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"

@@ -12,9 +12,9 @@ import (
 
 // warmupRequest is the JSON body for POST /api/skein/warmup.
 type warmupRequest struct {
-	Model     string `json:"model"`
-	Role      string `json:"role"`
-	MinContext int   `json:"min_context"`
+	Model      string `json:"model"`
+	Role       string `json:"role"`
+	MinContext int    `json:"min_context"`
 }
 
 // warmupResponse is the JSON response for POST /api/skein/warmup.

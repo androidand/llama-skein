@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/gin-gonic/gin"
 )
 
 // --- Ollama-compatible types ---
@@ -268,12 +268,12 @@ func (pm *ProxyManager) apiGetResources(c *gin.Context) {
 				cpuAvg /= float64(n)
 			}
 			resp["cpu"] = gin.H{
-				"cores":        len(s.CpuUtilPerCore),
-				"util_avg_pct": cpuAvg,
+				"cores":         len(s.CpuUtilPerCore),
+				"util_avg_pct":  cpuAvg,
 				"util_per_core": s.CpuUtilPerCore,
-				"load_avg1":    s.LoadAvg1,
-				"load_avg5":    s.LoadAvg5,
-				"load_avg15":   s.LoadAvg15,
+				"load_avg1":     s.LoadAvg1,
+				"load_avg5":     s.LoadAvg5,
+				"load_avg15":    s.LoadAvg15,
 			}
 		}
 

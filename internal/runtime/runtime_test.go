@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
 
@@ -34,9 +35,13 @@ func TestRuntime_ParseLlamaCppVersion(t *testing.T) {
 }
 
 func TestRuntime_PythonForEngine(t *testing.T) {
+	// pythonForEngine resolves the sibling "python" via filepath.Join, which
+	// is platform-native (backslash on Windows) — the expected value for the
+	// two path-bearing cases must be computed the same way, not hardcoded as
+	// a forward-slash literal, or this test only passes on Unix.
 	cases := map[string]string{
-		"/Users/a/.venv/mlx/bin/mlx_lm.server": "/Users/a/.venv/mlx/bin/python",
-		"/opt/vllm/bin/vllm":                   "/opt/vllm/bin/python",
+		"/Users/a/.venv/mlx/bin/mlx_lm.server": filepath.Join("/Users/a/.venv/mlx/bin", "python"),
+		"/opt/vllm/bin/vllm":                   filepath.Join("/opt/vllm/bin", "python"),
 		"":                                     "python3",
 		"mlx_lm.server":                        "python3", // bare name → PATH python3
 	}

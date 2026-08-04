@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 // parseModelPath extracts the local file path from a model's cmd string by
