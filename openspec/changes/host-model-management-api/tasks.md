@@ -77,8 +77,26 @@
       later tasks — this is the pure domain model only. 18 tests, including
       every happy-path step, skip/backward/unknown-phase rejection, and
       terminal-phase immutability. go build/vet/test ./... green.
-- [ ] 2.2 Implement bounded atomic operation-record persistence in the owned
+- [x] 2.2 Implement bounded atomic operation-record persistence in the owned
   llama-skein state directory.
+      — internal/operation/store.go: Store.Save/Load/List/Prune, one JSON
+      file per operation, temp-file-plus-rename atomic writes (same idiom
+      as internal/server/confighelpers.go's and
+      proxy/proxymanager_config.go's unexported atomicWriteFile — duplicated
+      on purpose rather than shared, to avoid a cross-package dependency for
+      three lines of code). DefaultStateDir resolves to
+      ~/.llama-skein/operations, alongside the existing
+      ~/.llama-skein/skein/profile.json convention (internal/server/server.go)
+      rather than inventing a second state-directory root.
+      Prune is count-bounded and only ever removes terminal
+      (succeeded/cancelled/failed) records — non-terminal ones are never
+      pruned, so 2.4's startup recovery always finds every interrupted
+      operation. Age-based expiry stays design.md's own open question,
+      deliberately not resolved here.
+      15 new tests (round-trip, ErrNotFound, atomicity, overwrite, list
+      ordering, corrupt-file skip, prune bound/exemption). go build/vet/test
+      ./... green (27/27 in internal/operation, full suite otherwise
+      unaffected).
 - [ ] 2.3 Add operation create/get/list/event-stream/cancel handlers through
   generated contract types.
 - [ ] 2.4 Recover interrupted nonterminal operations at startup and expose
