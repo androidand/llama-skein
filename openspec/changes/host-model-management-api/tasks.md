@@ -64,8 +64,19 @@
 
 ## 2. Host operation domain
 
-- [ ] 2.1 Implement the explicit model-operation state machine and validated
+- [x] 2.1 Implement the explicit model-operation state machine and validated
   phase transitions.
+      — New `internal/operation` package: Phase enum matching design.md
+      decision 3's diagram exactly (queued→preflighting→resolving→
+      downloading→verifying→installing→registering→reloading→succeeded, any
+      non-terminal phase can also go to cancelled/failed), CanTransition
+      pure function, Operation.TransitionTo/Fail/Cancel (Cancel is
+      idempotent per the API contract, Fail/Cancel both refuse to leave a
+      terminal phase). ErrorCode values match ModelOperationError.code
+      exactly. Persistence (2.2) and HTTP handlers (2.3) are separate,
+      later tasks — this is the pure domain model only. 18 tests, including
+      every happy-path step, skip/backward/unknown-phase rejection, and
+      terminal-phase immutability. go build/vet/test ./... green.
 - [ ] 2.2 Implement bounded atomic operation-record persistence in the owned
   llama-skein state directory.
 - [ ] 2.3 Add operation create/get/list/event-stream/cancel handlers through
