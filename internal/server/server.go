@@ -205,6 +205,16 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		// not. Logged, not fatal.
 		proxylog.Warnf("model operations disabled: %v", storeErr)
 	}
+	if operationStore != nil {
+		// Any non-terminal record here belongs to the process that just
+		// exited — mark it interrupted so GET/list reflects that rather than
+		// silently reporting stale progress as if still in flight.
+		if recovered, err := operation.Recover(operationStore, time.Now()); err != nil {
+			proxylog.Warnf("model operation recovery failed: %v", err)
+		} else if len(recovered) > 0 {
+			proxylog.Infof("recovered %d interrupted model operation(s) from a previous run", len(recovered))
+		}
+	}
 
 	s := &Server{
 		cfg:            cfg,

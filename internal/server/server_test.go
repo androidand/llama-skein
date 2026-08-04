@@ -97,6 +97,24 @@ func TestServer_New_GroupConfig(t *testing.T) {
 	}
 }
 
+// TestServer_New_InitializesOperationStoreAndRecovers exercises New()'s real
+// wiring (operation.DefaultStateDir + operation.Recover), not a mock — same
+// level of real-home-directory touch this package already accepts for
+// profileStore in TestServer_New_GroupConfig above. A failure to initialize
+// the operation store must not fail New() itself (see the storeErr handling
+// in New): model management degrades, inference still starts.
+func TestServer_New_InitializesOperationStoreAndRecovers(t *testing.T) {
+	discard := logmon.NewWriter(io.Discard)
+	s, err := New(config.Config{HealthCheckTimeout: 15}, discard, discard, discard, nil, BuildInfo{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Shutdown(time.Second)
+	if s.operationStore == nil {
+		t.Fatal("operationStore is nil after New() — recovery has nothing to run against")
+	}
+}
+
 func TestServer_New_MatrixConfig(t *testing.T) {
 	discard := logmon.NewWriter(io.Discard)
 	cfg := config.Config{HealthCheckTimeout: 15, Matrix: &config.MatrixConfig{}}

@@ -120,8 +120,27 @@
       passes in isolation and on a clean full-suite rerun — unrelated to
       this change, a process-spawn timing test under heavy concurrent
       system load).
-- [ ] 2.4 Recover interrupted nonterminal operations at startup and expose
+- [x] 2.4 Recover interrupted nonterminal operations at startup and expose
   resumable partial-artifact information.
+      — internal/operation/recover.go: Recover(store, now) finds every
+      non-terminal operation (by definition, if it still exists at startup
+      no live process is advancing it — that process is the one that just
+      exited) and appends an idempotent "interrupted by a server restart
+      while at phase X" warning. Phase itself is left unchanged: the phase
+      vocabulary has no separate "interrupted" state — phase is which step
+      was reached, not whether something is currently working on it right
+      now. Wired into server.New() right after the store initializes.
+      Honest scope limit, stated plainly rather than papered over:
+      "resumable partial-artifact information" here means exposing each
+      artifact's last-persisted BytesDownloaded — it does NOT reconcile
+      against actual bytes on disk, because no deterministic partial-file
+      naming/location scheme exists yet (that's design.md decision 4,
+      landing with sections 3-4's actual download execution). Reconciling
+      against a naming scheme that doesn't exist yet would be guessing.
+      10 new tests (5 operation-package: mark/idempotent/terminal-untouched/
+      progress-preserved/empty-store; 1 server-level smoke test exercising
+      the real New() wiring, same real-homedir precedent this package
+      already accepts for profileStore). Full go build/vet/test ./... green.
 - [ ] 2.5 Redact tokens and sensitive request headers from records, logs, and
   errors.
 
