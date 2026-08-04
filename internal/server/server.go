@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,11 +32,12 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf       *perf.Monitor
-	inflight   *inflightCounter
-	metrics    *metricsMonitor
-	silentMode *thermal.Manager
-	build      BuildInfo
+	perf         *perf.Monitor
+	inflight     *inflightCounter
+	metrics      *metricsMonitor
+	silentMode   *thermal.Manager
+	profileStore *ProfileStore
+	build        BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -188,18 +191,37 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	silentMgr := thermal.NewManager()
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 
+	profilePath := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		profilePath = filepath.Join(home, ".llama-skein", "skein", "profile.json")
+	}
+
 	s := &Server{
-		cfg:         cfg,
-		muxlog:      muxlog,
-		proxylog:    proxylog,
-		upstreamlog: upstreamlog,
-		perf:        perfMon,
-		inflight:    &inflightCounter{},
-		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		silentMode:  silentMgr,
-		build:       build,
-		shutdownCtx: shutdownCtx,
-		shutdownFn:  shutdownFn,
+		cfg:          cfg,
+		muxlog:       muxlog,
+		proxylog:     proxylog,
+		upstreamlog:  upstreamlog,
+		perf:         perfMon,
+		inflight:     &inflightCounter{},
+		metrics:      newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		silentMode:   silentMgr,
+		profileStore: NewProfileStore(profilePath),
+		build:        build,
+		shutdownCtx:  shutdownCtx,
+		shutdownFn:   shutdownFn,
+	}
+
+	// Re-apply the persisted profile (if the operator ever saved one via
+	// POST /api/skein/config) so silent mode survives a restart without the
+	// manual DPM/APU re-tuning this feature exists to avoid. YAML
+	// cfg.SilentMode.Schedule below is skipped once an API profile exists —
+	// the API-set profile takes over permanently, it doesn't just apply once.
+	hasStoredProfile := false
+	if profile, ok, err := s.profileStore.Load(); err == nil && ok {
+		hasStoredProfile = true
+		if err := s.applyProfile(profile); err != nil {
+			proxylog.Warnf("could not re-apply saved profile on startup: %v", err)
+		}
 	}
 
 	// Fit guard (proactive half): shrink over-large contexts and flag models
@@ -229,7 +251,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.local = local
 	s.peer = peer
 
-	if sched := cfg.SilentMode.Schedule; sched != "" {
+	if sched := cfg.SilentMode.Schedule; sched != "" && !hasStoredProfile {
 		pct := cfg.SilentMode.PowerLimitPct
 		if pct == 0 {
 			pct = thermal.DefaultSilentProfile.PowerLimitPct
@@ -393,20 +415,12 @@ func (s *Server) routes() {
 
 	// Skein — persistent user profile for power/silent-mode preferences.
 	//
-	// DISABLED: server.go referenced handleAPIGetProfile/handleAPISetProfile/
-	// handleAPIProfileDefault and a ProfileStore type that do not exist
-	// anywhere in this repository's git history (verified with `git log -S`
-	// across all branches) — main HEAD did not build. This is unrelated to
-	// tonight's config-safety-net/swap-preemption work; routes are commented
-	// out here (not reimplemented blind) so the tree builds again. Restore
-	// alongside the real ProfileStore implementation — see
-	// openspec/changes/add-persistent-user-profile-saving if a proposal for
-	// it exists, and ECOSYSTEM.md which documents these three endpoints as
-	// already shipped (they are not, on this host's binary — verified: z4's
-	// running llama-skein 404s on all three).
-	// mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
-	// mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
-	// mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
+	// Persistent user profile — GPU power/silent-mode preferences, set once
+	// via this API instead of hand-tuning DPM/APU settings after every
+	// restart (openspec/changes/add-persistent-user-profile-saving).
+	mux.Handle("GET /api/skein/config", apiChain.ThenFunc(s.handleAPIGetProfile))
+	mux.Handle("POST /api/skein/config", apiChain.ThenFunc(s.handleAPISetProfile))
+	mux.Handle("GET /api/skein/config/default", apiChain.ThenFunc(s.handleAPIProfileDefault))
 
 	// Legacy fork paths — still consumed by skein (llamaswap client, ollama
 	// adapter, provider probing) and Ollama-mode frontends. /api/events,
@@ -431,25 +445,24 @@ func (s *Server) routes() {
 
 	// Runtime — list, install, upgrade, health.
 	//
-	// DISABLED: same situation as the skein-profile routes above —
-	// handleListRuntimes/handleInstallRuntime/handleUpgradeRuntime/
-	// handleCheckRuntimeHealth and an UpgradeOptions type are referenced here
-	// but were never committed (see openspec/changes/add-backend-runtime-
-	// management, which documents this as still Phase 1 — detection only).
-	// Commented out, not reimplemented blind, so the tree builds again.
-	// mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
-	// mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleInstallRuntime(w, r, backend)
-	// }))
-	// mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleUpgradeRuntime(w, r, backend)
-	// }))
-	// mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleCheckRuntimeHealth(w, r, backend)
-	// }))
+	// Inference-engine runtime management (llama.cpp/mlx/vllm): detection for
+	// all three, install/upgrade for mlx+vllm (llama.cpp keeps its dedicated
+	// /api/system/upgrade — see runtime.ErrUseSystemUpgrade). Finishes
+	// openspec/changes/add-backend-runtime-management, which was blocked in
+	// the same hollow-progress state as the profile routes above.
+	mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
+	mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleInstallRuntime(w, r, backend)
+	}))
+	mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleUpgradeRuntime(w, r, backend)
+	}))
+	mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleCheckRuntimeHealth(w, r, backend)
+	}))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

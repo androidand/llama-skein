@@ -1,4 +1,4 @@
-# Proposal: Add persistent user profile saving to `/api/skein/config` to avoid manual DPM/APU tuning.
+# Persistent GPU power and silent-mode user profile
 
 ## Context
 No additional context provided.
