@@ -7,9 +7,13 @@
       (66 commits ahead, two — hardware detection and a rocm-smi memory fix —
       worth a deliberate look later). All required behavior verified passing
       at the current merge base; no upstream sync needed to start section 2.
-- [ ] 1.2 Inventory every implemented llama-skein model inventory, detail,
+- [x] 1.2 Inventory every implemented llama-skein model inventory, detail,
   fit, storage, pull, load, unload, remove, and config route against the
   OpenAPI source.
+      — See `route-inventory.md`: 17 routes already in the contract, 8 are not
+      (model detail/delete/load/unload/unload-all/pull/context-recommendation,
+      plus the legacy `/unload`) — expected, since formalizing exactly these
+      is this change's own purpose. Mapped each to the section that owns it.
 - [ ] 1.3 Define capability, artifact role, install plan, model operation,
   progress, outcome, and typed error schemas in OpenAPI.
 - [ ] 1.4 Add generated lifecycle and operation client methods; regenerate Go
