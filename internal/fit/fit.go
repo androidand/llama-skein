@@ -131,6 +131,12 @@ type Params struct {
 	VRAMTotalMB   int     // total VRAM / unified pool
 	VRAMFreeMB    int     // currently free VRAM (for a live max-ctx estimate)
 	ParallelSlots int     // --parallel/-np in the command; llama-server divides n_ctx across slots. 0/1 = no division
+	// Unproven marks a model that has never loaded on this host (a
+	// hypothetical/gallery candidate scored before download). A ConfiguredCtx
+	// then means "requested ctx to score at", not "proven to load at" — so the
+	// configured-model rescue from "no" and the under-configured flag are
+	// disabled, and "no" stays "no".
+	Unproven bool
 }
 
 // Result is the computed fit. It mirrors the apicontract.ModelFit fields the
@@ -421,7 +427,7 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	// exactly (hybrid SSM/attention, MoE/CPU offload), so never DISCARD a running
 	// model as "no" — the worst a deployed model earns is "marginal". This is the
 	// guarantee that the engine never rejects a model that actually fits.
-	if configured && res.FitLevel == "no" {
+	if configured && !p.Unproven && res.FitLevel == "no" {
 		res.FitLevel = "marginal"
 		res.Reason = "runs at the configured context; VRAM estimate exceeds budget (architecture not fully modeled or memory offloaded)"
 	}
@@ -446,7 +452,7 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	// Flag a configured model whose --ctx-size is materially below what VRAM
 	// could hold, so the starved config is visible (skein's ctx-fit sweep grows
 	// it; the model-load path warns). MaxFitCtx is the VRAM-achievable ceiling.
-	if configured && res.MaxFitCtx > 0 && p.ConfiguredCtx < int(float64(res.MaxFitCtx)*underConfigFrac) {
+	if configured && !p.Unproven && res.MaxFitCtx > 0 && p.ConfiguredCtx < int(float64(res.MaxFitCtx)*underConfigFrac) {
 		res.UnderConfigured = true
 		res.Reason = fmt.Sprintf("%s; configured ctx %d is well below the ~%d this host could hold", res.Reason, p.ConfiguredCtx, res.MaxFitCtx)
 	}

@@ -89,6 +89,72 @@ func (e ConfigModelRequestBackend) Valid() bool {
 	}
 }
 
+// Defines values for FitLevel.
+const (
+	Good     FitLevel = "good"
+	Marginal FitLevel = "marginal"
+	No       FitLevel = "no"
+	Perfect  FitLevel = "perfect"
+	Tight    FitLevel = "tight"
+	Unknown  FitLevel = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the FitLevel enum.
+func (e FitLevel) Valid() bool {
+	switch e {
+	case Good:
+		return true
+	case Marginal:
+		return true
+	case No:
+		return true
+	case Perfect:
+		return true
+	case Tight:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HypotheticalFitRequestBackend.
+const (
+	HypotheticalFitRequestBackendLlamacpp HypotheticalFitRequestBackend = "llamacpp"
+	HypotheticalFitRequestBackendMlx      HypotheticalFitRequestBackend = "mlx"
+)
+
+// Valid indicates whether the value is a known member of the HypotheticalFitRequestBackend enum.
+func (e HypotheticalFitRequestBackend) Valid() bool {
+	switch e {
+	case HypotheticalFitRequestBackendLlamacpp:
+		return true
+	case HypotheticalFitRequestBackendMlx:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HypotheticalFitResponseBackend.
+const (
+	HypotheticalFitResponseBackendLlamacpp HypotheticalFitResponseBackend = "llamacpp"
+	HypotheticalFitResponseBackendMlx      HypotheticalFitResponseBackend = "mlx"
+)
+
+// Valid indicates whether the value is a known member of the HypotheticalFitResponseBackend enum.
+func (e HypotheticalFitResponseBackend) Valid() bool {
+	switch e {
+	case HypotheticalFitResponseBackendLlamacpp:
+		return true
+	case HypotheticalFitResponseBackendMlx:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LastErrorCategory.
 const (
 	Crash LastErrorCategory = "crash"
@@ -173,36 +239,6 @@ func (e ModelFitBackend) Valid() bool {
 	case ModelFitBackendMlx:
 		return true
 	case ModelFitBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ModelFitFitLevel.
-const (
-	Good     ModelFitFitLevel = "good"
-	Marginal ModelFitFitLevel = "marginal"
-	No       ModelFitFitLevel = "no"
-	Perfect  ModelFitFitLevel = "perfect"
-	Tight    ModelFitFitLevel = "tight"
-	Unknown  ModelFitFitLevel = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the ModelFitFitLevel enum.
-func (e ModelFitFitLevel) Valid() bool {
-	switch e {
-	case Good:
-		return true
-	case Marginal:
-		return true
-	case No:
-		return true
-	case Perfect:
-		return true
-	case Tight:
-		return true
-	case Unknown:
 		return true
 	default:
 		return false
@@ -734,6 +770,9 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// FitLevel How well a model fits a host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case. Shared by ModelFit (an installed model) and HypotheticalVariantFit (a gallery candidate not yet on disk) so both report identically.
+type FitLevel string
+
 // FitReport Fit of every configured model to this host. Aggregated by skein across providers for fleet placement.
 type FitReport struct {
 	// Models Per-model fit results.
@@ -792,6 +831,95 @@ type HealthResponse struct {
 
 	// Watchdog GPU-stall watchdog observability. Active means the watchdog is monitoring for wedged backends.
 	Watchdog *WatchdogStatus `json:"watchdog,omitempty"`
+}
+
+// HypotheticalDims Explicit model dimensions, when the catalog knows them (e.g. from the model's config.json). Any zero/absent field falls back to estimation from params_b.
+type HypotheticalDims struct {
+	EmbeddingLength *int64 `json:"embedding_length,omitempty"`
+	HeadCount       *int64 `json:"head_count,omitempty"`
+	HeadCountKv     *int64 `json:"head_count_kv,omitempty"`
+
+	// HeadDim Explicit K/V head dimension; derived from embedding_length/head_count when absent.
+	HeadDim    *int64 `json:"head_dim,omitempty"`
+	LayerCount *int64 `json:"layer_count,omitempty"`
+
+	// TrainedCtx Trained context (n_ctx_train / max_position_embeddings).
+	TrainedCtx *int64 `json:"trained_ctx,omitempty"`
+}
+
+// HypotheticalFitRequest defines model for HypotheticalFitRequest.
+type HypotheticalFitRequest struct {
+	// ArchFamily Architecture family hint (e.g. "qwen3", "llama"). Recorded for the caller; not yet used in estimation.
+	ArchFamily *string `json:"arch_family,omitempty"`
+
+	// Backend Backend the model would run under. Defaults to llamacpp. MLX scores against the unified-memory budget with f16 KV.
+	Backend *HypotheticalFitRequestBackend `json:"backend,omitempty"`
+
+	// CacheTypeK llama.cpp --cache-type-k the model would run with (f16 default).
+	CacheTypeK *string `json:"cache_type_k,omitempty"`
+
+	// CacheTypeV llama.cpp --cache-type-v the model would run with (f16 default).
+	CacheTypeV *string `json:"cache_type_v,omitempty"`
+
+	// Dims Explicit model dimensions, when the catalog knows them (e.g. from the model's config.json). Any zero/absent field falls back to estimation from params_b.
+	Dims *HypotheticalDims `json:"dims,omitempty"`
+
+	// Model Free-form label for the candidate (e.g. the HF repo id). Echoed back; not resolved against configured models.
+	Model *string `json:"model,omitempty"`
+
+	// ParamsB Parameter count in billions; the estimation source when dims are absent. MoE models should pass explicit dims — the dense estimation table does not model them.
+	ParamsB *float32 `json:"params_b,omitempty"`
+
+	// RequestedCtx Score at this context size, like /api/fit/{model}?ctx=. 0/absent scores at the trained context capped by what VRAM allows.
+	RequestedCtx *int                       `json:"requested_ctx,omitempty"`
+	Variants     []HypotheticalQuantVariant `json:"variants"`
+}
+
+// HypotheticalFitRequestBackend Backend the model would run under. Defaults to llamacpp. MLX scores against the unified-memory budget with f16 KV.
+type HypotheticalFitRequestBackend string
+
+// HypotheticalFitResponse defines model for HypotheticalFitResponse.
+type HypotheticalFitResponse struct {
+	Backend HypotheticalFitResponseBackend `json:"backend"`
+
+	// Estimated True when any core dimension was estimated from params_b rather than supplied explicitly — verdicts are best-effort, not GGUF-derived.
+	Estimated bool    `json:"estimated"`
+	Model     *string `json:"model,omitempty"`
+
+	// Recommended Name of the largest variant whose fit_level is perfect or good, else the largest tight one. Absent when nothing fits.
+	Recommended *string                  `json:"recommended,omitempty"`
+	Variants    []HypotheticalVariantFit `json:"variants"`
+	VramFreeMb  *int                     `json:"vram_free_mb,omitempty"`
+	VramTotalMb *int                     `json:"vram_total_mb,omitempty"`
+}
+
+// HypotheticalFitResponseBackend defines model for HypotheticalFitResponse.Backend.
+type HypotheticalFitResponseBackend string
+
+// HypotheticalQuantVariant defines model for HypotheticalQuantVariant.
+type HypotheticalQuantVariant struct {
+	// FileBytes Resident weight size of this variant: the GGUF file size, or the summed safetensors sizes for MLX.
+	FileBytes int64 `json:"file_bytes"`
+
+	// Name Variant label, e.g. "Q4_K_M" or "8bit". Echoed back in the verdict and used as the recommended-variant reference.
+	Name string `json:"name"`
+}
+
+// HypotheticalVariantFit defines model for HypotheticalVariantFit.
+type HypotheticalVariantFit struct {
+	// FitLevel Same vocabulary as ModelFit.fit_level. A hypothetical model earns an honest "no" — the deployed-model rescue to "marginal" does not apply.
+	FitLevel         FitLevel `json:"fit_level"`
+	KvMbAtMaxSafeCtx *int     `json:"kv_mb_at_max_safe_ctx,omitempty"`
+
+	// MaxFitCtx Largest context that fits VRAM for this variant, capped at the trained context.
+	MaxFitCtx *int `json:"max_fit_ctx,omitempty"`
+
+	// MaxSafeCtx Prompt budget at the scored context; 0 when the variant does not fit.
+	MaxSafeCtx     int     `json:"max_safe_ctx"`
+	ModelMb        *int    `json:"model_mb,omitempty"`
+	Name           string  `json:"name"`
+	Reason         *string `json:"reason,omitempty"`
+	VramRequiredMb *int    `json:"vram_required_mb,omitempty"`
 }
 
 // InferenceInfo Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
@@ -919,7 +1047,7 @@ type ModelFit struct {
 	EstTokensPerSec *float32 `json:"est_tokens_per_sec,omitempty"`
 
 	// FitLevel How well the model fits this host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case.
-	FitLevel ModelFitFitLevel `json:"fit_level"`
+	FitLevel FitLevel `json:"fit_level"`
 
 	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
 	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
@@ -957,9 +1085,6 @@ type ModelFit struct {
 
 // ModelFitBackend Inference backend.
 type ModelFitBackend string
-
-// ModelFitFitLevel How well the model fits this host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case.
-type ModelFitFitLevel string
 
 // ModelFitRunMode How the model would run given memory.
 type ModelFitRunMode string
@@ -1325,6 +1450,9 @@ type RollbackConfigJSONRequestBody = ConfigRollbackRequest
 // ValidateConfigJSONRequestBody defines body for ValidateConfig for application/json ContentType.
 type ValidateConfigJSONRequestBody = ConfigValidateRequest
 
+// PostHypotheticalFitJSONRequestBody defines body for PostHypotheticalFit for application/json ContentType.
+type PostHypotheticalFitJSONRequestBody = HypotheticalFitRequest
+
 // InstallRuntimeJSONRequestBody defines body for InstallRuntime for application/json ContentType.
 type InstallRuntimeJSONRequestBody = RuntimeInstallRequest
 
@@ -1668,6 +1796,11 @@ type ClientInterface interface {
 	// GetFitReport request
 	GetFitReport(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostHypotheticalFitWithBody request with any body
+	PostHypotheticalFitWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostHypotheticalFit(ctx context.Context, body PostHypotheticalFitJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetModelFit request
 	GetModelFit(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1964,6 +2097,30 @@ func (c *Client) ValidateConfig(ctx context.Context, body ValidateConfigJSONRequ
 
 func (c *Client) GetFitReport(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetFitReportRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostHypotheticalFitWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostHypotheticalFitRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostHypotheticalFit(ctx context.Context, body PostHypotheticalFitJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostHypotheticalFitRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2734,6 +2891,46 @@ func NewGetFitReportRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewPostHypotheticalFitRequest calls the generic PostHypotheticalFit builder with application/json body
+func NewPostHypotheticalFitRequest(server string, body PostHypotheticalFitJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostHypotheticalFitRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPostHypotheticalFitRequestWithBody generates requests for PostHypotheticalFit with any type of body
+func NewPostHypotheticalFitRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/fit/hypothetical")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetModelFitRequest generates requests for GetModelFit
 func NewGetModelFitRequest(server string, model string, params *GetModelFitParams) (*http.Request, error) {
 	var err error
@@ -3485,6 +3682,11 @@ type ClientWithResponsesInterface interface {
 	// GetFitReportWithResponse request
 	GetFitReportWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFitReportResponse, error)
 
+	// PostHypotheticalFitWithBodyWithResponse request with any body
+	PostHypotheticalFitWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostHypotheticalFitResponse, error)
+
+	PostHypotheticalFitWithResponse(ctx context.Context, body PostHypotheticalFitJSONRequestBody, reqEditors ...RequestEditorFn) (*PostHypotheticalFitResponse, error)
+
 	// GetModelFitWithResponse request
 	GetModelFitWithResponse(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*GetModelFitResponse, error)
 
@@ -3966,6 +4168,36 @@ func (r GetFitReportResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetFitReportResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PostHypotheticalFitResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *HypotheticalFitResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r PostHypotheticalFitResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostHypotheticalFitResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PostHypotheticalFitResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4720,6 +4952,23 @@ func (c *ClientWithResponses) GetFitReportWithResponse(ctx context.Context, reqE
 	return ParseGetFitReportResponse(rsp)
 }
 
+// PostHypotheticalFitWithBodyWithResponse request with arbitrary body returning *PostHypotheticalFitResponse
+func (c *ClientWithResponses) PostHypotheticalFitWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostHypotheticalFitResponse, error) {
+	rsp, err := c.PostHypotheticalFitWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostHypotheticalFitResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostHypotheticalFitWithResponse(ctx context.Context, body PostHypotheticalFitJSONRequestBody, reqEditors ...RequestEditorFn) (*PostHypotheticalFitResponse, error) {
+	rsp, err := c.PostHypotheticalFit(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostHypotheticalFitResponse(rsp)
+}
+
 // GetModelFitWithResponse request returning *GetModelFitResponse
 func (c *ClientWithResponses) GetModelFitWithResponse(ctx context.Context, model string, params *GetModelFitParams, reqEditors ...RequestEditorFn) (*GetModelFitResponse, error) {
 	rsp, err := c.GetModelFit(ctx, model, params, reqEditors...)
@@ -5284,6 +5533,32 @@ func ParseGetFitReportResponse(rsp *http.Response) (*GetFitReportResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest FitReport
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostHypotheticalFitResponse parses an HTTP response from a PostHypotheticalFitWithResponse call
+func ParsePostHypotheticalFitResponse(rsp *http.Response) (*PostHypotheticalFitResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostHypotheticalFitResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HypotheticalFitResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
