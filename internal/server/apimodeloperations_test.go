@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,14 +19,92 @@ import (
 // not a mock.
 func newOperationTestServer(t *testing.T) *Server {
 	t.Helper()
-	store, err := operation.NewStore(t.TempDir(), 50)
+	s, _ := newOperationTestServerWithDir(t)
+	return s
+}
+
+// newOperationTestServerWithDir is newOperationTestServer, additionally
+// returning the store's on-disk directory so a test can inspect the raw
+// persisted files directly (operation.Store's directory field is
+// unexported and this is a different package).
+func newOperationTestServerWithDir(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := operation.NewStore(dir, 50)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	s := newTestServer(newStubRouter(nil, ""), nil)
 	s.operationStore = store
 	s.routes()
-	return s
+	return s, dir
+}
+
+const redactionTestToken = "hf_secretTokenValueShouldNeverAppearAnywhere"
+
+func planJSONWithToken(token string) string {
+	return `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [
+			{"path": "model-Q4_K_M.gguf", "size_bytes": 1000, "role": "weights"}
+		],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"},
+		"token": "` + token + `"
+	}`
+}
+
+// TestHandleCreateModelOperation_NeverPersistsTheToken is task 2.5's core
+// guarantee, tested directly against what actually lands on disk and in the
+// response body — not just "the code doesn't reference plan.Token after this
+// line", which could silently regress.
+func TestHandleCreateModelOperation_NeverPersistsTheToken(t *testing.T) {
+	s, dir := newOperationTestServerWithDir(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(planJSONWithToken(redactionTestToken)))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte(redactionTestToken)) {
+		t.Fatalf("response body contains the token: %s", w.Body.String())
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no operation record was written")
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", entry.Name(), err)
+		}
+		if bytes.Contains(data, []byte(redactionTestToken)) {
+			t.Fatalf("persisted record %s contains the token: %s", entry.Name(), data)
+		}
+	}
+}
+
+// TestHandleCreateModelOperation_NeverEchoesTheTokenInAnErrorMessage covers
+// the "errors" half of task 2.5: an invalid plan that also happens to
+// include a token must not echo it back in the 400 body.
+func TestHandleCreateModelOperation_NeverEchoesTheTokenInAnErrorMessage(t *testing.T) {
+	s := newOperationTestServer(t)
+	body := `{"source_repository":"","source_revision":"r","artifacts":[{"path":"a","size_bytes":1,"role":"weights"}],"registration":{"model_id":"m","backend":"llamacpp"},"token":"` + redactionTestToken + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte(redactionTestToken)) {
+		t.Fatalf("error response contains the token: %s", w.Body.String())
+	}
 }
 
 func validPlanJSON() string {

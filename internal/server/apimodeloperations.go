@@ -57,6 +57,13 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 		writeOperationError(w, http.StatusBadRequest, reason)
 		return
 	}
+	// plan.Token is a request secret (design.md decision 7): read only as far
+	// as this line, then discarded. operation.Operation has no field capable
+	// of holding it, so it cannot reach the persisted record, a log line, or
+	// an error message by construction — not by remembering not to include
+	// it. Not yet handed to anything: no download execution exists yet
+	// (sections 3-4) to authenticate with it.
+	plan.Token = nil
 
 	artifacts := make([]operation.ArtifactProgress, len(plan.Artifacts))
 	for i, artifact := range plan.Artifacts {

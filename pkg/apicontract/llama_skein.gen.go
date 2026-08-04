@@ -1106,6 +1106,9 @@ type ModelInstallPlan struct {
 
 	// SourceRevision Immutable revision (commit SHA), not a mutable branch name. Required so a plan identifies exact, reproducible source content.
 	SourceRevision string `json:"source_revision"`
+
+	// Token Hugging Face access token for a gated repository. A request secret, not artifact identity: never persisted in the operation record, logged, or echoed back in an error (design.md decision 7). Not yet used to authenticate a download — no download execution exists yet (sections 3-4) — accepted now so the redaction guarantee is in place before there is anything to redact from.
+	Token *string `json:"token,omitempty"`
 }
 
 // ModelList defines model for ModelList.

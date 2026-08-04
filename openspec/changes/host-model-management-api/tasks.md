@@ -141,8 +141,37 @@
       progress-preserved/empty-store; 1 server-level smoke test exercising
       the real New() wiring, same real-homedir precedent this package
       already accepts for profileStore). Full go build/vet/test ./... green.
-- [ ] 2.5 Redact tokens and sensitive request headers from records, logs, and
+- [x] 2.5 Redact tokens and sensitive request headers from records, logs, and
   errors.
+      — Found a real gap while implementing this: ModelInstallPlan (1.3) had
+      nowhere to carry an HF token at all. Checked the existing convention
+      (POST /api/models/pull's `token` JSON body field, apipull.go) before
+      picking a shape — a header-based token would not have worked here:
+      CreateAuthMiddleware deletes the Authorization header outright once
+      llama-skein's own API-key auth consumes it, before any handler sees
+      it. Added an optional `token` field to ModelInstallPlan matching the
+      existing body-field convention.
+      Handler-side: `plan.Token = nil` immediately after validation, with a
+      comment explaining why this is structural, not just discipline —
+      operation.Operation has no field capable of holding a token, so it
+      cannot reach the persisted record, a log line, or an error message by
+      construction. Not yet used to authenticate anything (no download
+      execution exists yet, sections 3-4); the schema description says so
+      plainly rather than claiming unimplemented behavior.
+      Verified "sensitive request headers" is already structurally covered
+      rather than inventing new code for a case that doesn't apply: these
+      routes use apiChain (auth only), not modelChain (which is what
+      captures.go's sensitiveHeaders/redactHeaders protects) — no request
+      body or header capture applies to them at all. The general access-log
+      line (internal/server/log.go) logs method/path/status/duration only,
+      never body or headers.
+      2 new tests asserting the guarantee against what's actually on disk
+      and in the response body, not just "the code doesn't reference
+      plan.Token after this line" (which could silently regress): the
+      persisted JSON file's raw bytes never contain a submitted token, and
+      neither does a 400 error response for an otherwise-invalid plan that
+      also included one. Full go build/vet/test ./... green; opencode-skein
+      TS client regenerates and typechecks clean.
 
 ## 3. Exact artifact resolution
 
