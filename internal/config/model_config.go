@@ -95,7 +95,7 @@ func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	defaults := rawModelConfig{
 		Cmd:              "",
 		CmdStop:          "",
-		Proxy:            "http://localhost:${PORT}",
+		Proxy:            "http://127.0.0.1:${PORT}",
 		Aliases:          []string{},
 		Env:              []string{},
 		CheckEndpoint:    "/health",

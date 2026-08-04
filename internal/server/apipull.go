@@ -326,7 +326,7 @@ func (s *Server) registerPulledModel(dest, filename string, reg *pullRegister) (
 	cmd := s.buildCmd(dest, reg.Flags)
 	mc := config.ModelConfig{
 		Cmd:         cmd,
-		Proxy:       "http://localhost:${PORT}",
+		Proxy:       "http://127.0.0.1:${PORT}",
 		Name:        reg.Name,
 		Description: reg.Description,
 		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,

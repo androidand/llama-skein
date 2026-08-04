@@ -73,7 +73,7 @@ models:
 	if assert.NotNil(t, model1, "model1 should not be nil") {
 		assert.Equal(t, "path/to/cmd --port 5800", model1.Cmd) // has the port replaced
 		assert.Equal(t, "taskkill /f /t /pid ${PID}", model1.CmdStop)
-		assert.Equal(t, "http://localhost:5800", model1.Proxy)
+		assert.Equal(t, "http://127.0.0.1:5800", model1.Proxy)
 		assert.Equal(t, "/health", model1.CheckEndpoint)
 		assert.Equal(t, []string{}, model1.Aliases)
 		assert.Equal(t, []string{}, model1.Env)
@@ -178,7 +178,7 @@ groups:
 			"model1": {
 				Cmd:                "path/to/cmd --arg1 one",
 				CmdStop:            "taskkill /f /t /pid ${PID}",
-				Proxy:              "http://localhost:8080",
+				Proxy:              "http://127.0.0.1:8080",
 				Aliases:            []string{"m1", "model-one"},
 				Env:                []string{"VAR1=value1", "VAR2=value2"},
 				CheckEndpoint:      "/health",
@@ -189,7 +189,7 @@ groups:
 			"model2": {
 				Cmd:                "path/to/server --arg1 one",
 				CmdStop:            "taskkill /f /t /pid ${PID}",
-				Proxy:              "http://localhost:8081",
+				Proxy:              "http://127.0.0.1:8081",
 				Aliases:            []string{"m2"},
 				Env:                []string{},
 				CheckEndpoint:      "/",
@@ -200,7 +200,7 @@ groups:
 			"model3": {
 				Cmd:                "path/to/cmd --arg1 one",
 				CmdStop:            "taskkill /f /t /pid ${PID}",
-				Proxy:              "http://localhost:8081",
+				Proxy:              "http://127.0.0.1:8081",
 				Aliases:            []string{"mthree"},
 				Env:                []string{},
 				CheckEndpoint:      "/",
@@ -211,7 +211,7 @@ groups:
 			"model4": {
 				Cmd:                "path/to/cmd --arg1 one",
 				CmdStop:            "taskkill /f /t /pid ${PID}",
-				Proxy:              "http://localhost:8082",
+				Proxy:              "http://127.0.0.1:8082",
 				CheckEndpoint:      "/",
 				Aliases:            []string{},
 				Env:                []string{},

@@ -244,6 +244,23 @@ func (c *Config) FindConfig(modelName string) (ModelConfig, string, bool) {
 	}
 }
 
+// normalizeLoopbackProxy rewrites a proxy URL whose host is "localhost" to
+// 127.0.0.1, reporting whether it changed anything. Hosts other than
+// localhost (real hostnames, non-loopback IPs, explicit ::1) pass through
+// untouched.
+func normalizeLoopbackProxy(proxyURL string) (string, bool) {
+	u, err := url.Parse(proxyURL)
+	if err != nil || !strings.EqualFold(u.Hostname(), "localhost") {
+		return proxyURL, false
+	}
+	if port := u.Port(); port != "" {
+		u.Host = "127.0.0.1:" + port
+	} else {
+		u.Host = "127.0.0.1"
+	}
+	return u.String(), true
+}
+
 func LoadConfig(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -539,6 +556,17 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 		if _, err := url.Parse(modelConfig.Proxy); err != nil {
 			return Config{}, fmt.Errorf("model %s: invalid proxy URL: %w", modelId, err)
+		}
+
+		// Pin a "localhost" proxy to the IPv4 loopback. Spawned upstreams
+		// (llama-server, mlx_lm.server) bind 127.0.0.1, but Go may resolve
+		// localhost to ::1; the reverse proxy and health check then dial
+		// [::1]:PORT and get connection refused against a healthy upstream,
+		// wedging the model in "starting" and blocking every other model swap
+		// until healthCheckTimeout expires.
+		if normalized, changed := normalizeLoopbackProxy(modelConfig.Proxy); changed {
+			fmt.Fprintf(os.Stderr, "[WARN] model %s: proxy %s pinned to %s (localhost can resolve to ::1 while the upstream binds IPv4)\n", modelId, modelConfig.Proxy, normalized)
+			modelConfig.Proxy = normalized
 		}
 
 		if modelConfig.SendLoadingState == nil {

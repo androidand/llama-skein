@@ -67,6 +67,39 @@ models:
 	assert.Contains(t, err.Error(), "duplicate alias m1 found in model: model")
 }
 
+// A proxy host of "localhost" can resolve to ::1 while spawned upstreams bind
+// 127.0.0.1, wedging the model in "starting" and blocking all other swaps
+// (m3 incident 2026-08-04). Loading must pin it to the IPv4 loopback.
+func TestConfig_ProxyLocalhostPinnedToIPv4(t *testing.T) {
+	content := `
+startPort: 5800
+models:
+  explicit:
+    cmd: svr --port 9000
+    proxy: "http://localhost:9000"
+  explicitPort:
+    cmd: svr --port ${PORT}
+    proxy: "http://LOCALHOST:${PORT}"
+  defaulted:
+    cmd: svr --port ${PORT}
+  hostname:
+    cmd: svr --port 9001
+    proxy: "http://myserver:9001"
+  ipv6:
+    cmd: svr --port 9002
+    proxy: "http://[::1]:9002"
+`
+	config, err := LoadConfigFromReader(strings.NewReader(content))
+	require.NoError(t, err)
+
+	assert.Equal(t, "http://127.0.0.1:9000", config.Models["explicit"].Proxy)
+	assert.Equal(t, "http://127.0.0.1:5801", config.Models["explicitPort"].Proxy)
+	assert.Equal(t, "http://127.0.0.1:5800", config.Models["defaulted"].Proxy)
+	// only "localhost" is rewritten; real hostnames and explicit ::1 pass through
+	assert.Equal(t, "http://myserver:9001", config.Models["hostname"].Proxy)
+	assert.Equal(t, "http://[::1]:9002", config.Models["ipv6"].Proxy)
+}
+
 func TestConfig_FindConfig(t *testing.T) {
 
 	// TODO?
@@ -168,7 +201,7 @@ models:
 
 		assert.Equal(t, 5800, config.StartPort)
 		assert.Equal(t, "svr --port 5800", config.Models["model1"].Cmd)
-		assert.Equal(t, "http://localhost:5800", config.Models["model1"].Proxy)
+		assert.Equal(t, "http://127.0.0.1:5800", config.Models["model1"].Proxy)
 
 		assert.Equal(t, "svr --port 5801", config.Models["model2"].Cmd)
 		assert.Equal(t, "http://172.11.22.33:5801", config.Models["model2"].Proxy)
