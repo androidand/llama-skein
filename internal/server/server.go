@@ -445,25 +445,24 @@ func (s *Server) routes() {
 
 	// Runtime — list, install, upgrade, health.
 	//
-	// DISABLED: same situation as the skein-profile routes above —
-	// handleListRuntimes/handleInstallRuntime/handleUpgradeRuntime/
-	// handleCheckRuntimeHealth and an UpgradeOptions type are referenced here
-	// but were never committed (see openspec/changes/add-backend-runtime-
-	// management, which documents this as still Phase 1 — detection only).
-	// Commented out, not reimplemented blind, so the tree builds again.
-	// mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
-	// mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleInstallRuntime(w, r, backend)
-	// }))
-	// mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleUpgradeRuntime(w, r, backend)
-	// }))
-	// mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	backend := r.PathValue("backend")
-	// 	s.handleCheckRuntimeHealth(w, r, backend)
-	// }))
+	// Inference-engine runtime management (llama.cpp/mlx/vllm): detection for
+	// all three, install/upgrade for mlx+vllm (llama.cpp keeps its dedicated
+	// /api/system/upgrade — see runtime.ErrUseSystemUpgrade). Finishes
+	// openspec/changes/add-backend-runtime-management, which was blocked in
+	// the same hollow-progress state as the profile routes above.
+	mux.Handle("GET /api/runtime", apiChain.ThenFunc(s.handleListRuntimes))
+	mux.Handle("POST /api/runtime/{backend}/install", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleInstallRuntime(w, r, backend)
+	}))
+	mux.Handle("POST /api/runtime/{backend}/upgrade", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleUpgradeRuntime(w, r, backend)
+	}))
+	mux.Handle("GET /api/runtime/{backend}/health", apiChain.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.PathValue("backend")
+		s.handleCheckRuntimeHealth(w, r, backend)
+	}))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
