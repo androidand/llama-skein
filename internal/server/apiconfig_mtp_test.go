@@ -33,7 +33,7 @@ func TestParseMTPFlags(t *testing.T) {
 			expected: &apicontract.MtpMetadata{
 				Enabled:  ptrOf(true),
 				SpecType: ptrOf(apicontract.DraftMtp),
-				Source:   ptrOf(apicontract.Cmd),
+				Source:   ptrOf(apicontract.MtpMetadataSourceCmd),
 			},
 		},
 		{
@@ -49,7 +49,7 @@ func TestParseMTPFlags(t *testing.T) {
 				Enabled:   ptrOf(true),
 				SpecType:  ptrOf(apicontract.DraftMtp),
 				DraftNMax: ptrOf(4),
-				Source:    ptrOf(apicontract.Cmd),
+				Source:    ptrOf(apicontract.MtpMetadataSourceCmd),
 			},
 		},
 		{
@@ -65,7 +65,7 @@ func TestParseMTPFlags(t *testing.T) {
 				Enabled:    ptrOf(true),
 				SpecType:   ptrOf(apicontract.DraftMtp),
 				ModelDraft: ptrOf("/path/to/draft.gguf"),
-				Source:     ptrOf(apicontract.Cmd),
+				Source:     ptrOf(apicontract.MtpMetadataSourceCmd),
 			},
 		},
 		{
@@ -83,7 +83,7 @@ func TestParseMTPFlags(t *testing.T) {
 				SpecType:   ptrOf(apicontract.DraftMtp),
 				DraftNMax:  ptrOf(3),
 				ModelDraft: ptrOf("/path/to/draft.gguf"),
-				Source:     ptrOf(apicontract.Cmd),
+				Source:     ptrOf(apicontract.MtpMetadataSourceCmd),
 			},
 		},
 		{

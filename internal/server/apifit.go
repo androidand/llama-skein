@@ -153,7 +153,7 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	// computation is unaffected.
 	mf := apicontract.ModelFit{
 		Model:    realName,
-		Backend:  apicontract.ModelFitBackend(backend),
+		Backend:  apicontract.Backend(backend),
 		FitLevel: apicontract.Unknown,
 	}
 

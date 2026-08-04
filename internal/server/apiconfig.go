@@ -243,7 +243,7 @@ func parseMTPFlags(parts []string) *apicontract.ConfigModelDetail_Metadata {
 	if mtp.Enabled == nil || !*mtp.Enabled {
 		return nil
 	}
-	mtp.Source = ptrOf(apicontract.Cmd)
+	mtp.Source = ptrOf(apicontract.MtpMetadataSourceCmd)
 	return &apicontract.ConfigModelDetail_Metadata{Mtp: mtp}
 }
 

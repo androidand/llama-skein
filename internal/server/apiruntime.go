@@ -32,7 +32,7 @@ func (s *Server) runtimeEngineCmd(backend string) string {
 
 func toRuntimeInfo(info runtime.Info) apicontract.RuntimeInfo {
 	ri := apicontract.RuntimeInfo{
-		Backend:   apicontract.RuntimeInfoBackend(info.Backend),
+		Backend:   apicontract.Backend(info.Backend),
 		Installed: info.Installed,
 	}
 	if info.Version != "" {
@@ -136,7 +136,7 @@ func (s *Server) handleCheckRuntimeHealth(w http.ResponseWriter, r *http.Request
 	}
 	info := runtime.For(backend).Detect(r.Context(), s.runtimeEngineCmd(backend))
 	writeJSON(w, apicontract.RuntimeHealth{
-		Backend: apicontract.RuntimeHealthBackend(backend),
+		Backend: apicontract.Backend(backend),
 		Healthy: info.Installed,
 	})
 }

@@ -47,42 +47,48 @@ func (e ApiModelState) Valid() bool {
 	}
 }
 
-// Defines values for ConfigModelPatchRequestBackend.
+// Defines values for ArtifactRole.
 const (
-	ConfigModelPatchRequestBackendLlamacpp ConfigModelPatchRequestBackend = "llamacpp"
-	ConfigModelPatchRequestBackendMlx      ConfigModelPatchRequestBackend = "mlx"
-	ConfigModelPatchRequestBackendVllm     ConfigModelPatchRequestBackend = "vllm"
+	ArtifactRoleConfig    ArtifactRole = "config"
+	ArtifactRoleOther     ArtifactRole = "other"
+	ArtifactRoleProjector ArtifactRole = "projector"
+	ArtifactRoleTokenizer ArtifactRole = "tokenizer"
+	ArtifactRoleWeights   ArtifactRole = "weights"
 )
 
-// Valid indicates whether the value is a known member of the ConfigModelPatchRequestBackend enum.
-func (e ConfigModelPatchRequestBackend) Valid() bool {
+// Valid indicates whether the value is a known member of the ArtifactRole enum.
+func (e ArtifactRole) Valid() bool {
 	switch e {
-	case ConfigModelPatchRequestBackendLlamacpp:
+	case ArtifactRoleConfig:
 		return true
-	case ConfigModelPatchRequestBackendMlx:
+	case ArtifactRoleOther:
 		return true
-	case ConfigModelPatchRequestBackendVllm:
+	case ArtifactRoleProjector:
+		return true
+	case ArtifactRoleTokenizer:
+		return true
+	case ArtifactRoleWeights:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for ConfigModelRequestBackend.
+// Defines values for Backend.
 const (
-	ConfigModelRequestBackendLlamacpp ConfigModelRequestBackend = "llamacpp"
-	ConfigModelRequestBackendMlx      ConfigModelRequestBackend = "mlx"
-	ConfigModelRequestBackendVllm     ConfigModelRequestBackend = "vllm"
+	BackendLlamacpp Backend = "llamacpp"
+	BackendMlx      Backend = "mlx"
+	BackendVllm     Backend = "vllm"
 )
 
-// Valid indicates whether the value is a known member of the ConfigModelRequestBackend enum.
-func (e ConfigModelRequestBackend) Valid() bool {
+// Valid indicates whether the value is a known member of the Backend enum.
+func (e Backend) Valid() bool {
 	switch e {
-	case ConfigModelRequestBackendLlamacpp:
+	case BackendLlamacpp:
 		return true
-	case ConfigModelRequestBackendMlx:
+	case BackendMlx:
 		return true
-	case ConfigModelRequestBackendVllm:
+	case BackendVllm:
 		return true
 	default:
 		return false
@@ -173,27 +179,6 @@ func (e LastErrorCategory) Valid() bool {
 	}
 }
 
-// Defines values for ModelBackend.
-const (
-	ModelBackendLlamacpp ModelBackend = "llamacpp"
-	ModelBackendMlx      ModelBackend = "mlx"
-	ModelBackendVllm     ModelBackend = "vllm"
-)
-
-// Valid indicates whether the value is a known member of the ModelBackend enum.
-func (e ModelBackend) Valid() bool {
-	switch e {
-	case ModelBackendLlamacpp:
-		return true
-	case ModelBackendMlx:
-		return true
-	case ModelBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ModelState.
 const (
 	ModelStateFailed   ModelState = "failed"
@@ -218,27 +203,6 @@ func (e ModelState) Valid() bool {
 	case ModelStateStopped:
 		return true
 	case ModelStateStopping:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ModelFitBackend.
-const (
-	ModelFitBackendLlamacpp ModelFitBackend = "llamacpp"
-	ModelFitBackendMlx      ModelFitBackend = "mlx"
-	ModelFitBackendVllm     ModelFitBackend = "vllm"
-)
-
-// Valid indicates whether the value is a known member of the ModelFitBackend enum.
-func (e ModelFitBackend) Valid() bool {
-	switch e {
-	case ModelFitBackendLlamacpp:
-		return true
-	case ModelFitBackendMlx:
-		return true
-	case ModelFitBackendVllm:
 		return true
 	default:
 		return false
@@ -274,28 +238,28 @@ func (e ModelFitRunMode) Valid() bool {
 
 // Defines values for ModelHealthState.
 const (
-	Failed   ModelHealthState = "failed"
-	Ready    ModelHealthState = "ready"
-	Shutdown ModelHealthState = "shutdown"
-	Starting ModelHealthState = "starting"
-	Stopped  ModelHealthState = "stopped"
-	Stopping ModelHealthState = "stopping"
+	ModelHealthStateFailed   ModelHealthState = "failed"
+	ModelHealthStateReady    ModelHealthState = "ready"
+	ModelHealthStateShutdown ModelHealthState = "shutdown"
+	ModelHealthStateStarting ModelHealthState = "starting"
+	ModelHealthStateStopped  ModelHealthState = "stopped"
+	ModelHealthStateStopping ModelHealthState = "stopping"
 )
 
 // Valid indicates whether the value is a known member of the ModelHealthState enum.
 func (e ModelHealthState) Valid() bool {
 	switch e {
-	case Failed:
+	case ModelHealthStateFailed:
 		return true
-	case Ready:
+	case ModelHealthStateReady:
 		return true
-	case Shutdown:
+	case ModelHealthStateShutdown:
 		return true
-	case Starting:
+	case ModelHealthStateStarting:
 		return true
-	case Stopped:
+	case ModelHealthStateStopped:
 		return true
-	case Stopping:
+	case ModelHealthStateStopping:
 		return true
 	default:
 		return false
@@ -317,18 +281,102 @@ func (e ModelListObject) Valid() bool {
 	}
 }
 
+// Defines values for ModelOperationErrorCode.
+const (
+	Cancelled        ModelOperationErrorCode = "cancelled"
+	DigestMismatch   ModelOperationErrorCode = "digest_mismatch"
+	DiskInsufficient ModelOperationErrorCode = "disk_insufficient"
+	Internal         ModelOperationErrorCode = "internal"
+	InvalidPlan      ModelOperationErrorCode = "invalid_plan"
+	RangeUnsupported ModelOperationErrorCode = "range_unsupported"
+	ReloadFailed     ModelOperationErrorCode = "reload_failed"
+	ShardIncomplete  ModelOperationErrorCode = "shard_incomplete"
+	UntrustedSource  ModelOperationErrorCode = "untrusted_source"
+)
+
+// Valid indicates whether the value is a known member of the ModelOperationErrorCode enum.
+func (e ModelOperationErrorCode) Valid() bool {
+	switch e {
+	case Cancelled:
+		return true
+	case DigestMismatch:
+		return true
+	case DiskInsufficient:
+		return true
+	case Internal:
+		return true
+	case InvalidPlan:
+		return true
+	case RangeUnsupported:
+		return true
+	case ReloadFailed:
+		return true
+	case ShardIncomplete:
+		return true
+	case UntrustedSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelOperationPhase.
+const (
+	ModelOperationPhaseCancelled    ModelOperationPhase = "cancelled"
+	ModelOperationPhaseDownloading  ModelOperationPhase = "downloading"
+	ModelOperationPhaseFailed       ModelOperationPhase = "failed"
+	ModelOperationPhaseInstalling   ModelOperationPhase = "installing"
+	ModelOperationPhasePreflighting ModelOperationPhase = "preflighting"
+	ModelOperationPhaseQueued       ModelOperationPhase = "queued"
+	ModelOperationPhaseRegistering  ModelOperationPhase = "registering"
+	ModelOperationPhaseReloading    ModelOperationPhase = "reloading"
+	ModelOperationPhaseResolving    ModelOperationPhase = "resolving"
+	ModelOperationPhaseSucceeded    ModelOperationPhase = "succeeded"
+	ModelOperationPhaseVerifying    ModelOperationPhase = "verifying"
+)
+
+// Valid indicates whether the value is a known member of the ModelOperationPhase enum.
+func (e ModelOperationPhase) Valid() bool {
+	switch e {
+	case ModelOperationPhaseCancelled:
+		return true
+	case ModelOperationPhaseDownloading:
+		return true
+	case ModelOperationPhaseFailed:
+		return true
+	case ModelOperationPhaseInstalling:
+		return true
+	case ModelOperationPhasePreflighting:
+		return true
+	case ModelOperationPhaseQueued:
+		return true
+	case ModelOperationPhaseRegistering:
+		return true
+	case ModelOperationPhaseReloading:
+		return true
+	case ModelOperationPhaseResolving:
+		return true
+	case ModelOperationPhaseSucceeded:
+		return true
+	case ModelOperationPhaseVerifying:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MtpMetadataSource.
 const (
-	Cmd    MtpMetadataSource = "cmd"
-	Config MtpMetadataSource = "config"
+	MtpMetadataSourceCmd    MtpMetadataSource = "cmd"
+	MtpMetadataSourceConfig MtpMetadataSource = "config"
 )
 
 // Valid indicates whether the value is a known member of the MtpMetadataSource enum.
 func (e MtpMetadataSource) Valid() bool {
 	switch e {
-	case Cmd:
+	case MtpMetadataSourceCmd:
 		return true
-	case Config:
+	case MtpMetadataSourceConfig:
 		return true
 	default:
 		return false
@@ -344,69 +392,6 @@ const (
 func (e MtpMetadataSpecType) Valid() bool {
 	switch e {
 	case DraftMtp:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OffloadRecommendationBackend.
-const (
-	OffloadRecommendationBackendLlamacpp OffloadRecommendationBackend = "llamacpp"
-	OffloadRecommendationBackendMlx      OffloadRecommendationBackend = "mlx"
-	OffloadRecommendationBackendVllm     OffloadRecommendationBackend = "vllm"
-)
-
-// Valid indicates whether the value is a known member of the OffloadRecommendationBackend enum.
-func (e OffloadRecommendationBackend) Valid() bool {
-	switch e {
-	case OffloadRecommendationBackendLlamacpp:
-		return true
-	case OffloadRecommendationBackendMlx:
-		return true
-	case OffloadRecommendationBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for RuntimeHealthBackend.
-const (
-	RuntimeHealthBackendLlamacpp RuntimeHealthBackend = "llamacpp"
-	RuntimeHealthBackendMlx      RuntimeHealthBackend = "mlx"
-	RuntimeHealthBackendVllm     RuntimeHealthBackend = "vllm"
-)
-
-// Valid indicates whether the value is a known member of the RuntimeHealthBackend enum.
-func (e RuntimeHealthBackend) Valid() bool {
-	switch e {
-	case RuntimeHealthBackendLlamacpp:
-		return true
-	case RuntimeHealthBackendMlx:
-		return true
-	case RuntimeHealthBackendVllm:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for RuntimeInfoBackend.
-const (
-	RuntimeInfoBackendLlamacpp RuntimeInfoBackend = "llamacpp"
-	RuntimeInfoBackendMlx      RuntimeInfoBackend = "mlx"
-	RuntimeInfoBackendVllm     RuntimeInfoBackend = "vllm"
-)
-
-// Valid indicates whether the value is a known member of the RuntimeInfoBackend enum.
-func (e RuntimeInfoBackend) Valid() bool {
-	switch e {
-	case RuntimeInfoBackendLlamacpp:
-		return true
-	case RuntimeInfoBackendMlx:
-		return true
-	case RuntimeInfoBackendVllm:
 		return true
 	default:
 		return false
@@ -530,6 +515,12 @@ type ApiModelsResponse struct {
 	Models []ApiModel `json:"models"`
 }
 
+// ArtifactRole What an install artifact is for. "projector" is a multimodal vision/audio projection file (llama.cpp mmproj); "other" covers auxiliary files (e.g. a chat template) that are not weights, a projector, a tokenizer, or config.
+type ArtifactRole string
+
+// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp. Extracted as a shared schema (like FitLevel — see the fit-hypothetical-models change) because RuntimeInfo, RuntimeHealth, Model, ConfigModelRequest, ConfigModelPatchRequest, OffloadRecommendation, ModelFit, and ModelRegistration all share this exact value set; leaving it duplicated inline let oapi-codegen's collision-avoidance dedup rename generated constants unpredictably whenever a new inline occurrence was added.
+type Backend string
+
 // CPUInfo defines model for CPUInfo.
 type CPUInfo struct {
 	Cores       *int       `json:"cores,omitempty"`
@@ -640,15 +631,15 @@ type ConfigModelPatchRequest struct {
 	Aliases *[]string `json:"aliases,omitempty"`
 
 	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
-	Backend               *ConfigModelPatchRequestBackend `json:"backend,omitempty"`
-	CacheTypeKDash        *string                         `json:"cache-type-k,omitempty"`
-	CacheTypeVDash        *string                         `json:"cache-type-v,omitempty"`
-	CacheTypeK            *string                         `json:"cache_type_k,omitempty"`
-	CacheTypeV            *string                         `json:"cache_type_v,omitempty"`
-	Cmd                   *string                         `json:"cmd,omitempty"`
-	ConcurrencyLimitCamel *int                            `json:"concurrencyLimit,omitempty"`
-	ConcurrencyLimit      *int                            `json:"concurrency_limit,omitempty"`
-	CpuOffloadGBDash      *int                            `json:"cpu-offload-gb,omitempty"`
+	Backend               *Backend `json:"backend,omitempty"`
+	CacheTypeKDash        *string  `json:"cache-type-k,omitempty"`
+	CacheTypeVDash        *string  `json:"cache-type-v,omitempty"`
+	CacheTypeK            *string  `json:"cache_type_k,omitempty"`
+	CacheTypeV            *string  `json:"cache_type_v,omitempty"`
+	Cmd                   *string  `json:"cmd,omitempty"`
+	ConcurrencyLimitCamel *int     `json:"concurrencyLimit,omitempty"`
+	ConcurrencyLimit      *int     `json:"concurrency_limit,omitempty"`
+	CpuOffloadGBDash      *int     `json:"cpu-offload-gb,omitempty"`
 
 	// CpuMoe Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). false removes the flag. llamacpp only.
 	CpuMoe *bool `json:"cpu_moe,omitempty"`
@@ -676,9 +667,6 @@ type ConfigModelPatchRequest struct {
 	Ttl            *int    `json:"ttl,omitempty"`
 }
 
-// ConfigModelPatchRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
-type ConfigModelPatchRequestBackend string
-
 // ConfigModelPatchRequest_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 type ConfigModelPatchRequest_Metadata struct {
 	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
@@ -691,8 +679,8 @@ type ConfigModelRequest struct {
 	Aliases *[]string `json:"aliases,omitempty"`
 
 	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
-	Backend *ConfigModelRequestBackend `json:"backend,omitempty"`
-	Cmd     string                     `json:"cmd"`
+	Backend *Backend `json:"backend,omitempty"`
+	Cmd     string   `json:"cmd"`
 
 	// CpuMoe Offload ALL MoE expert tensors to CPU/RAM (llama.cpp --cpu-moe). llamacpp only.
 	CpuMoe *bool `json:"cpu_moe,omitempty"`
@@ -710,9 +698,6 @@ type ConfigModelRequest struct {
 	OverrideTensor *string `json:"override_tensor,omitempty"`
 	Ttl            *int    `json:"ttl,omitempty"`
 }
-
-// ConfigModelRequestBackend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp.
-type ConfigModelRequestBackend string
 
 // ConfigModelResponse defines model for ConfigModelResponse.
 type ConfigModelResponse struct {
@@ -934,6 +919,21 @@ type InferenceInfo struct {
 	SlotsTotal *int `json:"slots_total,omitempty"`
 }
 
+// InstallArtifact defines model for InstallArtifact.
+type InstallArtifact struct {
+	// Digest Optional "sha256:<hex>" content digest. Verified after download when present; a missing digest is reported as weaker verification, not rejected outright (see design.md decision 4).
+	Digest *string `json:"digest,omitempty"`
+
+	// Path Repository-relative source path, e.g. "model-Q4_K_M-00001-of-00002.gguf". Never a full URL or a path outside the pinned repository/revision — resolved against source_repository/source_revision at plan-validation time.
+	Path string `json:"path"`
+
+	// Role What an install artifact is for. "projector" is a multimodal vision/audio projection file (llama.cpp mmproj); "other" covers auxiliary files (e.g. a chat template) that are not weights, a projector, a tokenizer, or config.
+	Role ArtifactRole `json:"role"`
+
+	// SizeBytes Expected size in bytes. Used for disk preflight and to detect a truncated or corrupt download; not itself a trust signal.
+	SizeBytes int64 `json:"size_bytes"`
+}
+
 // LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
 type LastError struct {
 	// At When the failure was recorded.
@@ -980,8 +980,8 @@ type MemoryInfo struct {
 // Model defines model for Model.
 type Model struct {
 	// Backend Inference backend type.
-	Backend       *ModelBackend `json:"backend,omitempty"`
-	ContextLength *int          `json:"context_length,omitempty"`
+	Backend       *Backend `json:"backend,omitempty"`
+	ContextLength *int     `json:"context_length,omitempty"`
 
 	// CpuMoe True when --cpu-moe is present in the model command (all MoE experts offloaded to CPU).
 	CpuMoe *bool `json:"cpu_moe,omitempty"`
@@ -1022,9 +1022,6 @@ type Model struct {
 	State *ModelState `json:"state,omitempty"`
 }
 
-// ModelBackend Inference backend type.
-type ModelBackend string
-
 // Model_Metadata Optional capability metadata for this model. llama-skein extension for MTP and other runtime capabilities.
 type Model_Metadata struct {
 	// Mtp Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
@@ -1038,7 +1035,7 @@ type ModelState string
 // ModelFit Fit of one model to THIS host: whether it runs, how well, and the max SAFE context (output- and overhead-reserved). Ported from llmfit fit.rs ModelFit.
 type ModelFit struct {
 	// Backend Inference backend.
-	Backend ModelFitBackend `json:"backend"`
+	Backend Backend `json:"backend"`
 
 	// ConfiguredCtx Current --ctx-size in the model command (the KV allocation / hard n_ctx).
 	ConfiguredCtx *int `json:"configured_ctx,omitempty"`
@@ -1083,9 +1080,6 @@ type ModelFit struct {
 	VramTotalMb *int `json:"vram_total_mb,omitempty"`
 }
 
-// ModelFitBackend Inference backend.
-type ModelFitBackend string
-
 // ModelFitRunMode How the model would run given memory.
 type ModelFitRunMode string
 
@@ -1102,6 +1096,18 @@ type ModelHealth struct {
 // ModelHealthState defines model for ModelHealth.State.
 type ModelHealthState string
 
+// ModelInstallPlan An immutable installation plan (design.md decision 2). The server validates and snapshots this into a ModelOperation with a host-generated ID; the plan itself is never mutated after submission.
+type ModelInstallPlan struct {
+	Artifacts    []InstallArtifact `json:"artifacts"`
+	Registration ModelRegistration `json:"registration"`
+
+	// SourceRepository e.g. "unsloth/Qwen3.6-35B-A3B-GGUF". A display name or mutable branch reference is not artifact identity — see source_revision.
+	SourceRepository string `json:"source_repository"`
+
+	// SourceRevision Immutable revision (commit SHA), not a mutable branch name. Required so a plan identifies exact, reproducible source content.
+	SourceRevision string `json:"source_revision"`
+}
+
 // ModelList defines model for ModelList.
 type ModelList struct {
 	Data   []Model         `json:"data"`
@@ -1110,6 +1116,72 @@ type ModelList struct {
 
 // ModelListObject defines model for ModelList.Object.
 type ModelListObject string
+
+// ModelOperation Server-assigned record for one installation. GET returns a snapshot; an event stream (added in a later task) supplies incremental updates using this same vocabulary.
+type ModelOperation struct {
+	Artifacts []ModelOperationArtifactProgress `json:"artifacts"`
+
+	// BytesDownloaded Aggregate across all artifacts.
+	BytesDownloaded int64 `json:"bytes_downloaded"`
+
+	// BytesTotal Aggregate across all artifacts; omitted if any artifact's total is unknown.
+	BytesTotal *int64    `json:"bytes_total,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// Error Typed terminal error for a failed operation. "code" is a stable identifier automation can branch on; "message" is the human-readable detail (never includes an auth token — see design.md decision 7).
+	Error *ModelOperationError `json:"error,omitempty"`
+
+	// Id Host-generated operation ID, assigned when the plan is accepted. Stable across client disconnect/reconnect.
+	Id string `json:"id"`
+
+	// ModelId Present once registration succeeds; absent before then.
+	ModelId *string `json:"model_id,omitempty"`
+
+	// Phase Host-local operation state machine (design.md decision 3). "succeeded", "cancelled", and "failed" are the only terminal phases; every other phase can still transition to "cancelled" or "failed".
+	Phase     ModelOperationPhase `json:"phase"`
+	UpdatedAt time.Time           `json:"updated_at"`
+
+	// Warnings Non-terminal warnings, e.g. a digest that could not be verified but size matched.
+	Warnings *[]string `json:"warnings,omitempty"`
+}
+
+// ModelOperationArtifactProgress defines model for ModelOperationArtifactProgress.
+type ModelOperationArtifactProgress struct {
+	BytesDownloaded int64 `json:"bytes_downloaded"`
+
+	// BytesTotal Omitted when the artifact's expected size could not be confirmed (weaker verification path); present whenever the plan's InstallArtifact.size_bytes was trusted.
+	BytesTotal *int64 `json:"bytes_total,omitempty"`
+	Path       string `json:"path"`
+}
+
+// ModelOperationError Typed terminal error for a failed operation. "code" is a stable identifier automation can branch on; "message" is the human-readable detail (never includes an auth token — see design.md decision 7).
+type ModelOperationError struct {
+	// Code "range_unsupported" means the origin could not honor a resume request and a full restart was required, not that the operation failed outright — it only becomes a terminal error if the restart itself then fails.
+	Code    ModelOperationErrorCode `json:"code"`
+	Message string                  `json:"message"`
+}
+
+// ModelOperationErrorCode "range_unsupported" means the origin could not honor a resume request and a full restart was required, not that the operation failed outright — it only becomes a terminal error if the restart itself then fails.
+type ModelOperationErrorCode string
+
+// ModelOperationPhase Host-local operation state machine (design.md decision 3). "succeeded", "cancelled", and "failed" are the only terminal phases; every other phase can still transition to "cancelled" or "failed".
+type ModelOperationPhase string
+
+// ModelRegistration defines model for ModelRegistration.
+type ModelRegistration struct {
+	// Backend Inference backend the registered model will run under. Matches ConfigModelRequest.backend's vocabulary — installation registers through the same config path load/unload already use, not a separate mechanism.
+	Backend     Backend `json:"backend"`
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// Flags Raw backend command-line flags to apply at registration, e.g. "--n-gpu-layers", "999". A minimal passthrough for the first slice; ConfigModelRequest's typed fields (n_cpu_moe, cpu_moe, cpu_offload_gb, override_tensor) remain the richer path for anything that needs validation beyond "is this a string".
+	Flags *[]string `json:"flags,omitempty"`
+
+	// ModelId The config/model ID to register once every required artifact is installed. Must be a valid, not-already-configured ID; the plan is rejected before any download starts otherwise.
+	ModelId string `json:"model_id"`
+
+	// Ttl Idle-unload TTL in seconds, same semantics as ConfigModelRequest.ttl.
+	Ttl *int `json:"ttl,omitempty"`
+}
 
 // MtpMetadata Multi-Token Prediction (MTP) capability for llama.cpp models. Enables running supported GGUF models with draft model guidance for multi-token prediction.
 type MtpMetadata struct {
@@ -1147,7 +1219,7 @@ type OffloadRecommendation struct {
 	Applicable bool `json:"applicable"`
 
 	// Backend Inference backend the recommendation targets.
-	Backend OffloadRecommendationBackend `json:"backend"`
+	Backend Backend `json:"backend"`
 
 	// CtxSize Context length assumed for the KV-cache portion of the estimate.
 	CtxSize *int `json:"ctx_size,omitempty"`
@@ -1167,9 +1239,6 @@ type OffloadRecommendation struct {
 	// VramFreeMb Free VRAM (MB) used for the calculation; falls back to system RAM when no GPU is present.
 	VramFreeMb *int `json:"vram_free_mb,omitempty"`
 }
-
-// OffloadRecommendationBackend Inference backend the recommendation targets.
-type OffloadRecommendationBackend string
 
 // PowerProfile defines model for PowerProfile.
 type PowerProfile struct {
@@ -1221,24 +1290,20 @@ type RunningResponse struct {
 
 // RuntimeHealth defines model for RuntimeHealth.
 type RuntimeHealth struct {
-	Backend RuntimeHealthBackend `json:"backend"`
-	Healthy bool                 `json:"healthy"`
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp. Extracted as a shared schema (like FitLevel — see the fit-hypothetical-models change) because RuntimeInfo, RuntimeHealth, Model, ConfigModelRequest, ConfigModelPatchRequest, OffloadRecommendation, ModelFit, and ModelRegistration all share this exact value set; leaving it duplicated inline let oapi-codegen's collision-avoidance dedup rename generated constants unpredictably whenever a new inline occurrence was added.
+	Backend Backend `json:"backend"`
+	Healthy bool    `json:"healthy"`
 }
-
-// RuntimeHealthBackend defines model for RuntimeHealth.Backend.
-type RuntimeHealthBackend string
 
 // RuntimeInfo defines model for RuntimeInfo.
 type RuntimeInfo struct {
-	Backend   RuntimeInfoBackend `json:"backend"`
-	Detail    *string            `json:"detail,omitempty"`
-	Error     *string            `json:"error,omitempty"`
-	Installed bool               `json:"installed"`
-	Version   *string            `json:"version,omitempty"`
+	// Backend Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp. Extracted as a shared schema (like FitLevel — see the fit-hypothetical-models change) because RuntimeInfo, RuntimeHealth, Model, ConfigModelRequest, ConfigModelPatchRequest, OffloadRecommendation, ModelFit, and ModelRegistration all share this exact value set; leaving it duplicated inline let oapi-codegen's collision-avoidance dedup rename generated constants unpredictably whenever a new inline occurrence was added.
+	Backend   Backend `json:"backend"`
+	Detail    *string `json:"detail,omitempty"`
+	Error     *string `json:"error,omitempty"`
+	Installed bool    `json:"installed"`
+	Version   *string `json:"version,omitempty"`
 }
-
-// RuntimeInfoBackend defines model for RuntimeInfo.Backend.
-type RuntimeInfoBackend string
 
 // RuntimeInstallRequest defines model for RuntimeInstallRequest.
 type RuntimeInstallRequest struct {

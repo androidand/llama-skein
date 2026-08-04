@@ -14,8 +14,33 @@
       (model detail/delete/load/unload/unload-all/pull/context-recommendation,
       plus the legacy `/unload`) — expected, since formalizing exactly these
       is this change's own purpose. Mapped each to the section that owns it.
-- [ ] 1.3 Define capability, artifact role, install plan, model operation,
+- [x] 1.3 Define capability, artifact role, install plan, model operation,
   progress, outcome, and typed error schemas in OpenAPI.
+      — Added ArtifactRole, InstallArtifact, ModelRegistration, ModelInstallPlan
+      (design.md decision 2), ModelOperationPhase, ModelOperationArtifactProgress
+      (progress), ModelOperationError (typed error), ModelOperation (outcome —
+      no separate schema needed, it's ModelOperation's terminal shape). Capability
+      document reused as-is (Capabilities schema already existed and is generic
+      enough). Schemas only, no paths yet — that's 2.3/1.4.
+      — Real bug found and fixed along the way: oapi-codegen prunes schemas with
+      no path reference by default, silently dropping all of these until
+      `skip-prune` was added to doc.go's go:generate line — the workflow
+      design.md itself prescribes (schemas before endpoints) doesn't work
+      without it. Also hit the exact FitLevel-shaped collision from 1.6 again:
+      ModelRegistration.backend's llamacpp/mlx/vllm enum collided with 7
+      existing inline duplicates of the same value set (RuntimeInfo,
+      RuntimeHealth, Model, ConfigModelRequest, ConfigModelPatchRequest,
+      OffloadRecommendation, ModelFit), so oapi-codegen's dedup renamed
+      already-relied-upon constants (UpgradeRuntimeParamsBackendLlamacpp →
+      bare Llamacpp) despite none of them being touched. Fixed properly this
+      time instead of working around it: extracted a shared Backend schema,
+      migrated all 8 usages to $ref it, updated the 5 real call sites plus the
+      one test file that referenced now-renamed identifiers. Left
+      HypotheticalFitRequest/Response's narrower 2-value backend enum alone —
+      it's deliberately missing vllm (no hypothetical-fit scoring for it), not
+      the same concept.
+      — Full go build/vet/test ./... green, opencode-skein TS client
+      regenerates and typechecks clean, 86/86 opencode-skein local tests pass.
 - [ ] 1.4 Add generated lifecycle and operation client methods; regenerate Go
   clients and validate the opencode-skein TypeScript generation path.
 

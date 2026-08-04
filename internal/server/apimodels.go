@@ -260,7 +260,7 @@ func (s *Server) handleAPIOffloadRecommendation(w http.ResponseWriter, r *http.R
 		backend = config.BackendLlamaCpp
 	}
 	resp := apicontract.OffloadRecommendation{
-		Backend: apicontract.OffloadRecommendationBackend(backend),
+		Backend: apicontract.Backend(backend),
 	}
 
 	if backend != config.BackendLlamaCpp {
