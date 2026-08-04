@@ -97,8 +97,29 @@
       ordering, corrupt-file skip, prune bound/exemption). go build/vet/test
       ./... green (27/27 in internal/operation, full suite otherwise
       unaffected).
-- [ ] 2.3 Add operation create/get/list/event-stream/cancel handlers through
+- [x] 2.3 Add operation create/get/list/event-stream/cancel handlers through
   generated contract types.
+      — internal/server/apimodeloperations.go, wired into the 5 paths added
+      in 1.4. Create validates request shape only (empty/missing fields,
+      non-positive sizes) — the trust-boundary checks from design.md decision
+      7 (HTTPS-only sources, destination containment, already-configured
+      model_id collision) land with the actual execution path in a later
+      task, once there's somewhere for them to run before download starts.
+      Cancel is idempotent and returns 409 (not 404/silent no-op) if the
+      operation already reached a *different* terminal phase. Event stream
+      is SSE via polling the store every 500ms — no pub/sub exists yet, and
+      every operation is also reachable via GET, so a missed/delayed event
+      is staleness, not data loss. Server.operationStore is nil-guarded
+      (503) rather than a possible panic if ~/.llama-skein/operations
+      couldn't be created at startup — logged as a warning there, inference
+      still starts.
+      18 new handler tests (valid/invalid plan shapes, get/list/cancel
+      including idempotency and 404s, stream framing and content-type,
+      every handler's 503-when-unavailable path). Full go build/vet/test
+      ./... green (one proxy/ test failure observed and confirmed flaky —
+      passes in isolation and on a clean full-suite rerun — unrelated to
+      this change, a process-spawn timing test under heavy concurrent
+      system load).
 - [ ] 2.4 Recover interrupted nonterminal operations at startup and expose
   resumable partial-artifact information.
 - [ ] 2.5 Redact tokens and sensitive request headers from records, logs, and

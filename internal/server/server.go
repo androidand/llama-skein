@@ -15,6 +15,7 @@ import (
 	"github.com/androidand/llama-skein/internal/chain"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/logmon"
+	"github.com/androidand/llama-skein/internal/operation"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/thermal"
@@ -32,12 +33,13 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf         *perf.Monitor
-	inflight     *inflightCounter
-	metrics      *metricsMonitor
-	silentMode   *thermal.Manager
-	profileStore *ProfileStore
-	build        BuildInfo
+	perf           *perf.Monitor
+	inflight       *inflightCounter
+	metrics        *metricsMonitor
+	silentMode     *thermal.Manager
+	profileStore   *ProfileStore
+	operationStore *operation.Store
+	build          BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -196,19 +198,28 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		profilePath = filepath.Join(home, ".llama-skein", "skein", "profile.json")
 	}
 
+	operationStore, storeErr := newOperationStore()
+	if storeErr != nil {
+		// A missing/unwritable state directory shouldn't stop llama-skein from
+		// serving inference — model management degrades, everything else does
+		// not. Logged, not fatal.
+		proxylog.Warnf("model operations disabled: %v", storeErr)
+	}
+
 	s := &Server{
-		cfg:          cfg,
-		muxlog:       muxlog,
-		proxylog:     proxylog,
-		upstreamlog:  upstreamlog,
-		perf:         perfMon,
-		inflight:     &inflightCounter{},
-		metrics:      newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		silentMode:   silentMgr,
-		profileStore: NewProfileStore(profilePath),
-		build:        build,
-		shutdownCtx:  shutdownCtx,
-		shutdownFn:   shutdownFn,
+		cfg:            cfg,
+		muxlog:         muxlog,
+		proxylog:       proxylog,
+		upstreamlog:    upstreamlog,
+		perf:           perfMon,
+		inflight:       &inflightCounter{},
+		metrics:        newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		silentMode:     silentMgr,
+		profileStore:   NewProfileStore(profilePath),
+		operationStore: operationStore,
+		build:          build,
+		shutdownCtx:    shutdownCtx,
+		shutdownFn:     shutdownFn,
 	}
 
 	// Re-apply the persisted profile (if the operator ever saved one via
@@ -379,6 +390,15 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/fit/{model...}", apiChain.ThenFunc(s.handleAPIModelFit))
 	mux.Handle("POST /api/fit/hypothetical", apiChain.ThenFunc(s.handleAPIHypotheticalFit))
 	mux.Handle("GET /api/models/offload/{model...}", apiChain.ThenFunc(s.handleAPIOffloadRecommendation))
+	// Model operations (openspec/changes/host-model-management-api). Literal
+	// paths registered ahead of the /api/models/{model...} wildcard below;
+	// Go 1.22's ServeMux resolves by pattern specificity regardless of
+	// registration order, but the grouping still reads better this way.
+	mux.Handle("POST /api/models/operations", apiChain.ThenFunc(s.handleAPICreateModelOperation))
+	mux.Handle("GET /api/models/operations", apiChain.ThenFunc(s.handleAPIListModelOperations))
+	mux.Handle("GET /api/models/operations/{id}", apiChain.ThenFunc(s.handleAPIGetModelOperation))
+	mux.Handle("POST /api/models/operations/{id}/cancel", apiChain.ThenFunc(s.handleAPICancelModelOperation))
+	mux.Handle("GET /api/models/operations/{id}/events", apiChain.ThenFunc(s.handleAPIStreamModelOperationEvents))
 	mux.Handle("GET /api/models/{model...}", apiChain.ThenFunc(s.handleAPIGetModel))
 	mux.Handle("DELETE /api/models/{model...}", apiChain.ThenFunc(s.handleAPIDeleteModel))
 	mux.Handle("POST /api/models/load/{model...}", apiChain.ThenFunc(s.handleAPILoadModel))
