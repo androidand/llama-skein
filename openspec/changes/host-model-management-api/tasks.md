@@ -467,7 +467,41 @@
       `go test ./internal/operation/... ./internal/server/... -race
       -count=1` green (417 tests). `make check-codegen` passes with no
       diff — no OpenAPI schema touched by this task.
-- [ ] 4.4 Verify final sizes and available digests before installation.
+- [x] 4.4 Verify final sizes and available digests before installation.
+      `internal/operation/executor.go`'s `verify` (size check, from 4.1)
+      now also calls new `verifyDigest(path, want string) error` for every
+      artifact whose plan supplied a `Digest`: streams the `.part` file
+      through `crypto/sha256` (not read into memory — these are GGUF
+      weight files, often tens of gigabytes) and compares hex output
+      against the declared `"sha256:<hex>"` string, case-insensitively.
+      A mismatch fails the operation with `ErrorDigestMismatch` (same code
+      the size check already used — the OpenAPI error enum has no separate
+      code, per design.md decision 4 point 5 grouping size+digest under one
+      verification step) and, matching every other verify failure, leaves
+      the `.part` file in place rather than deleting it.
+      When an artifact has no `Digest` (`InstallArtifact.digest`'s own doc
+      comment: "a missing digest is reported as weaker verification, not
+      rejected outright"), the artifact is still accepted on size alone,
+      but a warning is now recorded on the operation
+      (`"<path>: verified by size only; no digest was provided"`) rather
+      than silently treating size-only verification as equivalent to a
+      real digest check.
+      Tests: 4 new cases in `internal/operation/executor_test.go` — a
+      matching digest (no warning), a mismatched digest (operation fails,
+      `.part` retained with the actual wrong-but-real bytes, same pattern
+      as 4.1's size-mismatch test), the no-digest-provided path (exactly
+      one size-only warning), and `verifyDigest` rejecting a non-"sha256:"
+      form directly. Updated the three 4.3 range-resume tests' warning-
+      count assertions, which had been written assuming zero verification
+      warnings existed yet — none of those tests' plans set `Digest`, so
+      each now also picks up the new size-only warning alongside whatever
+      it was already asserting about range-resume warnings.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1341 tests, 31 packages);
+      `go test ./internal/operation/... ./internal/server/... -race
+      -count=1` green (421 tests). `make check-codegen` passes with no
+      diff — no OpenAPI schema touched by this task.
+- [ ] 4.5 Download and verify shard/auxiliary sets as one operation and
 - [ ] 4.5 Download and verify shard/auxiliary sets as one operation and
   register only after all required artifacts succeed.
 - [ ] 4.6 Implement explicit cancellation policy and abandoned-partial cleanup.

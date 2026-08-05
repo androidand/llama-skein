@@ -3,12 +3,15 @@ package operation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -400,8 +403,11 @@ func TestExecutor_Run_ResumesFromAnExistingPartialFileViaRangeRequest(t *testing
 	if !bytes.Equal(gotContent, full) {
 		t.Fatalf("installed content = %q, want %q", gotContent, full)
 	}
-	if len(op.Warnings) != 0 {
-		t.Fatalf("Warnings = %v, want none for a successful resume", op.Warnings)
+	// One warning is expected here — task 4.4's "verified by size only; no
+	// digest was provided" (this test's plan never sets Artifact.Digest) —
+	// not a range_unsupported one: the resume itself succeeded cleanly.
+	if len(op.Warnings) != 1 || !strings.Contains(op.Warnings[0], "verified by size only") {
+		t.Fatalf("Warnings = %v, want exactly one size-only-verification warning and no range warning", op.Warnings)
 	}
 }
 
@@ -448,8 +454,14 @@ func TestExecutor_Run_RestartsWhenOriginIgnoresTheRangeRequest(t *testing.T) {
 	if !bytes.Equal(gotContent, full) {
 		t.Fatalf("installed content = %q, want %q (stale partial bytes must not leak into the result)", gotContent, full)
 	}
-	if len(op.Warnings) != 1 {
-		t.Fatalf("Warnings = %v, want exactly one range_unsupported-style warning", op.Warnings)
+	// Two warnings: the range_unsupported-style restart warning, plus task
+	// 4.4's size-only-verification warning (this test's plan never sets
+	// Artifact.Digest either).
+	if len(op.Warnings) != 2 {
+		t.Fatalf("Warnings = %v, want exactly two (range restart + size-only verification)", op.Warnings)
+	}
+	if !strings.Contains(op.Warnings[0], "did not honor a resume request") {
+		t.Fatalf("Warnings[0] = %q, want a range_unsupported-style message", op.Warnings[0])
 	}
 }
 
@@ -502,8 +514,10 @@ func TestExecutor_Run_RestartsOn416RangeNotSatisfiable(t *testing.T) {
 	if !bytes.Equal(gotContent, full) {
 		t.Fatalf("installed content = %q, want %q", gotContent, full)
 	}
-	if len(op.Warnings) != 1 {
-		t.Fatalf("Warnings = %v, want exactly one warning", op.Warnings)
+	// Same two-warnings shape as the 200-ignores-range test above (range
+	// restart + size-only verification).
+	if len(op.Warnings) != 2 {
+		t.Fatalf("Warnings = %v, want exactly two (range restart + size-only verification)", op.Warnings)
 	}
 }
 
@@ -543,5 +557,123 @@ func TestExecutor_Run_SkipsTheNetworkEntirelyWhenThePartialAlreadyMatchesTheDecl
 	}
 	if !bytes.Equal(gotContent, full) {
 		t.Fatalf("installed content = %q, want %q", gotContent, full)
+	}
+}
+
+func sha256Digest(content []byte) string {
+	sum := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestExecutor_Run_AcceptsAMatchingDigestWithNoVerificationWarning(t *testing.T) {
+	content := []byte("weights that match their declared digest exactly")
+	digest := sha256Digest(content)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts: []Artifact{
+			{Path: "model.gguf", SizeBytes: int64(len(content)), Digest: &digest, Role: ArtifactRoleWeights},
+		},
+		Registration: Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if len(op.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want none — a matching digest was provided, so there is nothing weaker to report", op.Warnings)
+	}
+}
+
+func TestExecutor_Run_FailsOnAMismatchedDigestAndRetainsThePartialFile(t *testing.T) {
+	content := []byte("actual downloaded bytes")
+	wrongDigest := sha256Digest([]byte("a completely different expected content"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts: []Artifact{
+			{Path: "model.gguf", SizeBytes: int64(len(content)), Digest: &wrongDigest, Role: ArtifactRoleWeights},
+		},
+		Registration: Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseFailed {
+		t.Fatalf("Phase = %s, want failed", op.Phase)
+	}
+	if op.Error == nil || op.Error.Code != ErrorDigestMismatch {
+		t.Fatalf("Error = %+v, want ErrorDigestMismatch", op.Error)
+	}
+
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("final file should not exist when the digest fails to verify, stat err = %v", err)
+	}
+	partial, err := os.ReadFile(dest + ".part")
+	if err != nil {
+		t.Fatalf("partial file should be retained on digest-verify failure: %v", err)
+	}
+	if !bytes.Equal(partial, content) {
+		t.Fatalf("retained partial content = %q, want %q", partial, content)
+	}
+}
+
+func TestExecutor_Run_ReportsWeakerVerificationWhenNoDigestIsProvided(t *testing.T) {
+	content := []byte("weights with no digest in the plan at all")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(content)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if len(op.Warnings) != 1 || !strings.Contains(op.Warnings[0], "verified by size only") {
+		t.Fatalf("Warnings = %v, want exactly one size-only-verification warning", op.Warnings)
+	}
+}
+
+func TestVerifyDigest_RejectsAnUnsupportedDigestForm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(path, []byte("content"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	if err := verifyDigest(path, "md5:deadbeef"); err == nil {
+		t.Fatal("verifyDigest() = nil, want an error for a non-sha256 digest form")
 	}
 }

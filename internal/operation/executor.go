@@ -2,11 +2,14 @@ package operation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -24,10 +27,9 @@ type Registrar func(op *Operation, weightsPath string) error
 //
 // This started as task 4.1's single-artifact vertical slice (migration plan
 // step 3: "one unsharded GGUF vertical slice") and now also carries task
-// 4.3's HTTP range resume (downloadOne/fetchArtifact) — deliberately still
-// not the full design.md decision 4 flow:
-//   - no digest verification (task 4.4): Artifact.Digest is carried on the
-//     operation record but not read here, only the declared size is checked;
+// 4.3's HTTP range resume (downloadOne/fetchArtifact) and task 4.4's digest
+// verification (verify/verifyDigest) — deliberately still not the full
+// design.md decision 4 flow:
 //   - no shard/auxiliary-set-aware install ordering (task 4.5): multiple
 //     artifacts download and install fine, but nothing here groups shards or
 //     treats a set specially;
@@ -53,9 +55,11 @@ type Registrar func(op *Operation, weightsPath string) error
 // What it does provide: real download execution moved behind the state
 // machine (the vertical slice task 4.1 asked for), atomic final rename
 // (fsync during download, rename during install), HTTP range resume with
-// restart fallback (task 4.3), and a Run call that is not tied to any HTTP
-// request's context — the caller (internal/server) passes a context whose
-// lifetime is the server process, not the request that created the
+// restart fallback (task 4.3), SHA-256 digest verification when the plan
+// provided one and a recorded warning when it didn't (task 4.4), and a Run
+// call that is not tied to any HTTP request's context — the caller
+// (internal/server) passes a context whose lifetime is the server process,
+// not the request that created the
 // operation. That decoupling is what lets a downloaded partial file survive
 // the client disconnecting, which is task 4.2's core requirement; task 4.2
 // additionally wants partials retained across a later *retry*, and 4.3's
@@ -463,12 +467,12 @@ func (e *Executor) saveProgress(op *Operation, index int, written int64) {
 }
 
 // verify checks each downloaded ".part" file's actual size against its
-// declared BytesTotal. Digest verification (task 4.4) is not implemented
-// yet; ErrorDigestMismatch is reused for a size mismatch too because the
-// OpenAPI error-code enum (contracts/llama-skein.openapi.json) has no
-// separate "size mismatch" code — design.md decision 4 point 5 groups
-// "declared size and digest" under one verification step, not two distinct
-// failure reasons.
+// declared BytesTotal, then its content against its declared Digest when
+// one was provided (task 4.4). ErrorDigestMismatch is reused for a size
+// mismatch too because the OpenAPI error-code enum
+// (contracts/llama-skein.openapi.json) has no separate "size mismatch"
+// code — design.md decision 4 point 5 groups "declared size and digest"
+// under one verification step, not two distinct failure reasons.
 func (e *Executor) verify(op *Operation, resolved []resolvedArtifact) *Error {
 	for i, r := range resolved {
 		partial := r.dest + ".part"
@@ -481,6 +485,48 @@ func (e *Executor) verify(op *Operation, resolved []resolvedArtifact) *Error {
 			return &Error{Code: ErrorDigestMismatch, Message: fmt.Sprintf(
 				"%s: downloaded %d bytes, expected %d", op.Artifacts[i].Path, fi.Size(), *want)}
 		}
+
+		digest := op.Artifacts[i].Digest
+		if digest == nil {
+			// InstallArtifact.digest's own doc comment (and design.md
+			// decision 4 point 5): "a missing digest is reported as weaker
+			// verification, not rejected outright" — size-only verification
+			// is accepted, but the fact that it's weaker is recorded, not
+			// silently assumed away.
+			op.Warnings = append(op.Warnings, fmt.Sprintf(
+				"%s: verified by size only; no digest was provided", op.Artifacts[i].Path))
+			continue
+		}
+		if err := verifyDigest(partial, *digest); err != nil {
+			return &Error{Code: ErrorDigestMismatch, Message: fmt.Sprintf("%s: %v", op.Artifacts[i].Path, err)}
+		}
+	}
+	return nil
+}
+
+// verifyDigest hashes path's content and compares it against want, a
+// "sha256:<hex>" string — the only form InstallArtifact.digest documents,
+// already shape-checked at plan-acceptance time by validateInstallPlan's
+// digestRe, but re-parsed defensively here rather than trusted blind.
+// Streams the file through the hash instead of reading it into memory:
+// artifacts here are GGUF weight files, often tens of gigabytes.
+func verifyDigest(path, want string) error {
+	hexWant, ok := strings.CutPrefix(want, "sha256:")
+	if !ok {
+		return fmt.Errorf("unsupported digest form %q (only \"sha256:<hex>\" is accepted)", want)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open for digest verification: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("read for digest verification: %w", err)
+	}
+	gotHex := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(gotHex, hexWant) {
+		return fmt.Errorf("digest mismatch: got sha256:%s, want %s", gotHex, want)
 	}
 	return nil
 }
