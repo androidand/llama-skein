@@ -26,6 +26,15 @@ const eventStreamPollInterval = 500 * time.Millisecond
 // there is real download/install traffic to observe pruning against.
 const maxTerminalOperations = 50
 
+// defaultDiskSafetyReserveBytes is the headroom validateInstallPlan leaves
+// on top of the plan's own artifact bytes (design.md decision 4). Not
+// user-configurable yet — there is no config field for it and no task in
+// this change asks for one; 5 GiB is a placeholder sized to comfortably
+// cover a llama.cpp build's own working files (KV cache spill, logs) on a
+// host disk, not a value derived from measurement. A later task can promote
+// this to a config field if a fixed constant proves wrong in practice.
+const defaultDiskSafetyReserveBytes = 5 << 30
+
 func newOperationStore() (*operation.Store, error) {
 	dir, err := operation.DefaultStateDir()
 	if err != nil {
@@ -103,6 +112,7 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan, modelsDir string) st
 		return "at least one artifact is required"
 	}
 	hasWeights := false
+	var totalBytes int64
 	for _, artifact := range plan.Artifacts {
 		if artifact.Path == "" {
 			return "every artifact needs a path"
@@ -110,6 +120,7 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan, modelsDir string) st
 		if artifact.SizeBytes <= 0 {
 			return "every artifact needs a positive size_bytes"
 		}
+		totalBytes += artifact.SizeBytes
 		if artifact.Digest != nil && !digestRe.MatchString(*artifact.Digest) {
 			return fmt.Sprintf("artifact %s: digest must be \"sha256:\" followed by 64 hex characters", artifact.Path)
 		}
@@ -127,6 +138,17 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan, modelsDir string) st
 	}
 	if !hasWeights {
 		return "at least one artifact must have role \"weights\""
+	}
+	// Disk preflight needs a real directory to statfs; skipped when modelsDir
+	// is unknown, same as the destination-containment check above (task 3.3).
+	// remainingBytes is the plan's full artifact total — this is the initial
+	// create path, not a resume, so "remaining" and "total" coincide here
+	// (see CheckDiskPreflight's doc comment for the distinction that matters
+	// once resume, task 4.x, exists).
+	if modelsDir != "" {
+		if err := operation.CheckDiskPreflight(modelsDir, totalBytes, defaultDiskSafetyReserveBytes); err != nil {
+			return err.Error()
+		}
 	}
 	if plan.Registration.ModelId == "" {
 		return "registration.model_id is required"

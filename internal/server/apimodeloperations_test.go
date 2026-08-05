@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -237,6 +238,56 @@ func TestHandleCreateModelOperation_AcceptsAWellFormedDigest(t *testing.T) {
 	s.handler.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleCreateModelOperation_RejectsAPlanExceedingAvailableDiskSpace
+// proves the disk preflight (task 3.4, design.md decision 4) is wired into
+// the handler. It asks for far more space than any real machine running
+// this test suite has free, rather than mocking availableDiskSpace, so the
+// test exercises the real syscall path end to end.
+func TestHandleCreateModelOperation_RejectsAPlanExceedingAvailableDiskSpace(t *testing.T) {
+	s := newOperationTestServer(t)
+	const impossiblyLargeSizeBytes = 1 << 62 // ~4.6 exabytes
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [{"path": "model.gguf", "size_bytes": ` + fmt.Sprint(impossiblyLargeSizeBytes) + `, "role": "weights"}],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient disk space") {
+		t.Fatalf("body = %s, want it to mention insufficient disk space", w.Body.String())
+	}
+}
+
+// TestHandleCreateModelOperation_SkipsDiskPreflightWhenModelsDirUnknown
+// proves the same skip-when-unknown behavior task 3.3 established for
+// destination-containment: an operator running without a configured
+// modelsDir gets no disk check rather than a spurious failure trying to
+// statfs an empty path.
+func TestHandleCreateModelOperation_SkipsDiskPreflightWhenModelsDirUnknown(t *testing.T) {
+	s := newOperationTestServer(t)
+	s.cfg.ModelsDir = ""
+	const impossiblyLargeSizeBytes = 1 << 62
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [{"path": "model.gguf", "size_bytes": ` + fmt.Sprint(impossiblyLargeSizeBytes) + `, "role": "weights"}],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (disk preflight should be skipped); body: %s", w.Code, w.Body.String())
 	}
 }
 

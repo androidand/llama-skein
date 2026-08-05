@@ -251,8 +251,49 @@
       containment case) + 7 handler-level tests (no-weights rejection,
       4 malformed-digest shapes, well-formed-digest acceptance). Full go
       build/vet/test ./... green (25/25 in the operations handler suite).
-- [ ] 3.4 Add disk-space preflight for remaining bytes plus configurable
+- [x] 3.4 Add disk-space preflight for remaining bytes plus configurable
   safety reserve.
+      New `internal/operation/diskspace.go`: `DiskSpace{AvailableBytes,
+      TotalBytes}`, `ErrInsufficientDisk`, `CheckDiskPreflight(dir,
+      remainingBytes, safetyReserveBytes int64) error` — split into a thin
+      OS-calling wrapper and a pure `evaluateDiskPreflight` decision function
+      so the space-vs-need arithmetic is testable without depending on the
+      test machine's actual free space. `remainingBytes` is documented as
+      "bytes still needed" (not "total") because a future resume (section 4)
+      will pass what's left after a partial download; for this task's
+      create-only call site the two coincide.
+      New `internal/operation/diskspace_unix.go` (`syscall.Statfs`, mirrors
+      `internal/server/disk_unix.go`'s `storageStats`) and
+      `diskspace_windows.go` (`golang.org/x/sys/windows.GetDiskFreeSpaceEx`,
+      mirrors `internal/server/disk_windows.go`) — same "duplicate rather
+      than cross-package-couple for a few lines" precedent as
+      `atomicWriteFile` in store.go, now with a typed `DiskSpace` return
+      instead of the server package's reporting-shaped `map[string]any`.
+      Wired into `validateInstallPlan` (apimodeloperations.go): sums
+      `plan.Artifacts[].SizeBytes` and calls `operation.CheckDiskPreflight`
+      against `modelsDir` with a new `defaultDiskSafetyReserveBytes = 5 <<
+      30` (5 GiB) constant — a placeholder, not a measured value; not yet
+      configurable (no config field exists and no task asks for one). Skipped
+      when `modelsDir == ""`, matching 3.3's skip-when-unknown pattern for
+      destination containment.
+      Tests: `internal/operation/diskspace_test.go` — 8 table-driven cases
+      for `evaluateDiskPreflight` (sufficient, insufficient, exact boundary,
+      one byte short, negative-input clamping for both remaining and
+      reserve, zero/zero), plus a real-filesystem smoke test for
+      `availableDiskSpace`/`CheckDiskPreflight` (shape assertions only —
+      `TotalBytes > 0`, `AvailableBytes <= TotalBytes` — since exact values
+      depend on the machine running the suite) and a nonexistent-dir error
+      case. `internal/server/apimodeloperations_test.go` — 2 new handler
+      tests: a plan requesting an artifact of `1 << 62` bytes (~4.6 EB, more
+      than any real test machine has free) is rejected 400 with "insufficient
+      disk space" in the body, proving the real syscall path is wired end to
+      end (not mocked); the same oversized plan is accepted 201 when
+      `modelsDir` is cleared, proving the skip-when-unknown path.
+      Verified: `gofmt -l internal/` clean; `GOWORK=off go build ./...`,
+      `go vet ./...`, `go test ./... -count=1` all green (1317 tests, 31
+      packages); `make check-codegen` passes with no diff (this task touched
+      no OpenAPI schema — disk preflight is server-side-only validation, not
+      a new wire type, so no client regeneration was needed).
 - [ ] 3.5 Add table tests for gated repositories, nested files, encoded paths,
   malformed shards, missing auxiliaries, and traversal attempts.
 
