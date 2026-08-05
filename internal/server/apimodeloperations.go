@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/androidand/llama-skein/internal/operation"
@@ -111,6 +112,32 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
 	}
 	if plan.Registration.ModelId == "" {
 		return "registration.model_id is required"
+	}
+	if reason := validateWeightShardCompleteness(plan.Artifacts); reason != "" {
+		return reason
+	}
+	return ""
+}
+
+// validateWeightShardCompleteness rejects a plan whose weights artifacts
+// reference part of a shard set without the rest of it (design.md decision
+// 5: "llama-skein validates that shard numbering is complete... before
+// registration"). Non-weights artifacts (projector/tokenizer/config/other)
+// are never sharded in practice and are not grouped or checked.
+func validateWeightShardCompleteness(artifacts []apicontract.InstallArtifact) string {
+	paths := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.Role == apicontract.ArtifactRoleWeights {
+			paths = append(paths, artifact.Path)
+		}
+	}
+	for _, group := range operation.GroupShards(paths) {
+		if _, ok := operation.ParseShardInfo(group[0]); !ok {
+			continue // a singleton non-shard weights file; nothing to check.
+		}
+		if complete, total := operation.ShardSetComplete(group); !complete {
+			return fmt.Sprintf("incomplete shard set: %d of %d parts present (%s)", len(group), total, strings.Join(group, ", "))
+		}
 	}
 	return ""
 }

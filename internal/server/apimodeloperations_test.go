@@ -128,6 +128,51 @@ func TestHandleCreateModelOperation_RejectsAnArtifactPathThatTraversesOutOfTheRe
 	}
 }
 
+// TestHandleCreateModelOperation_RejectsAnIncompleteShardSet proves the
+// shard-completeness check (design.md decision 5) is wired into the
+// handler, not just tested in isolation in internal/operation/shard_test.go.
+func TestHandleCreateModelOperation_RejectsAnIncompleteShardSet(t *testing.T) {
+	s := newOperationTestServer(t)
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [
+			{"path": "model-00001-of-00003.gguf", "size_bytes": 1000, "role": "weights"},
+			{"path": "model-00002-of-00003.gguf", "size_bytes": 1000, "role": "weights"}
+		],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleCreateModelOperation_AcceptsACompleteShardSet is the positive
+// counterpart: a full shard set must not be rejected as incomplete.
+func TestHandleCreateModelOperation_AcceptsACompleteShardSet(t *testing.T) {
+	s := newOperationTestServer(t)
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [
+			{"path": "model-00001-of-00002.gguf", "size_bytes": 1000, "role": "weights"},
+			{"path": "model-00002-of-00002.gguf", "size_bytes": 1000, "role": "weights"}
+		],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+}
+
 func validPlanJSON() string {
 	return `{
 		"source_repository": "org/model-GGUF",

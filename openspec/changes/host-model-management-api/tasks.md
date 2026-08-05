@@ -198,8 +198,33 @@
       absolute-path/empty-segment rejection, malformed repository, non-SHA
       revision, short-SHA acceptance) + 1 handler-level test proving the
       wiring. Full go build/vet/test ./... green.
-- [ ] 3.2 Port llmfit's tested GGUF shard parsing, grouping, completeness, and
+- [x] 3.2 Port llmfit's tested GGUF shard parsing, grouping, completeness, and
   aggregate-size behavior into Go.
+      — internal/operation/shard.go: ParseShardInfo and the grouping key
+      logic (GroupShards) ported from llmfit's parse_shard_info and
+      build_gguf_candidates (llmfit-core/src/providers.rs, commit
+      850e80900a583ebb07f8efeab07589dcfd444d92); "aggregate-size" is already
+      covered structurally — ModelInstallPlan carries each artifact's own
+      size_bytes, there's nothing to sum from a live repo listing the way
+      llmfit's version does.
+      Completeness (ShardSetComplete) has no llmfit equivalent, stated
+      plainly in its own doc comment rather than silently invented as if
+      ported: llmfit always scans a live, already-complete Hugging Face
+      listing, so it never needed to detect a partial set. A
+      client-submitted install plan can reference one, accidentally or
+      otherwise, and design.md decision 5 requires catching that before
+      registration — a genuine llama-skein-specific addition on top of the
+      ported parsing/grouping.
+      Wired into validateInstallPlan (weights-role artifacts only —
+      projector/tokenizer/config/other are never sharded in practice): an
+      incomplete shard set is rejected with the actual part count, not just
+      a generic error.
+      15 new tests in internal/operation, mirroring llmfit's own fixtures
+      where the behavior is shared (basic parse, non-shard rejection,
+      distinct-set separation) plus new ones for the added completeness
+      check (missing shard, duplicate index, mismatched totals, empty/
+      non-shard input) + 2 handler-level tests (reject incomplete, accept
+      complete) proving the wiring. Full go build/vet/test ./... green.
 - [ ] 3.3 Validate immutable revision, artifact paths, destination
   containment, required roles, size, and optional digest before operation
   creation.
