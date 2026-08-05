@@ -294,8 +294,44 @@
       packages); `make check-codegen` passes with no diff (this task touched
       no OpenAPI schema — disk preflight is server-side-only validation, not
       a new wire type, so no client regeneration was needed).
-- [ ] 3.5 Add table tests for gated repositories, nested files, encoded paths,
+- [x] 3.5 Add table tests for gated repositories, nested files, encoded paths,
   malformed shards, missing auxiliaries, and traversal attempts.
+      Most of these categories already had dedicated coverage from 3.1-3.4 at
+      the `internal/operation` package level (nested subdirs, encoded
+      characters, bare traversal, malformed shard filenames, incomplete
+      weights shard sets) — 3.5 is a genuine gap-filling pass, not a
+      restart: new `TestHandleCreateModelOperation_TrustAndShapeTable` in
+      `internal/server/apimodeloperations_test.go`, a 7-case table run
+      through the real handler (not the operation package in isolation), each
+      case chosen because it wasn't already proven wired end to end:
+      - two real-world gated-repository names (meta-llama, mistralai) —
+        proves gating (enforced by HF via the Authorization header/token,
+        never by this validation layer) doesn't need or get special-cased
+        treatment in the trust-boundary check;
+      - a nested artifact path and an encoded-characters path, each reaching
+        POST /api/models/operations directly (previously only exercised via
+        operation.ResolveArtifactURL/Destination in isolation);
+      - a shard-shaped-but-index-out-of-range filename ("-00004-of-00003")
+        used as a plan's sole weights artifact, proving the boundary between
+        "invalid shard syntax" (GroupShards treats it as an ordinary
+        singleton; not this layer's concern) and "incomplete valid shard
+        set" (task 3.3's actual, different check);
+      - an incomplete PROJECTOR shard set alongside complete weights, proving
+        validateWeightShardCompleteness's documented "non-weights artifacts
+        are never grouped or checked" claim rather than just asserting it in
+        a comment ("missing auxiliaries" are not rejected — auxiliary
+        completeness is out of scope for this layer);
+      - a multi-segment traversal disguised behind a legitimate-looking
+        nested prefix ("weights/Q4_K_M/../../../etc/passwd"), proving
+        safePathSegments checks every segment, not just a leading one.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1325 tests, 31 packages;
+      one internal/process test — TestProcessCommand_StopForkingWrapper,
+      a package untouched by this task — failed once under load in the
+      full-suite run and passed cleanly re-run in isolation, consistent
+      with prior known flakiness in that package, not a regression from this
+      change). `make check-codegen` passes with no diff — no OpenAPI schema
+      touched by this task.
 
 ## 4. Resumable installation
 

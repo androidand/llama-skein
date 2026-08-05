@@ -326,6 +326,119 @@ func TestHandleCreateModelOperation_ValidPlanReturns201Queued(t *testing.T) {
 	}
 }
 
+// TestHandleCreateModelOperation_TrustAndShapeTable is task 3.5's
+// consolidated table: gated repositories, nested files, encoded paths,
+// malformed shards, missing auxiliaries, and traversal attempts, all
+// exercised through the real handler rather than the operation package in
+// isolation. Categories already covered by an existing dedicated handler
+// test (plain traversal, incomplete weights shard sets, malformed digests)
+// are not repeated here — this table fills the gaps those left: real-world
+// gated-repo naming, nested/encoded paths actually reaching the handler
+// (not just operation.ResolveArtifactURL/Destination), a shard-shaped-but-
+// invalid singleton, a disguised multi-segment traversal, and the
+// documented boundary that only weights shard sets are checked for
+// completeness.
+func TestHandleCreateModelOperation_TrustAndShapeTable(t *testing.T) {
+	cases := []struct {
+		name       string
+		repository string
+		artifacts  string // raw JSON array body
+		wantStatus int
+	}{
+		{
+			// meta-llama, mistralai, and google gate access to these repos on
+			// HF behind license acceptance + a bearer token (plan.Token,
+			// design.md decision 7). Gating is enforced by HF at download
+			// time via the Authorization header, not by anything this layer
+			// inspects — the repository/revision/path shape is identical to
+			// an ungated repo, so these must compose and validate exactly
+			// like any other well-formed repository, not be special-cased or
+			// rejected.
+			name:       "gated repository: meta-llama",
+			repository: "meta-llama/Llama-3.1-8B-Instruct",
+			artifacts:  `[{"path": "model.gguf", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "gated repository: mistralai",
+			repository: "mistralai/Mistral-7B-Instruct-v0.3",
+			artifacts:  `[{"path": "model.gguf", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "nested file reaches the handler, not just ResolveArtifactDestination in isolation",
+			repository: "org/repo-GGUF",
+			artifacts:  `[{"path": "Q4_K_M/model-Q4_K_M.gguf", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "encoded path (spaces and parens) reaches the handler",
+			repository: "org/repo",
+			artifacts:  `[{"path": "model file (v2).gguf", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			// "-00004-of-00003" fails ParseShardInfo's index-in-range check
+			// (see TestParseShardInfo_RejectsNonShards), so GroupShards puts
+			// it in its own singleton group and validateWeightShardCompleteness
+			// never runs ShardSetComplete on it at all. A shard-shaped but
+			// invalid filename used as the plan's only weights artifact must
+			// therefore be ACCEPTED, not rejected as an incomplete shard set —
+			// this is the boundary between "invalid shard syntax" (not this
+			// layer's concern; the file is just a name) and "incomplete valid
+			// shard set" (task 3.3's actual check).
+			name:       "shard-shaped but index-out-of-range filename is treated as an ordinary singleton",
+			repository: "org/repo",
+			artifacts:  `[{"path": "model-00004-of-00003.gguf", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			// validateWeightShardCompleteness's doc comment states non-weights
+			// artifacts "are never sharded in practice and are not grouped or
+			// checked" — an incomplete PROJECTOR shard set alongside a
+			// complete, valid weights file must not be rejected. This proves
+			// that documented boundary rather than just asserting it in a
+			// comment.
+			name:       "missing auxiliary: incomplete projector shard set is not checked",
+			repository: "org/repo",
+			artifacts: `[
+				{"path": "model.gguf", "size_bytes": 1000, "role": "weights"},
+				{"path": "proj-00001-of-00002.gguf", "size_bytes": 500, "role": "projector"}
+			]`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			// A traversal attempt disguised behind a legitimate-looking
+			// nested prefix, not the bare "../../../etc/passwd" the existing
+			// dedicated traversal test uses — proves safePathSegments checks
+			// every segment of a longer path, not just a leading one.
+			name:       "multi-segment traversal disguised behind a legitimate-looking prefix",
+			repository: "org/repo",
+			artifacts:  `[{"path": "weights/Q4_K_M/../../../etc/passwd", "size_bytes": 1000, "role": "weights"}]`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newOperationTestServer(t)
+			body := fmt.Sprintf(`{
+				"source_repository": %q,
+				"source_revision": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				"artifacts": %s,
+				"registration": {"model_id": "my-model", "backend": "llamacpp"}
+			}`, tc.repository, tc.artifacts)
+			req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+			w := httptest.NewRecorder()
+			s.handler.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandleCreateModelOperation_RejectsMissingFields(t *testing.T) {
 	cases := map[string]string{
 		"no source_repository": `{"source_revision":"r","artifacts":[{"path":"a","size_bytes":1,"role":"weights"}],"registration":{"model_id":"m","backend":"llamacpp"}}`,
