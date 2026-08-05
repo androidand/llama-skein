@@ -409,21 +409,64 @@
       -count=1` also green (413 tests, no race detected across the new
       goroutine dispatch). `make check-codegen` passes with no diff — no
       OpenAPI schema touched by this task.
-- [ ] 4.2 Retain deterministic partial files independently of client
+- [x] 4.2 Retain deterministic partial files independently of client
   connection lifetime.
-      Substantially provided by 4.1's design, not a separate implementation:
-      Run executes on `s.shutdownCtx` (server-process lifetime), never
-      `r.Context()` (the HTTP request that created the operation), so a
-      client disconnecting mid-download does not interrupt or delete
-      anything — proved by `internal/operation/executor_test.go`'s
-      truncated-download and size-mismatch tests, both of which assert the
-      `.part` file survives a failure. What 4.1 does NOT yet close: the
-      partial's deterministic name only matters once something can resume
-      from it, which is 4.3's job — until then, a failed operation's
-      partial file just sits on disk unused. Left unchecked here rather
-      than marked done outright.
-- [ ] 4.3 Implement safe HTTP range resume with restart fallback when the
+      Closed out by 4.3, not a separate implementation: 4.1 already
+      provided the mechanism (Run executes on `s.shutdownCtx`, never
+      `r.Context()`, so client disconnect never interrupts or deletes a
+      partial) and 4.3 is what makes the retained file matter in
+      practice — `downloadOne` now actually reads a retained `.part` file's
+      real on-disk size and resumes from it (see 4.3 below), rather than
+      the file just sitting there unused. Left unchecked after 4.1
+      specifically because the file had nothing to be resumed by yet;
+      checked now that it does.
+- [x] 4.3 Implement safe HTTP range resume with restart fallback when the
   origin does not honor the requested range.
+      `internal/operation/executor.go`'s `downloadOne` re-stats the
+      artifact's `.part` file (not `op.Artifacts[index].BytesDownloaded`,
+      which is only updated every ~10 MiB and could undercount after a
+      crash — the file's actual on-disk size is authoritative) and:
+      1. if it's already at or past the declared size, skips the network
+         entirely (a prior attempt finished downloading but crashed before
+         verify/install ran);
+      2. otherwise requests `Range: bytes=<existingSize>-` via new
+         `fetchArtifact`/`doGet` helpers;
+      3. on `206 Partial Content`, appends to the existing file from where
+         it left off;
+      4. on `200 OK` or `416 Range Not Satisfiable` (design.md decision 4
+         point 3: "restarts safely if the origin cannot honor the range"),
+         records a warning on the operation (matching the OpenAPI
+         `range_unsupported` error code's own doc comment: this is not
+         itself a terminal failure) and reissues a plain GET, truncating
+         and restarting the artifact from byte 0 — the stale partial's
+         bytes are discarded, never left mixed into the result.
+      Checked whether this change list adds a client-facing retry API or an
+      auto-resume-on-recovery trigger before finalizing scope: it does not
+      (no "retry" path exists anywhere in contracts/llama-skein.openapi.json,
+      and `operation.Recover`, task 2.4, only marks an interrupted operation,
+      it never redispatches `Run`). So resumability here is a capability
+      `Run`/`downloadOne` now has, exercised directly by tests that pre-seed
+      a `.part` file before calling `Run` — not yet something that happens
+      automatically after a process restart. That gap is called out
+      explicitly in `Executor`'s doc comment rather than left implicit.
+      Tests: 4 new cases in `internal/operation/executor_test.go` — a
+      real resume via `206` (asserts the actual `Range` header sent, and
+      that no warning is recorded on a clean resume), a `200`-ignores-range
+      restart (asserts exactly 2 requests happened and the stale partial's
+      bytes don't leak into the final content), a `416` restart (same
+      shape, different rejection status), and the "already fully
+      downloaded" shortcut (asserts zero network requests via a handler
+      that calls `t.Fatal` if hit at all). Caught and fixed a bug in my own
+      first draft of the 416 test before landing: its stale-partial fixture
+      was accidentally *longer* than the artifact's declared size, so it
+      silently exercised the "already complete" shortcut instead of the
+      416 path at all — verify's real digest-mismatch failure on that
+      draft is what surfaced the mistake.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1337 tests, 31 packages);
+      `go test ./internal/operation/... ./internal/server/... -race
+      -count=1` green (417 tests). `make check-codegen` passes with no
+      diff — no OpenAPI schema touched by this task.
 - [ ] 4.4 Verify final sizes and available digests before installation.
 - [ ] 4.5 Download and verify shard/auxiliary sets as one operation and
   register only after all required artifacts succeed.

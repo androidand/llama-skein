@@ -340,3 +340,208 @@ func TestExecutor_Run_FailsWhenRegisterReturnsAnError(t *testing.T) {
 		t.Fatalf("artifact should still be installed despite the registration failure: %v", err)
 	}
 }
+
+// seedPartialFile writes content to dest+".part" (creating dest's parent
+// directories), simulating a prior, interrupted downloadOne attempt for
+// task 4.3's resume tests.
+func seedPartialFile(t *testing.T, dest string, content []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(dest+".part", content, 0o644); err != nil {
+		t.Fatalf("seed partial file: %v", err)
+	}
+}
+
+func TestExecutor_Run_ResumesFromAnExistingPartialFileViaRangeRequest(t *testing.T) {
+	full := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
+	already := full[:10]
+	remainder := full[10:]
+
+	var gotRange string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRange = r.Header.Get("Range")
+		if gotRange != "bytes=10-" {
+			t.Errorf("Range header = %q, want %q", gotRange, "bytes=10-")
+		}
+		w.Header().Set("Content-Range", "bytes 10-36/37")
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(remainder) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedPartialFile(t, dest, already)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(full)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v, warnings=%v)", op.Phase, op.Error, op.Warnings)
+	}
+	if gotRange == "" {
+		t.Fatal("server was never actually hit with a Range request")
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read installed file: %v", err)
+	}
+	if !bytes.Equal(gotContent, full) {
+		t.Fatalf("installed content = %q, want %q", gotContent, full)
+	}
+	if len(op.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want none for a successful resume", op.Warnings)
+	}
+}
+
+func TestExecutor_Run_RestartsWhenOriginIgnoresTheRangeRequest(t *testing.T) {
+	full := []byte("the complete correct file content, sent in full")
+	stalePartial := []byte("garbage-from-an-earlier-mismatched-attempt")
+
+	requestCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		// Ignores any Range header entirely, as an origin without range
+		// support would — always sends the whole file with 200.
+		w.WriteHeader(http.StatusOK)
+		w.Write(full) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedPartialFile(t, dest, stalePartial)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(full)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if requestCount != 2 {
+		t.Fatalf("requestCount = %d, want 2 (the refused range request, then the restart)", requestCount)
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read installed file: %v", err)
+	}
+	if !bytes.Equal(gotContent, full) {
+		t.Fatalf("installed content = %q, want %q (stale partial bytes must not leak into the result)", gotContent, full)
+	}
+	if len(op.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly one range_unsupported-style warning", op.Warnings)
+	}
+}
+
+func TestExecutor_Run_RestartsOn416RangeNotSatisfiable(t *testing.T) {
+	full := []byte("the complete correct file content, long enough that a shorter stale partial below it doesn't look already-complete")
+	// Deliberately shorter than full — long enough to be a real,
+	// non-degenerate resume attempt (existingSize > 0, so a Range header is
+	// sent) but short enough that it isn't mistaken for an already-complete
+	// download by downloadOne's "existingSize >= declared size" shortcut.
+	stalePartial := []byte("stale-bytes")
+
+	requestCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.Header.Get("Range") != "" {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write(full) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedPartialFile(t, dest, stalePartial)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(full)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if requestCount != 2 {
+		t.Fatalf("requestCount = %d, want 2 (the rejected range request, then the restart)", requestCount)
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read installed file: %v", err)
+	}
+	if !bytes.Equal(gotContent, full) {
+		t.Fatalf("installed content = %q, want %q", gotContent, full)
+	}
+	if len(op.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly one warning", op.Warnings)
+	}
+}
+
+func TestExecutor_Run_SkipsTheNetworkEntirelyWhenThePartialAlreadyMatchesTheDeclaredSize(t *testing.T) {
+	full := []byte("already fully downloaded by an earlier attempt that crashed before install")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("no network request should be made when the partial file already matches the declared size")
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedPartialFile(t, dest, full)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(full)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if op.Artifacts[0].BytesDownloaded != int64(len(full)) {
+		t.Fatalf("BytesDownloaded = %d, want %d", op.Artifacts[0].BytesDownloaded, len(full))
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read installed file: %v", err)
+	}
+	if !bytes.Equal(gotContent, full) {
+		t.Fatalf("installed content = %q, want %q", gotContent, full)
+	}
+}

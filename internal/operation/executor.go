@@ -22,11 +22,10 @@ type Registrar func(op *Operation, weightsPath string) error
 // Executor drives one Operation through its execution phases: preflighting,
 // resolving, downloading, verifying, installing, registering, reloading.
 //
-// This is task 4.1's single-artifact vertical slice (migration plan step 3:
-// "one unsharded GGUF vertical slice") — deliberately not the full design.md
-// decision 4 flow yet:
-//   - no HTTP range resume (task 4.3): a failed or restarted download always
-//     starts the artifact over from byte 0;
+// This started as task 4.1's single-artifact vertical slice (migration plan
+// step 3: "one unsharded GGUF vertical slice") and now also carries task
+// 4.3's HTTP range resume (downloadOne/fetchArtifact) — deliberately still
+// not the full design.md decision 4 flow:
 //   - no digest verification (task 4.4): Artifact.Digest is carried on the
 //     operation record but not read here, only the declared size is checked;
 //   - no shard/auxiliary-set-aware install ordering (task 4.5): multiple
@@ -37,18 +36,31 @@ type Registrar func(op *Operation, weightsPath string) error
 //     against the same operation ID does not interrupt an in-progress Run
 //     started from a different Operation instance, because Run does not
 //     reload the record from Store mid-flight to notice;
-//   - no idempotent short-circuit for an already-complete artifact set
-//     (task 4.7): Run always redownloads.
+//   - no idempotent short-circuit for an already-complete artifact set at
+//     the Run level (task 4.7) — downloadOne itself already skips
+//     redownloading a ".part" file that's already at or past the declared
+//     size (see its doc comment), but Run always executes preflight/verify/
+//     install/register regardless of whether every artifact turns out to
+//     already be complete;
+//   - no automatic redispatch of Run() for an operation Recover() marked
+//     interrupted after a process restart: nothing in this change's task
+//     list adds a retry API or an auto-resume trigger (checked — there is no
+//     "retry" endpoint anywhere in contracts/llama-skein.openapi.json), so
+//     resumability here is a property Run()/downloadOne itself has
+//     (exercised directly by executor_test.go), not yet something that
+//     happens on its own.
 //
 // What it does provide: real download execution moved behind the state
-// machine (the vertical slice this task asks for), atomic final rename
-// (fsync during download, rename during install), and a Run call that is
-// not tied to any HTTP request's context — the caller (internal/server)
-// passes a context whose lifetime is the server process, not the request
-// that created the operation. That decoupling is what lets a downloaded
-// partial file survive the client disconnecting, which is task 4.2's core
-// requirement; task 4.2 additionally wants partials retained across a
-// later *retry*, which needs 4.3's resume logic to matter in practice.
+// machine (the vertical slice task 4.1 asked for), atomic final rename
+// (fsync during download, rename during install), HTTP range resume with
+// restart fallback (task 4.3), and a Run call that is not tied to any HTTP
+// request's context — the caller (internal/server) passes a context whose
+// lifetime is the server process, not the request that created the
+// operation. That decoupling is what lets a downloaded partial file survive
+// the client disconnecting, which is task 4.2's core requirement; task 4.2
+// additionally wants partials retained across a later *retry*, and 4.3's
+// resume logic is exactly what makes that retention matter in practice
+// instead of just being an unused file sitting on disk.
 type Executor struct {
 	Store     *Store
 	ModelsDir string
@@ -275,38 +287,63 @@ func (e *Executor) download(ctx context.Context, op *Operation, resolved []resol
 // suffix convention as the pre-existing internal/server/apipull.go path),
 // updating and periodically persisting op.Artifacts[index].BytesDownloaded.
 // Unlike apipull.go, an error here never removes the partial file — design.md
-// decision 4 requires partials to survive interruption so a later resume
-// (task 4.3) can pick up where this left off; only an explicit cancellation
-// cleanup policy (task 4.6) decides to remove one.
+// decision 4 requires partials to survive interruption so a later resume can
+// pick up where this left off; only an explicit cancellation cleanup policy
+// (task 4.6) decides to remove one.
+//
+// Task 4.3: if a ".part" file already exists on disk when downloadOne
+// starts — whichever way that happened, since there is no dedicated retry
+// API in this contract (tasks.md's own task list never adds one; resumption
+// is a property of downloadOne itself, exercised here directly and by
+// executor_test.go, and left for a future task to trigger automatically on
+// process-restart recovery) — its actual on-disk size is authoritative, not
+// whatever op.Artifacts[index].BytesDownloaded last had persisted (that
+// counter is only updated every saveEvery bytes and could undercount after
+// a crash). downloadOne re-stats it, requests the remainder via HTTP Range,
+// and falls back to a full restart with a recorded warning if the origin
+// doesn't honor the range (design.md decision 4 points 1-3).
 func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r resolvedArtifact) *Error {
 	if err := os.MkdirAll(filepath.Dir(r.dest), 0o755); err != nil {
 		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("create destination directory: %v", err)}
 	}
 	partial := r.dest + ".part"
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url, nil)
-	if err != nil {
-		return &Error{Code: ErrorInternal, Message: err.Error()}
+	existingSize := int64(0)
+	if fi, statErr := os.Stat(partial); statErr == nil {
+		existingSize = fi.Size()
+	} else if !os.IsNotExist(statErr) {
+		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("stat partial file: %v", statErr)}
 	}
-	resp, err := e.client().Do(req)
-	if err != nil {
-		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("download %s: %v", r.url, err)}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("download %s: HTTP %d: %s", r.url, resp.StatusCode, string(body))}
+	if want := op.Artifacts[index].BytesTotal; want != nil && existingSize >= *want {
+		// Already fully downloaded by an earlier attempt that crashed or
+		// stopped before verify/install ran — nothing left to fetch.
+		e.saveProgress(op, index, existingSize)
+		return nil
 	}
 
-	f, err := os.Create(partial)
+	resp, resuming, warning, fetchErr := e.fetchArtifact(ctx, op.Artifacts[index].Path, r.url, existingSize)
+	if fetchErr != nil {
+		return fetchErr
+	}
+	defer resp.Body.Close()
+	if warning != "" {
+		op.Warnings = append(op.Warnings, warning)
+		existingSize = 0 // the origin refused the resume; write from the start regardless of what was already on disk.
+	}
+
+	openFlag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if resuming {
+		openFlag = os.O_CREATE | os.O_APPEND | os.O_WRONLY
+	}
+	f, err := os.OpenFile(partial, openFlag, 0o644)
 	if err != nil {
-		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("create partial file: %v", err)}
+		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("open partial file: %v", err)}
 	}
 
 	const saveEvery = 10 * 1024 * 1024
 	buf := make([]byte, 256*1024)
-	var written int64
-	lastSaved := int64(0)
+	written := existingSize
+	lastSaved := written
 	for {
 		if ctx.Err() != nil {
 			f.Close()
@@ -346,6 +383,75 @@ func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r 
 
 	e.saveProgress(op, index, written)
 	return nil
+}
+
+// fetchArtifact issues the GET for one artifact, requesting a resume range
+// when existingSize > 0 and falling back to a full restart when the origin
+// does not honor it (design.md decision 4 point 3). On success, the
+// returned *http.Response's Body is the caller's to close.
+//
+// resuming reports whether the caller should append to the existing partial
+// file (true) or truncate and start from zero (false — either because there
+// was nothing to resume, or because the origin refused the range and a
+// restart is required). warning is non-empty exactly in the refused-range
+// case: the OpenAPI ModelOperationError "range_unsupported" doc comment
+// ("...not that the operation failed outright — it only becomes a terminal
+// error if the restart itself then fails") is why this is recorded as a
+// warning and execution continues, rather than failing the operation.
+func (e *Executor) fetchArtifact(ctx context.Context, artifactPath, url string, existingSize int64) (resp *http.Response, resuming bool, warning string, fetchErr *Error) {
+	resp, fetchErr = e.doGet(ctx, url, existingSize)
+	if fetchErr != nil {
+		return nil, false, "", fetchErr
+	}
+	if existingSize == 0 {
+		if resp.StatusCode != http.StatusOK {
+			return nil, false, "", httpStatusError(resp, url, "download")
+		}
+		return resp, false, "", nil
+	}
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+		return resp, true, "", nil
+	case http.StatusOK, http.StatusRequestedRangeNotSatisfiable:
+		resp.Body.Close()
+		warning = fmt.Sprintf(
+			"%s: origin did not honor a resume request (HTTP %d); restarting the download from the beginning",
+			artifactPath, resp.StatusCode)
+		resp, fetchErr = e.doGet(ctx, url, 0)
+		if fetchErr != nil {
+			return nil, false, "", fetchErr
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, false, "", httpStatusError(resp, url, "restart download")
+		}
+		return resp, false, warning, nil
+	default:
+		return nil, false, "", httpStatusError(resp, url, "download")
+	}
+}
+
+// doGet issues one GET, with a "Range: bytes=from-" header when from > 0.
+func (e *Executor) doGet(ctx context.Context, url string, from int64) (*http.Response, *Error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, &Error{Code: ErrorInternal, Message: err.Error()}
+	}
+	if from > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
+	}
+	resp, err := e.client().Do(req)
+	if err != nil {
+		return nil, &Error{Code: ErrorInternal, Message: fmt.Sprintf("download %s: %v", url, err)}
+	}
+	return resp, nil
+}
+
+// httpStatusError reads (and discards) a small error body and closes resp,
+// so every non-2xx branch in fetchArtifact reports consistently.
+func httpStatusError(resp *http.Response, url, verb string) *Error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	resp.Body.Close()
+	return &Error{Code: ErrorInternal, Message: fmt.Sprintf("%s %s: HTTP %d: %s", verb, url, resp.StatusCode, string(body))}
 }
 
 func (e *Executor) saveProgress(op *Operation, index int, written int64) {
