@@ -80,11 +80,14 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 }
 
 // validateInstallPlan reports the first reason plan is unacceptable, or ""
-// if it may proceed. Only structural/request-shape validation belongs here —
-// trust-boundary checks (design.md decision 7: HTTPS-only Hugging Face hosts,
-// destination containment, already-configured model_id) land with the actual
-// execution path in a later task, once there is somewhere for them to run
-// before download starts rather than only at submission time.
+// if it may proceed. Covers structural/request-shape validation plus the
+// source trust-boundary check (design.md decision 7): every artifact's
+// download URL must compose safely from independently-validated
+// repository/revision/path (operation.ResolveArtifactURL), never from a
+// trusted-as-is caller-supplied string. Destination containment and
+// already-configured model_id collision still land with the actual
+// execution path in a later task — those need a real models directory and a
+// real config to check against, neither of which exists at this layer yet.
 func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
 	if plan.SourceRepository == "" {
 		return "source_repository is required"
@@ -101,6 +104,9 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
 		}
 		if artifact.SizeBytes <= 0 {
 			return "every artifact needs a positive size_bytes"
+		}
+		if _, err := operation.ResolveArtifactURL(plan.SourceRepository, plan.SourceRevision, artifact.Path); err != nil {
+			return err.Error()
 		}
 	}
 	if plan.Registration.ModelId == "" {

@@ -175,8 +175,29 @@
 
 ## 3. Exact artifact resolution
 
-- [ ] 3.1 Port Skein's tested Hugging Face file-info/blob URL normalization
+- [x] 3.1 Port Skein's tested Hugging Face file-info/blob URL normalization
   into the install-plan resolver without importing Skein.
+      — internal/operation/source.go: ResolveArtifactURL, ported from
+      Skein's normalizeHuggingFaceDownloadURL (internal/providers/
+      download_url.go, commit b687c70c1374d42b3a6f6c486057330d0542bf9d).
+      Skein's version parses a free-form pasted URL (file-info/blob/resolve
+      shapes) into repository/revision/filename; that specific parsing isn't
+      needed here since ModelInstallPlan already carries those as separate
+      structured fields (opencode-skein resolves a pasted URL into that
+      shape before llama-skein ever sees it — design.md's "opencode-skein
+      owns discovery... llama-skein owns all host-local facts and
+      mutations"). What transfers, and is the actual point of this task, is
+      the safe-composition discipline design.md decision 7 requires:
+      validate repository/revision/path shape independently, then compose
+      the URL via net/url — never trust or concatenate a caller-supplied
+      string. Wired into validateInstallPlan so every artifact's URL is
+      proven composable (and path-traversal-safe) before an operation is
+      even created, not just defined and tested in isolation.
+      13 new tests in internal/operation (composition, nested subdirs
+      mirroring Skein's own blob-URL fixture, percent-encoding, traversal/
+      absolute-path/empty-segment rejection, malformed repository, non-SHA
+      revision, short-SHA acceptance) + 1 handler-level test proving the
+      wiring. Full go build/vet/test ./... green.
 - [ ] 3.2 Port llmfit's tested GGUF shard parsing, grouping, completeness, and
   aggregate-size behavior into Go.
 - [ ] 3.3 Validate immutable revision, artifact paths, destination

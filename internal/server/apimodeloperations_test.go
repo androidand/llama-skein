@@ -107,6 +107,27 @@ func TestHandleCreateModelOperation_NeverEchoesTheTokenInAnErrorMessage(t *testi
 	}
 }
 
+// TestHandleCreateModelOperation_RejectsAnArtifactPathThatTraversesOutOfTheRepository
+// proves the trust-boundary check (design.md decision 7) is actually wired
+// into the handler, not just defined and tested in isolation in
+// internal/operation/source_test.go.
+func TestHandleCreateModelOperation_RejectsAnArtifactPathThatTraversesOutOfTheRepository(t *testing.T) {
+	s := newOperationTestServer(t)
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [{"path": "../../../etc/passwd", "size_bytes": 1000, "role": "weights"}],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+}
+
 func validPlanJSON() string {
 	return `{
 		"source_repository": "org/model-GGUF",
