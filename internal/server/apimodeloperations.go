@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/operation"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 )
@@ -72,22 +73,115 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 	// as this line, then discarded. operation.Operation has no field capable
 	// of holding it, so it cannot reach the persisted record, a log line, or
 	// an error message by construction — not by remembering not to include
-	// it. Not yet handed to anything: no download execution exists yet
-	// (sections 3-4) to authenticate with it.
+	// it. Still not handed to anything: task 4.1's executor authenticates no
+	// requests yet (gated-repository downloads need it; ungated ones don't),
+	// so there is still nothing to hand it to.
 	plan.Token = nil
 
-	artifacts := make([]operation.ArtifactProgress, len(plan.Artifacts))
-	for i, artifact := range plan.Artifacts {
-		total := artifact.SizeBytes
-		artifacts[i] = operation.ArtifactProgress{Path: artifact.Path, BytesTotal: &total}
-	}
-
-	op := operation.New(plan.SourceRepository, plan.SourceRevision, plan.Registration.ModelId, artifacts, time.Now())
+	op := operation.NewFromPlan(toOperationPlan(plan), time.Now())
 	if err := s.operationStore.Save(op); err != nil {
 		writeOperationError(w, http.StatusInternalServerError, "could not persist operation: "+err.Error())
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, toAPIModelOperation(op))
+	resp := toAPIModelOperation(op)
+	writeJSONStatus(w, http.StatusCreated, resp)
+
+	// Execution runs on s.shutdownCtx, not r.Context(): task 4.2's "retain
+	// deterministic partial files independently of client connection
+	// lifetime" requires the download to keep going after this handler (and
+	// the request that reached it) returns, and it does — shutdownCtx is
+	// cancelled only when the server process itself shuts down. Dispatched
+	// strictly after resp is built from op's fields above: from this line on
+	// the goroutine owns op exclusively. s.runOperation is nil in every
+	// test-constructed Server (see its doc comment on the Server struct),
+	// so ordinary handler tests never make a real network call here.
+	if s.runOperation != nil {
+		go s.runOperation(s.shutdownCtx, op)
+	}
+}
+
+// toOperationPlan converts the wire ModelInstallPlan to operation.Plan, the
+// subset execution (task 4.1's Executor) needs, captured once at accept time
+// so it survives independently of the request (design.md decision 2: the
+// plan is immutable once accepted).
+func toOperationPlan(plan apicontract.ModelInstallPlan) operation.Plan {
+	artifacts := make([]operation.Artifact, len(plan.Artifacts))
+	for i, a := range plan.Artifacts {
+		artifacts[i] = operation.Artifact{
+			Path:      a.Path,
+			SizeBytes: a.SizeBytes,
+			Digest:    a.Digest,
+			Role:      operation.ArtifactRole(a.Role),
+		}
+	}
+	reg := operation.Registration{
+		ModelID:     plan.Registration.ModelId,
+		DisplayName: plan.Registration.DisplayName,
+		Backend:     string(plan.Registration.Backend),
+		TTL:         plan.Registration.Ttl,
+	}
+	if plan.Registration.Flags != nil {
+		reg.Flags = *plan.Registration.Flags
+	}
+	return operation.Plan{
+		SourceRepository: plan.SourceRepository,
+		SourceRevision:   plan.SourceRevision,
+		Artifacts:        artifacts,
+		Registration:     reg,
+	}
+}
+
+// newOperationExecutor builds the operation.Executor this server runs every
+// create-accepted operation through, wiring its Registrar to
+// registerInstalledModel (config write + reload) and its disk-preflight
+// reserve to the same defaultDiskSafetyReserveBytes validateInstallPlan
+// already checked against once at accept time.
+func (s *Server) newOperationExecutor() *operation.Executor {
+	return &operation.Executor{
+		Store:              s.operationStore,
+		ModelsDir:          s.modelsDir(),
+		Client:             s.operationHTTPClient,
+		SafetyReserveBytes: defaultDiskSafetyReserveBytes,
+		Register:           s.registerInstalledModel,
+		Logf:               s.proxylog.Infof,
+	}
+}
+
+// registerInstalledModel is the operation.Registrar this server runs at the
+// end of a successful install: write the operation's captured Registration
+// snapshot to config, the same writeModelToConfig path
+// registerPulledModel (apipull.go) uses for the old handwritten pull
+// endpoint, then trigger a reload. Folds design.md decision 3's distinct
+// "registering" and "reloading" phases into one call — see
+// operation.Executor's doc comment for why that's fine.
+func (s *Server) registerInstalledModel(op *operation.Operation, weightsPath string) error {
+	if weightsPath == "" {
+		return fmt.Errorf("operation %s: no weights artifact resolved to register", op.ID)
+	}
+	if s.configFile == "" {
+		return fmt.Errorf("config file path not set; cannot auto-register")
+	}
+	flags := ""
+	if len(op.Registration.Flags) > 0 {
+		flags = strings.Join(op.Registration.Flags, " ")
+	}
+	mc := config.ModelConfig{
+		Cmd:         s.buildCmd(weightsPath, flags),
+		Proxy:       "http://127.0.0.1:${PORT}",
+		Backend:     op.Registration.Backend,
+		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
+	}
+	if op.Registration.DisplayName != nil {
+		mc.Name = *op.Registration.DisplayName
+	}
+	if op.Registration.TTL != nil {
+		mc.UnloadAfter = *op.Registration.TTL
+	}
+	if err := s.writeModelToConfig(op.Registration.ModelID, &mc); err != nil {
+		return err
+	}
+	s.triggerReload()
+	return nil
 }
 
 // digestRe matches the one digest form InstallArtifact.digest documents:

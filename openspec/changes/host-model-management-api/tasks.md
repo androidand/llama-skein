@@ -335,10 +335,93 @@
 
 ## 4. Resumable installation
 
-- [ ] 4.1 Move single-artifact pull execution behind the operation state
+- [x] 4.1 Move single-artifact pull execution behind the operation state
   machine while retaining atomic final rename.
+      New `internal/operation/executor.go`: `Executor` (Store, ModelsDir,
+      Client, SafetyReserveBytes, Register, Now, Logf) and `Run(ctx, op)`,
+      driving an operation from preflighting through
+      resolving/downloading/verifying/installing/registering/reloading to
+      succeeded/failed, saving to Store after every phase change and every
+      ~10 MiB during download. Real HTTP download (not simulated), atomic
+      final rename (fsync during download's Close, os.Rename during
+      install), deterministic `.part` partial naming matching the
+      pre-existing internal/server/apipull.go convention. `Registrar` is an
+      injected callback (`func(op, weightsPath) error`) so this package
+      doesn't depend on internal/server for config-write/reload — the
+      dependency already runs the other way.
+      Extended `operation.Operation`/`ArtifactProgress` with the fields
+      execution needs that plan-acceptance alone didn't require: `Role`,
+      `Digest` per artifact, and a `Registration` snapshot (ModelID,
+      DisplayName, Backend, Flags, TTL) captured once at accept time
+      (design.md decision 2: the plan, registration included, is immutable
+      once accepted). Added `operation.NewFromPlan(Plan, now)` as a new
+      convenience constructor; `New()` itself is untouched and still used
+      directly by all ~100 pre-4.1 tests that don't need a full Plan.
+      `internal/operation/store.go`'s `record` type extended with
+      `Registration` (omitzero, so old on-disk records decode fine).
+      Wired into `internal/server`: `handleAPICreateModelOperation`
+      converts the accepted `apicontract.ModelInstallPlan` to
+      `operation.Plan` (`toOperationPlan`), builds the operation via
+      `NewFromPlan`, and — after writing the 201 response, never before —
+      dispatches `Server.runOperation` in a goroutine. `runOperation` is a
+      new `Server` field, nil by default (same "nil field is a no-op"
+      pattern `reloadFn`/`triggerReload` already uses) so every
+      pre-existing operations handler test keeps making zero real network
+      calls; `New()` wires it to the real executor for production.
+      `registerInstalledModel` is the `Registrar`: writes config via the
+      same `writeModelToConfig` path `apipull.go`'s `registerPulledModel`
+      uses, then calls `triggerReload()`. New `Server.operationHTTPClient`
+      field (nil → `http.DefaultClient`) lets a test point execution at a
+      local `httptest.Server` instead of huggingface.co.
+      Explicitly NOT done in this task (each is a later 4.x task, listed
+      here so the gap is never silently assumed covered): no HTTP range
+      resume (4.3, a failed/restarted download always restarts from byte
+      0); no digest verification (4.4, only declared size is checked —
+      `Artifact.Digest` is carried but unread); no shard/auxiliary-set-aware
+      install ordering (4.5, multiple artifacts download fine but nothing
+      groups shards specially); no cooperative mid-flight cancellation
+      (4.6, Run only stops early if its context is cancelled — a
+      concurrent `/cancel` request against the same operation ID doesn't
+      interrupt an already-running Run because it doesn't reload the
+      record from Store mid-flight); no idempotent short-circuit for an
+      already-complete artifact set (4.7, Run always redownloads).
+      Tests: `internal/operation/executor_test.go`, 7 new tests against a
+      real `httptest.Server` reached via a request-rewriting
+      `http.RoundTripper` (never huggingface.co) — happy path (download,
+      atomic install, `.part` cleanup, correct `BytesDownloaded`,
+      persisted terminal record), registration skipped when `Register` is
+      nil, HTTP error, size-mismatch verify failure (partial retained, no
+      final file), disk-preflight failure with a request-count assertion
+      proving no network call happens first, a truncated-download failure
+      (partial retained with exactly the bytes actually received), and a
+      Register-callback failure (artifact still installed on disk despite
+      the registration failure, since install happens before registering
+      in phase order). `internal/server/apimodeloperations_executor_test.go`,
+      1 new end-to-end test through the real HTTP handler proving the full
+      chain (create → download → install → config write → reload trigger)
+      wired correctly, synchronized by polling the persisted operation
+      record for a terminal phase (not a sleep or a WaitGroup racing a
+      different goroutine — an earlier draft of this test raced on
+      `reloadFn`'s own goroutine and was caught and fixed before landing).
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1333 tests, 31 packages);
+      `go test ./internal/operation/... ./internal/server/... -race
+      -count=1` also green (413 tests, no race detected across the new
+      goroutine dispatch). `make check-codegen` passes with no diff — no
+      OpenAPI schema touched by this task.
 - [ ] 4.2 Retain deterministic partial files independently of client
   connection lifetime.
+      Substantially provided by 4.1's design, not a separate implementation:
+      Run executes on `s.shutdownCtx` (server-process lifetime), never
+      `r.Context()` (the HTTP request that created the operation), so a
+      client disconnecting mid-download does not interrupt or delete
+      anything — proved by `internal/operation/executor_test.go`'s
+      truncated-download and size-mismatch tests, both of which assert the
+      `.part` file survives a failure. What 4.1 does NOT yet close: the
+      partial's deterministic name only matters once something can resume
+      from it, which is 4.3's job — until then, a failed operation's
+      partial file just sits on disk unused. Left unchecked here rather
+      than marked done outright.
 - [ ] 4.3 Implement safe HTTP range resume with restart fallback when the
   origin does not honor the requested range.
 - [ ] 4.4 Verify final sizes and available digests before installation.

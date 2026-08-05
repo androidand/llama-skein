@@ -41,6 +41,23 @@ type Server struct {
 	operationStore *operation.Store
 	build          BuildInfo
 
+	// runOperation dispatches an accepted operation's background execution
+	// (task 4.1's operation.Executor). nil by default — every
+	// test-constructed Server (newTestServer and its callers) leaves it nil
+	// so handler tests never trigger a real network download in the
+	// background, the same "nil field means no-op" pattern
+	// triggerReload/reloadFn already uses. New() wires it to the real
+	// executor; a test that wants to exercise actual execution sets it
+	// explicitly (see internal/server/apimodeloperations_executor_test.go).
+	runOperation func(ctx context.Context, op *operation.Operation)
+
+	// operationHTTPClient is the HTTP client newOperationExecutor gives its
+	// operation.Executor. nil in production (the executor then defaults to
+	// http.DefaultClient); a test pointing execution at a local httptest
+	// server sets this to redirect requests instead of hitting
+	// huggingface.co for real.
+	operationHTTPClient *http.Client
+
 	local router.LocalRouter
 	peer  router.Router
 
@@ -235,6 +252,9 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		build:          build,
 		shutdownCtx:    shutdownCtx,
 		shutdownFn:     shutdownFn,
+	}
+	s.runOperation = func(ctx context.Context, op *operation.Operation) {
+		s.newOperationExecutor().Run(ctx, op)
 	}
 
 	// Re-apply the persisted profile (if the operator ever saved one via

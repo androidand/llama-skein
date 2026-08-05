@@ -23,10 +23,15 @@ type record struct {
 	SourceRevision   string             `json:"source_revision"`
 	ModelID          string             `json:"model_id"`
 	Artifacts        []ArtifactProgress `json:"artifacts"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
-	Error            *Error             `json:"error,omitempty"`
-	Warnings         []string           `json:"warnings,omitempty"`
+	// Registration is the zero value on records written before task 4.1 —
+	// decoding an old file into it is harmless, it just means execution (if
+	// ever resumed against a pre-4.1 record) has nothing to register with,
+	// same as any other never-populated Go zero value.
+	Registration Registration `json:"registration,omitzero"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	Error        *Error       `json:"error,omitempty"`
+	Warnings     []string     `json:"warnings,omitempty"`
 }
 
 func toRecord(op *Operation) record {
@@ -37,6 +42,7 @@ func toRecord(op *Operation) record {
 		SourceRevision:   op.SourceRevision,
 		ModelID:          op.ModelID,
 		Artifacts:        op.Artifacts,
+		Registration:     op.Registration,
 		CreatedAt:        op.CreatedAt,
 		UpdatedAt:        op.UpdatedAt,
 		Error:            op.Error,
@@ -52,6 +58,7 @@ func (r record) toOperation() *Operation {
 		SourceRevision:   r.SourceRevision,
 		ModelID:          r.ModelID,
 		Artifacts:        r.Artifacts,
+		Registration:     r.Registration,
 		CreatedAt:        r.CreatedAt,
 		UpdatedAt:        r.UpdatedAt,
 		Error:            r.Error,
