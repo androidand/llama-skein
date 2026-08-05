@@ -1,12 +1,21 @@
 package server
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/androidand/llama-skein/internal/chain"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
+	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/shared"
 )
 
@@ -166,4 +175,129 @@ func TestMemGuard_IgnoresInvalidSamples(t *testing.T) {
 	if g.Observe(noPressure, notCrit, readyOne, now) {
 		t.Fatal("no-pressure sample must never trigger")
 	}
+}
+
+// TestMemoryPressureRefusal is a regression for the m3 incident 2026-08-05:
+// a load that spent minutes fighting for CPU/disk on a critically-pressured
+// host succeeded, then was evicted by startMemoryGuard within seconds —
+// wasted work indistinguishable, to the caller, from "never loads". The gate
+// must refuse fast instead, but only on a confident CRITICAL reading.
+func TestMemoryPressureRefusal(t *testing.T) {
+	enabled := memGuardConf()
+	on := true
+	off := false
+	enabled.Enabled = &on
+	disabled := enabled
+	disabled.Enabled = &off
+
+	critical := perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 800, MemPressureLevel: 4}
+	warning := perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 1600, MemPressureLevel: 2}
+
+	cases := []struct {
+		name       string
+		mg         config.MemoryGuardConfig
+		mgErr      error
+		st         perf.SysStat
+		statsErr   error
+		wantRefuse bool
+	}{
+		{"critical pressure refuses", enabled, nil, critical, nil, true},
+		{"warning pressure allowed (macOS steady state)", enabled, nil, warning, nil, false},
+		{"guard disabled allows even under critical pressure", disabled, nil, critical, nil, false},
+		{"invalid config fails open", enabled, errors.New("bad config"), critical, nil, false},
+		{"sampling error fails open", enabled, nil, critical, errors.New("sysctl failed"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reason, refuse := memoryPressureRefusal(c.mg, c.mgErr, c.st, c.statsErr)
+			if refuse != c.wantRefuse {
+				t.Errorf("refuse = %v, want %v", refuse, c.wantRefuse)
+			}
+			if refuse && reason == "" {
+				t.Error("expected a non-empty reason when refusing")
+			}
+		})
+	}
+}
+
+// TestMemoryPressureGateMiddleware_HTTP exercises the full HTTP contract: an
+// already-loaded model always passes through (host pressure is irrelevant to
+// it), a not-yet-loaded model under critical pressure gets a retryable 503
+// with a clear body instead of being allowed to spend minutes loading only
+// to be evicted moments later.
+func TestMemoryPressureGateMiddleware_HTTP(t *testing.T) {
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{"m": {}},
+		MemoryGuard: func() config.MemoryGuardConfig {
+			c := memGuardConf()
+			on := true
+			c.Enabled = &on
+			return c
+		}(),
+	}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// router.FetchContext only reads "model" from the JSON body when
+	// Content-Type says so; without it the request falls through as
+	// ErrNoModelInContext before the gate ever runs.
+	newModelRequest := func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
+		r.Header.Set("Content-Type", "application/json")
+		return r
+	}
+
+	t.Run("already loaded passes through regardless of pressure", func(t *testing.T) {
+		s := &Server{
+			cfg:      cfg,
+			proxylog: logmon.NewWriter(io.Discard),
+			local:    newStubRouter([]string{"m"}, "ok"),
+		}
+		s.local.(*stubRouter).running = map[string]process.ProcessState{"m": process.StateReady}
+		s.sysStatsOverride = func() (perf.SysStat, error) {
+			// Even critical pressure must not gate an already-loaded model.
+			return perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 800, MemPressureLevel: 4}, nil
+		}
+
+		h := chain.New(s.CreateMemoryPressureGateMiddleware()).Then(next)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, newModelRequest())
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (already-loaded model must never be pressure-gated)", w.Code)
+		}
+	})
+
+	t.Run("not loaded refused fast when critical", func(t *testing.T) {
+		s := &Server{
+			cfg:      cfg,
+			proxylog: logmon.NewWriter(io.Discard),
+			local:    newStubRouter([]string{"m"}, "ok"),
+		}
+		s.sysStatsOverride = func() (perf.SysStat, error) {
+			return perf.SysStat{MemTotalMB: 36864, MemAvailableMB: 800, MemPressureLevel: 4}, nil
+		}
+
+		h := chain.New(s.CreateMemoryPressureGateMiddleware()).Then(next)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, newModelRequest())
+
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503", w.Code)
+		}
+		if w.Header().Get("Retry-After") == "" {
+			t.Error("expected Retry-After header on a retryable refusal")
+		}
+		var body struct {
+			Error struct{ Type string } `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("response body not JSON: %v", err)
+		}
+		if body.Error.Type != "host_memory_pressure_error" {
+			t.Errorf("error.type = %q, want host_memory_pressure_error", body.Error.Type)
+		}
+	})
 }

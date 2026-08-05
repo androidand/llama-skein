@@ -96,6 +96,11 @@ type Server struct {
 	// Set once during startWedgeWatchdog() so the reason is logged and queryable.
 	watchdogActive bool
 	watchdogReason string
+
+	// sysStatsOverride lets tests substitute a fake reading for readSysStats
+	// (CreateMemoryPressureGateMiddleware) instead of the real perf.ReadSysStats
+	// syscall. nil in production.
+	sysStatsOverride func() (perf.SysStat, error)
 }
 
 // SetTuning wires the loaded tuning database and detected GPU into the server
@@ -343,6 +348,7 @@ func (s *Server) routes() {
 		authMW,
 		CreateConcurrencyMiddleware(s.cfg),
 		s.CreateLoadFitGateMiddleware(),
+		s.CreateMemoryPressureGateMiddleware(),
 		s.CreatePromptGuardMiddleware(),
 		filterMW,
 		formFilterMW,

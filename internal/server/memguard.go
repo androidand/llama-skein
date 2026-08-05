@@ -1,15 +1,19 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"runtime"
 	"sort"
 	"time"
 
+	"github.com/androidand/llama-skein/internal/chain"
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/process"
+	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
 )
 
@@ -177,4 +181,93 @@ func (s *Server) startMemoryGuard() {
 			s.proxylog.Infof("memory guard: unload complete; %d model(s) freed, reload on next request (cooldown %ds)", len(ready), mg.CooldownSeconds)
 		}
 	}()
+}
+
+// CreateMemoryPressureGateMiddleware refuses, with a fast retryable 503, to
+// START loading a model that is not yet resident while the host is already
+// under CRITICAL memory pressure. Without this gate a load can spend minutes
+// fighting other processes for CPU/disk on a contended host, finally
+// succeed, and then be evicted by startMemoryGuard's background loop within
+// seconds of becoming ready — wasted work that is, to the caller,
+// indistinguishable from "this model will never load" (m3 incident,
+// 2026-08-05: the host stayed critically pressured from unrelated concurrent
+// processes across several load attempts, each ending the same way). A fast,
+// clear error lets the caller (opencode/skein) back off or fall back to
+// another host immediately instead of blocking for minutes.
+//
+// It only acts on a model that is not already resident — a model already
+// ready serves the request without spawning anything, so host pressure is
+// irrelevant to it and must not fail it. Fails open on every uncertain
+// signal: the guard disabled/misconfigured, a sampling error, or a reading
+// short of CRITICAL (the same bar startMemoryGuard uses to evict, chosen
+// because macOS sits at "warning" as a normal steady state — see
+// hostUnderPressure).
+func (s *Server) CreateMemoryPressureGateMiddleware() chain.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			data, err := router.FetchContext(r, s.cfg)
+			if err != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if _, loaded := s.modelState(data.ModelID); loaded {
+				next.ServeHTTP(w, r) // already resident: no load about to happen, host pressure is irrelevant
+				return
+			}
+			mg, mgErr := s.cfg.MemoryGuard.Normalize()
+			st, statsErr := s.readSysStats()
+
+			reason, refuse := memoryPressureRefusal(mg, mgErr, st, statsErr)
+			if !refuse {
+				next.ServeHTTP(w, r)
+				return
+			}
+			s.proxylog.Warnf("<%s> memory-pressure-gate: refusing to start load — host under critical memory pressure (%s)", data.ModelID, reason)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusServiceUnavailable) // 503, retryable
+			_ = json.NewEncoder(w).Encode(hostMemoryPressureError(data.ModelID, reason))
+		})
+	}
+}
+
+// memoryPressureRefusal is the pure decision core of the pressure gate,
+// isolated from the HTTP plumbing and the two IO calls (config.Normalize,
+// perf.ReadSysStats) that feed it, so it can be unit-tested without a real
+// host. Callers must have already confirmed the target model is not
+// resident — see CreateMemoryPressureGateMiddleware, which skips both IO
+// calls entirely for an already-loaded model. Refuses only when the guard is
+// enabled and correctly configured, sampling succeeded, and
+// hostUnderPressure reports CRITICAL. Fails open on every other combination.
+func memoryPressureRefusal(mg config.MemoryGuardConfig, mgErr error, st perf.SysStat, statsErr error) (reason string, refuse bool) {
+	if mgErr != nil || !mg.IsEnabled() || statsErr != nil {
+		return "", false
+	}
+	_, critical, reason := hostUnderPressure(st, mg.MinAvailablePct)
+	return reason, critical
+}
+
+// readSysStats samples current system memory stats, or returns
+// sysStatsOverride when a test has set one — production code always takes
+// the perf.ReadSysStats() path.
+func (s *Server) readSysStats() (perf.SysStat, error) {
+	if s.sysStatsOverride != nil {
+		return s.sysStatsOverride()
+	}
+	return perf.ReadSysStats()
+}
+
+func hostMemoryPressureError(model, reason string) any {
+	type errBody struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	}
+	return struct {
+		Error errBody `json:"error"`
+	}{Error: errBody{
+		Message: fmt.Sprintf("model %q was not loaded: host is under critical memory pressure (%s); retry shortly", model, reason),
+		Type:    "host_memory_pressure_error",
+		Code:    "host_memory_critical",
+	}}
 }
