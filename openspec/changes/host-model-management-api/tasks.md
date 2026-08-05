@@ -501,9 +501,41 @@
       `go test ./internal/operation/... ./internal/server/... -race
       -count=1` green (421 tests). `make check-codegen` passes with no
       diff — no OpenAPI schema touched by this task.
-- [ ] 4.5 Download and verify shard/auxiliary sets as one operation and
-- [ ] 4.5 Download and verify shard/auxiliary sets as one operation and
+- [x] 4.5 Download and verify shard/auxiliary sets as one operation and
   register only after all required artifacts succeed.
+      Most of this requirement was already structurally true since 4.1:
+      `download`/`verify`/`install` each loop over every artifact in the
+      operation and return on the first failure, so `Run` never reaches
+      `PhaseRegistering` — and therefore never calls `Register` — unless
+      every artifact in the set succeeded through download, verify, and
+      install. The one genuine gap this task closed: `primaryWeightsPath`
+      (which artifact `Registrar` points a backend command at) picked
+      "whichever weights-role artifact plan.artifacts listed first," which
+      is only correct by coincidence for a client that happens to submit
+      shards in index order — nothing enforces that (task 3.3's
+      `validateWeightShardCompleteness` only checks a complete set is
+      present, not that it's sorted). Fixed to use `ParseShardInfo`
+      (task 3.2) and pick the lowest-indexed shard among the weights-role
+      artifacts specifically — llama.cpp's own convention is to be pointed
+      at shard 1 and auto-discover the rest via the `-NNNNN-of-NNNNN`
+      filename convention.
+      Tests: 2 new cases in `internal/operation/executor_test.go` — a
+      2-shard set plus a tokenizer auxiliary file, submitted in the plan
+      with shard 2 listed *before* shard 1 specifically to prove
+      `primaryWeightsPath` doesn't trust plan order, asserting the
+      registered path is shard 1 and that all three files install with
+      correct content; and a failure case where shard 2 of 2 404s,
+      asserting `Register` is never called (via a callback that fails the
+      test if invoked) even though shard 1 downloaded successfully and is
+      left on disk as a retained partial, per design.md decision 4's
+      partial-retention guarantee.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1343 tests, 31 packages);
+      `go test ./internal/operation/... ./internal/server/... -race
+      -count=1` green (423 tests). `make check-codegen` passes with no
+      diff — no OpenAPI schema touched by this task. Also fixed an
+      accidental duplicate "4.5" line in this file left over from an
+      earlier edit, found while updating this entry.
 - [ ] 4.6 Implement explicit cancellation policy and abandoned-partial cleanup.
 - [ ] 4.7 Preserve idempotent registration when artifacts are already complete.
 

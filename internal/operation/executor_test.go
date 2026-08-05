@@ -677,3 +677,137 @@ func TestVerifyDigest_RejectsAnUnsupportedDigestForm(t *testing.T) {
 		t.Fatal("verifyDigest() = nil, want an error for a non-sha256 digest form")
 	}
 }
+
+// shardSetServer serves fixed content per artifact path, keyed by the
+// path's basename — the multi-artifact tests below route several distinct
+// artifacts (shards + an auxiliary file) through one httptest.Server this
+// way, mirroring how a real repository serves every artifact from the same
+// host.
+func shardSetServer(t *testing.T, content map[string][]byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := filepath.Base(r.URL.Path)
+		body, ok := content[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body) //nolint:errcheck
+	}))
+}
+
+func TestExecutor_Run_MultiArtifactShardSetAndAuxiliary_HappyPath(t *testing.T) {
+	shard1 := []byte("shard one content, the one that must be picked as primary")
+	shard2 := []byte("shard two content")
+	tokenizer := []byte("tokenizer.json content")
+
+	ts := shardSetServer(t, map[string][]byte{
+		"model-00001-of-00002.gguf": shard1,
+		"model-00002-of-00002.gguf": shard2,
+		"tokenizer.json":            tokenizer,
+	})
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts: []Artifact{
+			// Deliberately out of index order — task 4.5's whole point is
+			// that primaryWeightsPath must not just trust plan order.
+			{Path: "model-00002-of-00002.gguf", SizeBytes: int64(len(shard2)), Role: ArtifactRoleWeights},
+			{Path: "model-00001-of-00002.gguf", SizeBytes: int64(len(shard1)), Role: ArtifactRoleWeights},
+			{Path: "tokenizer.json", SizeBytes: int64(len(tokenizer)), Role: ArtifactRoleTokenizer},
+		},
+		Registration: Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	var registeredWeightsPath string
+	exec := &Executor{
+		Store:     store,
+		ModelsDir: modelsDir,
+		Client:    testClient(t, ts.URL),
+		Register: func(op *Operation, weightsPath string) error {
+			registeredWeightsPath = weightsPath
+			return nil
+		},
+	}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v, warnings=%v)", op.Phase, op.Error, op.Warnings)
+	}
+
+	wantPrimary := filepath.Join(modelsDir, "org", "repo", "model-00001-of-00002.gguf")
+	if registeredWeightsPath != wantPrimary {
+		t.Fatalf("registered weightsPath = %q, want shard 1 (%q), not whichever shard plan order listed first", registeredWeightsPath, wantPrimary)
+	}
+
+	for name, want := range map[string][]byte{
+		"model-00001-of-00002.gguf": shard1,
+		"model-00002-of-00002.gguf": shard2,
+		"tokenizer.json":            tokenizer,
+	} {
+		got, err := os.ReadFile(filepath.Join(modelsDir, "org", "repo", name))
+		if err != nil {
+			t.Fatalf("read installed %s: %v", name, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("installed %s content = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestExecutor_Run_AbortsTheWholeSetAndNeverRegistersWhenOneArtifactFails(t *testing.T) {
+	shard1 := []byte("shard one, downloads fine")
+	// shard2 is intentionally absent from the server's content map, so it
+	// 404s.
+
+	ts := shardSetServer(t, map[string][]byte{
+		"model-00001-of-00002.gguf": shard1,
+	})
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts: []Artifact{
+			{Path: "model-00001-of-00002.gguf", SizeBytes: int64(len(shard1)), Role: ArtifactRoleWeights},
+			{Path: "model-00002-of-00002.gguf", SizeBytes: 1000, Role: ArtifactRoleWeights},
+		},
+		Registration: Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	registerCalled := false
+	exec := &Executor{
+		Store:     store,
+		ModelsDir: modelsDir,
+		Client:    testClient(t, ts.URL),
+		Register: func(op *Operation, weightsPath string) error {
+			registerCalled = true
+			return nil
+		},
+	}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseFailed {
+		t.Fatalf("Phase = %s, want failed", op.Phase)
+	}
+	if registerCalled {
+		t.Fatal("Register must never be called when any artifact in the set fails — a shard set is one operation, not independent per-file successes")
+	}
+
+	// The shard that succeeded is left on disk (as a retained partial or
+	// installed file, per design.md decision 4's partial-retention
+	// guarantee) — the point here is only that the model was never
+	// registered with an incomplete weight set, not that nothing was
+	// downloaded at all.
+	if _, err := os.Stat(filepath.Join(modelsDir, "org", "repo", "model-00001-of-00002.gguf") + ".part"); err != nil {
+		t.Fatalf("shard 1's partial should still be on disk: %v", err)
+	}
+}

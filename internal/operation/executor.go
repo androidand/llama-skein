@@ -27,12 +27,14 @@ type Registrar func(op *Operation, weightsPath string) error
 //
 // This started as task 4.1's single-artifact vertical slice (migration plan
 // step 3: "one unsharded GGUF vertical slice") and now also carries task
-// 4.3's HTTP range resume (downloadOne/fetchArtifact) and task 4.4's digest
-// verification (verify/verifyDigest) — deliberately still not the full
-// design.md decision 4 flow:
-//   - no shard/auxiliary-set-aware install ordering (task 4.5): multiple
-//     artifacts download and install fine, but nothing here groups shards or
-//     treats a set specially;
+// 4.3's HTTP range resume (downloadOne/fetchArtifact), task 4.4's digest
+// verification (verify/verifyDigest), and task 4.5's shard-set awareness
+// (primaryWeightsPath picks the lowest-indexed shard, not just whichever
+// one plan order listed first; download/verify/install already treated
+// every artifact in the set as one all-or-nothing sequence since 4.1 — see
+// download/verify/install's per-artifact loops, each returning on the
+// first failure before Run ever reaches registering) — deliberately still
+// not the full design.md decision 4 flow:
 //   - no cooperative mid-flight cancellation (task 4.6): Run only stops
 //     early if ctx itself is cancelled (server shutdown); a /cancel request
 //     against the same operation ID does not interrupt an in-progress Run
@@ -56,10 +58,10 @@ type Registrar func(op *Operation, weightsPath string) error
 // machine (the vertical slice task 4.1 asked for), atomic final rename
 // (fsync during download, rename during install), HTTP range resume with
 // restart fallback (task 4.3), SHA-256 digest verification when the plan
-// provided one and a recorded warning when it didn't (task 4.4), and a Run
-// call that is not tied to any HTTP request's context — the caller
-// (internal/server) passes a context whose lifetime is the server process,
-// not the request that created the
+// provided one and a recorded warning when it didn't (task 4.4), correct
+// shard-set handling (task 4.5), and a Run call that is not tied to any
+// HTTP request's context — the caller (internal/server) passes a context
+// whose lifetime is the server process, not the request that created the
 // operation. That decoupling is what lets a downloaded partial file survive
 // the client disconnecting, which is task 4.2's core requirement; task 4.2
 // additionally wants partials retained across a later *retry*, and 4.3's
@@ -542,17 +544,41 @@ func (e *Executor) install(resolved []resolvedArtifact) *Error {
 	return nil
 }
 
-// primaryWeightsPath returns the resolved destination of op's weights
-// artifact, for Registrar to build a run command against. For 4.1's
-// single-unsharded-artifact scope there is exactly one; picking the right
-// file to point a backend at for a multi-shard set (task 4.5) is not
-// implemented here — this returns the first weights-role artifact found in
-// plan order, which is only meaningful today because there is only ever one.
+// primaryWeightsPath returns the resolved destination of the weights
+// artifact Registrar should point a backend command at. For a single,
+// unsharded weights artifact there is only one choice. For a multi-shard
+// set (task 4.5), llama.cpp's convention is to be pointed at shard 1 and
+// auto-discover the rest via the "-NNNNN-of-MMMMM" filename convention it
+// shares with ParseShardInfo (task 3.2) — so this picks the lowest-indexed
+// shard among the weights-role artifacts, not just whichever one
+// plan.artifacts happened to list first. A client is never required to
+// submit shards in index order (task 3.3's validateWeightShardCompleteness
+// only checks that a complete set is present, not that it's sorted), so
+// trusting plan order here would have been a real correctness bug for any
+// client that didn't happen to submit shards low-to-high.
 func primaryWeightsPath(op *Operation, resolved []resolvedArtifact) string {
+	firstWeights := -1
+	shardBest := -1
+	var shardBestIndex uint32
 	for i, a := range op.Artifacts {
-		if a.Role == ArtifactRoleWeights {
-			return resolved[i].dest
+		if a.Role != ArtifactRoleWeights {
+			continue
 		}
+		if firstWeights == -1 {
+			firstWeights = i
+		}
+		if info, ok := ParseShardInfo(a.Path); ok {
+			if shardBest == -1 || info.Index < shardBestIndex {
+				shardBest = i
+				shardBestIndex = info.Index
+			}
+		}
+	}
+	if shardBest != -1 {
+		return resolved[shardBest].dest
+	}
+	if firstWeights != -1 {
+		return resolved[firstWeights].dest
 	}
 	return ""
 }
