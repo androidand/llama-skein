@@ -2,6 +2,8 @@ package operation
 
 import (
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +126,63 @@ func TestResolveArtifactURL_AcceptsShortSha(t *testing.T) {
 	want := "https://huggingface.co/org/repo/resolve/abc1234/model.gguf"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveArtifactDestination_ComposesTheExpectedPath(t *testing.T) {
+	modelsDir := t.TempDir()
+	got, err := ResolveArtifactDestination(modelsDir, "org/repo-GGUF", "model-Q4_K_M.gguf")
+	if err != nil {
+		t.Fatalf("ResolveArtifactDestination: %v", err)
+	}
+	want := filepath.Join(modelsDir, "org", "repo-GGUF", "model-Q4_K_M.gguf")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveArtifactDestination_AllowsNestedSubdirectories(t *testing.T) {
+	modelsDir := t.TempDir()
+	got, err := ResolveArtifactDestination(modelsDir, "org/repo-GGUF", "subdir/model.gguf")
+	if err != nil {
+		t.Fatalf("ResolveArtifactDestination: %v", err)
+	}
+	want := filepath.Join(modelsDir, "org", "repo-GGUF", "subdir", "model.gguf")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveArtifactDestination_RejectsPathTraversal(t *testing.T) {
+	modelsDir := t.TempDir()
+	_, err := ResolveArtifactDestination(modelsDir, "org/repo", "../../../etc/passwd")
+	if !errors.Is(err, ErrUntrustedSource) {
+		t.Fatalf("err = %v, want ErrUntrustedSource", err)
+	}
+}
+
+func TestResolveArtifactDestination_RejectsMalformedRepository(t *testing.T) {
+	modelsDir := t.TempDir()
+	_, err := ResolveArtifactDestination(modelsDir, "../escape/repo", "model.gguf")
+	if !errors.Is(err, ErrUntrustedSource) {
+		t.Fatalf("err = %v, want ErrUntrustedSource", err)
+	}
+}
+
+func TestResolveArtifactDestination_ContainmentIsAnExactDirectoryPrefix(t *testing.T) {
+	// The destination must be genuinely inside modelsDir (per filepath.Rel,
+	// the correct containment check), not just share a textual prefix with
+	// a sibling directory like "models-archive" — the bug a naive
+	// strings.HasPrefix(dest, modelsDir) check (no separator) would have.
+	parent := t.TempDir()
+	modelsDir := filepath.Join(parent, "models")
+
+	got, err := ResolveArtifactDestination(modelsDir, "org/repo", "model.gguf")
+	if err != nil {
+		t.Fatalf("ResolveArtifactDestination: %v", err)
+	}
+	rel, err := filepath.Rel(modelsDir, got)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("destination %q is not contained within %q (rel=%q, err=%v)", got, modelsDir, rel, err)
 	}
 }

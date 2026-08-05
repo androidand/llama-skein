@@ -225,9 +225,32 @@
       check (missing shard, duplicate index, mismatched totals, empty/
       non-shard input) + 2 handler-level tests (reject incomplete, accept
       complete) proving the wiring. Full go build/vet/test ./... green.
-- [ ] 3.3 Validate immutable revision, artifact paths, destination
+- [x] 3.3 Validate immutable revision, artifact paths, destination
   containment, required roles, size, and optional digest before operation
   creation.
+      — Immutable revision/artifact paths were already covered by 3.1's
+      ResolveArtifactURL and size by the original validateInstallPlan; this
+      task closed the remaining three:
+      - Destination containment: new operation.ResolveArtifactDestination,
+        the source-side-resolver's twin for the local filesystem side of
+        design.md decision 7 ("destination paths are resolved under the
+        configured models directory"). Containment uses filepath.Rel, not a
+        naive string prefix — a destination under a sibling directory that
+        merely starts with the same characters ("models-archive" vs
+        "models") must never pass. Uses the existing s.modelsDir() accessor
+        (falls back to inferring from configured model cmds), not the raw
+        config field, and is skipped only when that resolves to "" (no
+        models directory knowable yet) rather than blocking every install
+        on a fresh install with no models configured.
+      - Required roles: a plan needs at least one weights-role artifact —
+        registering a model with nothing to run is meaningless.
+      - Optional digest: when present, "sha256:" + 64 lowercase hex, nothing
+        looser.
+      11 new tests in internal/operation (destination composition, nested
+      subdirs, traversal/malformed-repository rejection, the sibling-prefix
+      containment case) + 7 handler-level tests (no-weights rejection,
+      4 malformed-digest shapes, well-formed-digest acceptance). Full go
+      build/vet/test ./... green (25/25 in the operations handler suite).
 - [ ] 3.4 Add disk-space preflight for remaining bytes plus configurable
   safety reserve.
 - [ ] 3.5 Add table tests for gated repositories, nested files, encoded paths,

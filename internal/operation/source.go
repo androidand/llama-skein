@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -71,6 +72,44 @@ func ResolveArtifactURL(repository, revision, artifactPath string) (string, erro
 	pathSegments := append([]string{"", repoParts[0], repoParts[1], "resolve", revision}, segments...)
 	base.Path = strings.Join(pathSegments, "/")
 	return base.String(), nil
+}
+
+// ResolveArtifactDestination safely composes the on-disk destination for one
+// artifact under modelsDir, the other half of design.md decision 7's
+// "destination paths are resolved under the configured models directory."
+// Structurally the same discipline as ResolveArtifactURL (independently
+// validate repository/path shape, never trust a composed string) plus one
+// more check ResolveArtifactURL doesn't need: after joining, the resolved
+// absolute path must still be *inside* modelsDir. filepath.Join alone
+// cannot guarantee that on its own — safePathSegments already forbids the
+// obvious ".."-segment escape, but this is defense in depth against
+// modelsDir itself being misconfigured (e.g. a trailing-slash mismatch) or
+// a future caller reusing the join logic without first calling
+// safePathSegments.
+func ResolveArtifactDestination(modelsDir, repository, artifactPath string) (string, error) {
+	if !repositoryRe.MatchString(repository) {
+		return "", fmt.Errorf("%w: source_repository %q is not a bare org/repo id", ErrUntrustedSource, repository)
+	}
+	segments, err := safePathSegments(artifactPath)
+	if err != nil {
+		return "", fmt.Errorf("%w: artifact path %q: %v", ErrUntrustedSource, artifactPath, err)
+	}
+
+	absModelsDir, err := filepath.Abs(modelsDir)
+	if err != nil {
+		return "", fmt.Errorf("operation: models directory %q: %w", modelsDir, err)
+	}
+	repoParts := strings.SplitN(repository, "/", 2)
+	dest := filepath.Join(append([]string{absModelsDir, repoParts[0], repoParts[1]}, segments...)...)
+
+	// filepath.Join already cleans the result, but the containment check
+	// still needs an exact-directory prefix match (absModelsDir+separator),
+	// not a plain string prefix — "/models-archive" must not pass a
+	// containment check against "/models".
+	if dest != absModelsDir && !strings.HasPrefix(dest, absModelsDir+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: resolved destination %q escapes the models directory", ErrUntrustedSource, dest)
+	}
+	return dest, nil
 }
 
 // safePathSegments splits and validates an artifact path: no leading slash,

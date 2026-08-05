@@ -35,6 +35,7 @@ func newOperationTestServerWithDir(t *testing.T) (*Server, string) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	s := newTestServer(newStubRouter(nil, ""), nil)
+	s.cfg.ModelsDir = t.TempDir() // a real modelsDir so destination-containment validation actually runs.
 	s.operationStore = store
 	s.routes()
 	return s, dir
@@ -168,6 +169,72 @@ func TestHandleCreateModelOperation_AcceptsACompleteShardSet(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handler.ServeHTTP(w, req)
 
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleCreateModelOperation_RejectsAPlanWithNoWeightsArtifact proves
+// the required-roles check (design.md/task 3.3): a plan can name a
+// tokenizer or config file, but registering a model with nothing to run
+// makes no sense.
+func TestHandleCreateModelOperation_RejectsAPlanWithNoWeightsArtifact(t *testing.T) {
+	s := newOperationTestServer(t)
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [{"path": "tokenizer.json", "size_bytes": 1000, "role": "tokenizer"}],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleCreateModelOperation_RejectsAMalformedDigest and
+// TestHandleCreateModelOperation_AcceptsAWellFormedDigest cover the
+// optional-digest half of task 3.3.
+func TestHandleCreateModelOperation_RejectsAMalformedDigest(t *testing.T) {
+	cases := map[string]string{
+		"missing sha256 prefix": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"wrong length":          "sha256:aaaa",
+		"uppercase hex":         "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"non-hex characters":    "sha256:zzzzaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	for name, digest := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newOperationTestServer(t)
+			body := `{
+				"source_repository": "org/model-GGUF",
+				"source_revision": "deadbeef",
+				"artifacts": [{"path": "model.gguf", "size_bytes": 1000, "role": "weights", "digest": "` + digest + `"}],
+				"registration": {"model_id": "my-model", "backend": "llamacpp"}
+			}`
+			req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+			w := httptest.NewRecorder()
+			s.handler.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleCreateModelOperation_AcceptsAWellFormedDigest(t *testing.T) {
+	s := newOperationTestServer(t)
+	digest := strings.Repeat("a", 64)
+	body := `{
+		"source_repository": "org/model-GGUF",
+		"source_revision": "deadbeef",
+		"artifacts": [{"path": "model.gguf", "size_bytes": 1000, "role": "weights", "digest": "sha256:` + digest + `"}],
+		"registration": {"model_id": "my-model", "backend": "llamacpp"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/operations", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handler.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
 	}

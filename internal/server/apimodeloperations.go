@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 		writeOperationError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if reason := validateInstallPlan(plan); reason != "" {
+	if reason := validateInstallPlan(plan, s.modelsDir()); reason != "" {
 		writeOperationError(w, http.StatusBadRequest, reason)
 		return
 	}
@@ -80,16 +81,18 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 	writeJSONStatus(w, http.StatusCreated, toAPIModelOperation(op))
 }
 
+// digestRe matches the one digest form InstallArtifact.digest documents:
+// "sha256:" followed by exactly 64 lowercase hex characters.
+var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
 // validateInstallPlan reports the first reason plan is unacceptable, or ""
-// if it may proceed. Covers structural/request-shape validation plus the
-// source trust-boundary check (design.md decision 7): every artifact's
-// download URL must compose safely from independently-validated
-// repository/revision/path (operation.ResolveArtifactURL), never from a
-// trusted-as-is caller-supplied string. Destination containment and
-// already-configured model_id collision still land with the actual
-// execution path in a later task — those need a real models directory and a
-// real config to check against, neither of which exists at this layer yet.
-func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
+// if it may proceed (design.md decision 7 and task 3.3's full list —
+// immutable revision, artifact paths, destination containment, required
+// roles, size, optional digest). Already-configured model_id collision
+// still lands with the actual execution path in a later task: it needs a
+// real config to check against, which this layer doesn't hold — only
+// modelsDir is threaded through, for the destination-containment check.
+func validateInstallPlan(plan apicontract.ModelInstallPlan, modelsDir string) string {
 	if plan.SourceRepository == "" {
 		return "source_repository is required"
 	}
@@ -99,6 +102,7 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
 	if len(plan.Artifacts) == 0 {
 		return "at least one artifact is required"
 	}
+	hasWeights := false
 	for _, artifact := range plan.Artifacts {
 		if artifact.Path == "" {
 			return "every artifact needs a path"
@@ -106,9 +110,23 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan) string {
 		if artifact.SizeBytes <= 0 {
 			return "every artifact needs a positive size_bytes"
 		}
+		if artifact.Digest != nil && !digestRe.MatchString(*artifact.Digest) {
+			return fmt.Sprintf("artifact %s: digest must be \"sha256:\" followed by 64 hex characters", artifact.Path)
+		}
 		if _, err := operation.ResolveArtifactURL(plan.SourceRepository, plan.SourceRevision, artifact.Path); err != nil {
 			return err.Error()
 		}
+		if modelsDir != "" {
+			if _, err := operation.ResolveArtifactDestination(modelsDir, plan.SourceRepository, artifact.Path); err != nil {
+				return err.Error()
+			}
+		}
+		if artifact.Role == apicontract.ArtifactRoleWeights {
+			hasWeights = true
+		}
+	}
+	if !hasWeights {
+		return "at least one artifact must have role \"weights\""
 	}
 	if plan.Registration.ModelId == "" {
 		return "registration.model_id is required"
