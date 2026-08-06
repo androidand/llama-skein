@@ -979,6 +979,12 @@ type MemoryInfo struct {
 
 // Model defines model for Model.
 type Model struct {
+	// ActiveOperationId ID of a currently non-terminal model operation (see ModelOperation) whose registration.model_id is this model, if one is in progress — a reinstall, for instance. Omitted when no such operation exists.
+	ActiveOperationId *string `json:"active_operation_id,omitempty"`
+
+	// ArtifactPaths Repository-relative paths of every artifact the founding install operation submitted (weights, shards, auxiliaries) — not live-rescanned from disk, so it reflects what was installed, not necessarily every file currently present at the destination. Same provenance source and omission conditions as source_repository.
+	ArtifactPaths *[]string `json:"artifact_paths,omitempty"`
+
 	// Backend Inference backend type.
 	Backend       *Backend `json:"backend,omitempty"`
 	ContextLength *int     `json:"context_length,omitempty"`
@@ -994,6 +1000,9 @@ type Model struct {
 	Default     *bool   `json:"default,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Id          string  `json:"id"`
+
+	// Installed Whether the model's primary weights file currently exists on disk. Distinct from being configured (present in this list at all) — a configured model's weight file can be missing (deleted, moved, or never finished installing). Omitted when it cannot be determined (e.g. no -m/--model path in the command).
+	Installed *bool `json:"installed,omitempty"`
 
 	// LastError The most recent start or load failure, retained after the process is gone so callers can distinguish a broken model from an idle one. Kept as history across a later successful start; 'state' is what reports the current condition.
 	LastError       *LastError `json:"last_error,omitempty"`
@@ -1017,6 +1026,12 @@ type Model struct {
 
 	// SizeBytes On-disk size of the model weights in bytes: the GGUF file size for llama.cpp, or the summed safetensors size for MLX. Lets clients show a human-readable size (e.g. GB) when picking between similar quantizations. Omitted when the size can't be determined (peer models, un-resolvable path).
 	SizeBytes *int64 `json:"size_bytes,omitempty"`
+
+	// SourceRepository e.g. "unsloth/Qwen3.6-35B-A3B-GGUF". Recovered from the most recent succeeded install operation that registered this model_id (internal/operation.Store), not stored on the model config itself. Omitted when unknown — a model configured by hand, pulled via the older POST /api/models/pull route, or whose founding operation record has since been pruned has no recoverable source.
+	SourceRepository *string `json:"source_repository,omitempty"`
+
+	// SourceRevision Immutable revision (commit SHA) of source_repository, same provenance source and same omission conditions.
+	SourceRevision *string `json:"source_revision,omitempty"`
 
 	// State Current process state. 'failed' means the last start or load attempt failed and is distinct from 'stopped', which means idle with nothing wrong; reporting a failed load as stopped makes a broken model indistinguishable from one that was never requested.
 	State *ModelState `json:"state,omitempty"`

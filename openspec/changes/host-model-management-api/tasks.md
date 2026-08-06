@@ -670,8 +670,79 @@ per Executor's own doc comment; no task in this list adds it).
 
 ## 5. Inventory and lifecycle
 
-- [ ] 5.1 Return configured, installed, loading, ready, failed, and unloaded
+- [x] 5.1 Return configured, installed, loading, ready, failed, and unloaded
   state with source, artifact set, active operation, and failure detail.
+      Scoped deliberately: design.md decision 6 says llama-swap's existing
+      process-state vocabulary (Model.state: stopped/starting/ready/
+      stopping/shutdown/failed, already shipped pre-this-change) "remains
+      the runtime source," to be *enriched*, not replaced. The
+      configured/installed/loading distinction and "failure reason and
+      freshness" from decision 6's enrichment list were mostly already
+      covered (a model appearing in this list at all means configured;
+      Model.last_error already reports failure detail; PhaseDownloading
+      etc. from section 4's Executor is the "loading" of an install, surfaced
+      below via active_operation_id, not a new top-level enum value invented
+      for this task). What decision 6 actually asked this task to add:
+      "installed-on-disk and configured distinctions," "exact
+      source/provenance when known," and "active model operation." That's
+      what landed.
+      `contracts/llama-skein.openapi.json`: 5 new optional `Model`
+      properties — `installed` (bool), `source_repository`/
+      `source_revision` (string), `artifact_paths` (string[]),
+      `active_operation_id` (string). Regenerated
+      `pkg/apicontract/llama_skein.gen.go` (idempotent, verified via two
+      successive `go generate` runs producing identical MD5, same
+      discipline as every prior contract change in this session).
+      New `internal/server/apimodelprovenance.go`: `modelOperationIndex`
+      (active/succeeded maps keyed by model_id) + `buildModelOperationIndex`
+      (one `operationStore.List()` scan, reused across every model in a
+      list response rather than one scan per model) +
+      `addProvenanceAndOperationFields`. Provenance (source_repository/
+      source_revision/artifact_paths) comes from the most recent
+      **succeeded** operation whose `registration.model_id` matches —
+      there is no persistent provenance store separate from the operation
+      records themselves; a model configured by hand, pulled via the older
+      `POST /api/models/pull` route, or whose founding operation record has
+      since been pruned (`Store.Prune`, not currently wired to run
+      automatically — see task 2.2/4.6 notes) simply has no recoverable
+      provenance, and the fields are omitted, not defaulted. This is an
+      explicit, documented trade-off: correct today (nothing prunes
+      automatically yet) but worth revisiting if/when pruning is wired up.
+      `active_operation_id` comes from the most recent **non-terminal**
+      operation for that model_id. `installed` stats the primary weights
+      path (`parseModelPath(mc.Cmd)`) directly — true/false whenever a path
+      is parseable, omitted only when it isn't (matches `addFileMeta`'s
+      existing convention).
+      Wired into both `handleAPIListModels` and `handleAPIGetModel`
+      (`internal/server/apimodels.go`) — the first-ever dedicated test
+      coverage for either handler; neither had any before this task.
+      New `internal/server/apimodels_test.go`, 7 tests: basic list shape,
+      `installed` true/false for present/missing weights files, all four
+      new fields omitted when no operation matches, provenance populated
+      from a real succeeded operation record, `active_operation_id`
+      populated from a real non-terminal one (and provenance fields
+      correctly still absent since it hasn't succeeded yet), the same
+      provenance fields present on the single-model GET, and a nil
+      `operationStore` degrading gracefully rather than breaking the list.
+      Explicitly NOT done in this task: `handleAPIListModels`/
+      `handleAPIGetModel` still build hand-rolled `map[string]any`
+      responses rather than the generated `apicontract.Model` struct
+      directly — design.md decision 1's "handwritten DTOs... removed after
+      migration" goal is section 6's (Client migration) charter, not this
+      one's; changing the response-building mechanism here risked breaking
+      existing fields (`details`, `unlisted`, GGUF metadata) this task
+      never touched. `artifact_paths` reports what the founding operation
+      *submitted*, not a live re-scan of what's actually present at the
+      destination now — a file manually deleted after install won't be
+      reflected until `installed` (checked only against the primary
+      weights path) or a future operation notices.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1359 tests, 31 packages);
+      `go test ./internal/server/... -race -count=1` green (320 tests).
+      `go generate ./pkg/apicontract` run twice produced an identical MD5
+      (idempotent) — `make check-codegen` itself shows a diff pre-commit
+      by design (it compares against git HEAD); re-checked clean after
+      committing, per this session's established discipline.
 - [ ] 5.2 Route load and unload through current upstream llama-swap lifecycle
   behavior and expose observable terminal outcomes.
 - [ ] 5.3 Make removal validate artifact ownership, unload affected models,

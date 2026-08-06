@@ -28,6 +28,12 @@ func (s *Server) handleAPIListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(ids)
 
+	// task 5.1: built once and reused per model — s.operationStore.List()
+	// is already a full scan of every operation record regardless of how
+	// many models ask, so one scan here is strictly better than one per
+	// model.
+	opIdx := s.buildModelOperationIndex()
+
 	entries := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		mc := s.cfg.Models[id]
@@ -52,6 +58,7 @@ func (s *Server) handleAPIListModels(w http.ResponseWriter, r *http.Request) {
 			entry["aliases"] = mc.Aliases
 		}
 		addFileMeta(entry, mc)
+		addProvenanceAndOperationFields(entry, id, mc, opIdx)
 		filename := ""
 		if p := parseModelPath(mc.Cmd); p != "" {
 			filename = p[strings.LastIndexAny(p, "/\\")+1:]
@@ -88,6 +95,7 @@ func (s *Server) handleAPIGetModel(w http.ResponseWriter, r *http.Request) {
 		record["description"] = desc
 	}
 	addFileMeta(record, mc)
+	addProvenanceAndOperationFields(record, realName, mc, s.buildModelOperationIndex())
 	filename := ""
 	if p := parseModelPath(mc.Cmd); p != "" {
 		filename = p[strings.LastIndexAny(p, "/\\")+1:]
