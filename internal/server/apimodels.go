@@ -262,14 +262,20 @@ func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 	// behind an error.
 	configRemoved := false
 	if s.configFile != "" {
-		if err := s.removeModelFromConfig(realName); err != nil {
+		changed, err := s.removeModelFromConfig(realName)
+		if err != nil {
 			router.SendResponse(w, r, http.StatusInternalServerError,
 				fmt.Sprintf("deleted artifact files but failed to remove config entry: %v", err))
 			return
 		}
-		configRemoved = true
-		s.runtimeStateOrDefault().SetPending("api:delete-model", "deleted model "+realName)
-		s.triggerReload()
+		configRemoved = true // true either way: the model is confirmed absent from config now, whether this call was what removed it or it was already gone.
+		// task 5.4: only reload if something on disk actually changed —
+		// an already-absent config entry needs no reload to "confirm" its
+		// absence again.
+		if changed {
+			s.runtimeStateOrDefault().SetPending("api:delete-model", "deleted model "+realName)
+			s.triggerReload()
+		}
 	}
 
 	writeJSONStatus(w, http.StatusOK, map[string]any{

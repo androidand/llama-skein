@@ -868,8 +868,76 @@ per Executor's own doc comment; no task in this list adds it).
       `make check-codegen` passes with no diff — this endpoint was already
       hand-rolled before this change (same deferred-DTO-migration situation
       5.1/5.2 documented), so no OpenAPI schema was touched.
-- [ ] 5.4 Ensure config writes use existing validation/history/no-op safety
+- [x] 5.4 Ensure config writes use existing validation/history/no-op safety
   and do not trigger avoidable reloads.
+      Two real, concrete gaps found by auditing every config-writing path
+      in `internal/server` against the patterns `patchModelInConfig`
+      already established (its own doc comment: "Snapshot the canonical
+      form before mutation so a no-op patch... is detected by content"):
+      1. **No-op detection didn't exist for whole-model writes/removals at
+         all** — only `patchModelInConfig` had it; `writeModelToConfig`
+         (used by config-API add, task 4.1's install registration, and the
+         older pull route) and `removeModelFromConfig` (used by config-API
+         remove and task 5.3's delete) always wrote and always reloaded
+         unconditionally, even when the resulting content was
+         byte-identical to what was already on disk. Fixed: both gained
+         the exact same before/after-marshal comparison
+         `patchModelInConfig` uses, now returning `(changed bool, err
+         error)`; every one of their 4 callers updated to skip
+         `SetPending`+`triggerReload` when `changed` is false. This isn't
+         hypothetical for the install path specifically — it's task 4.7's
+         idempotent-reinstall scenario made concrete: resubmitting the
+         same plan for an already-succeeded, already-registered model now
+         genuinely skips the reload (and the model restart it would
+         cause) instead of triggering one for a config file that didn't
+         change.
+      2. **`registerInstalledModel` (task 4.1) never called `SetPending`
+         at all** — every other config-writing handler in this package
+         stages a real actor/summary before `triggerReload()` so
+         `internal/config.SnapshotConfig` (invoked generically at the
+         reload boundary in `llama-skein.go`) attributes the resulting
+         history snapshot correctly; this one silently fell through to the
+         generic `"reload"` default (`RuntimeState.TakePending`'s own doc
+         comment) for every model ever installed through the operation
+         API. Fixed: now calls
+         `SetPending("api:install-model", "installed model <id>
+         (operation <op.ID>)")` before reloading.
+      `handleAPIConfigAddModel` (config-API add) also picked up the
+      no-op skip as a side effect of `writeModelToConfig`'s signature
+      change, even though it wasn't this task's original target — audited
+      while updating every caller for the new signature, so it seemed
+      wrong to leave it inconsistent with the others.
+      Model-ID collision detection at install time (validateInstallPlan
+      accepting a plan for an already-configured model_id, silently
+      overwriting it) remains explicitly out of scope — task 3.3's own
+      completion note already deferred it as needing "a real config to
+      check against, which this layer doesn't hold," and no task in this
+      list reopens it; this task is about reusing existing safety
+      mechanisms consistently, not adding new validation.
+      Tests: new `internal/server/apiconfignoop_test.go`, 7 cases —
+      `writeModelToConfig`/`removeModelFromConfig` each reporting
+      `changed` correctly on a real write vs. an identical rewrite (with
+      the config file's actual bytes verified unchanged, not just the
+      return value trusted), `registerInstalledModel` staging a real
+      actor/summary (not the `"reload"` default) on first registration and
+      correctly staging nothing on an identical second one, and the same
+      no-op behavior confirmed through the real HTTP route
+      (`POST /api/config/models`) via the config file's content rather
+      than a reload call count — `triggerReload` runs `reloadFn` in its
+      own goroutine, and asserting a negative ("no reload happened") by
+      racing that goroutine would repeat the exact flakiness task 4.6
+      already hit and fixed once this session.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1381 tests, 31 packages);
+      `go test ./internal/server/... -race -count=1` green (342 tests).
+      `make check-codegen` passes with no diff — no OpenAPI schema touched
+      by this task.
+
+Section 5 (Inventory and lifecycle) is now complete: 5.1-5.4 all done,
+tested, and pushed individually. Every gap found across this section
+followed the same shape — a pre-existing handler doing less than its own
+documentation/schema/design intent already promised — consistent with
+what sections 3, 4, and 5 have each turned up at least once.
 
 ## 6. Client migration
 

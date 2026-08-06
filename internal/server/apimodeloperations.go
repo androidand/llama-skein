@@ -154,6 +154,20 @@ func (s *Server) newOperationExecutor() *operation.Executor {
 // endpoint, then trigger a reload. Folds design.md decision 3's distinct
 // "registering" and "reloading" phases into one call — see
 // operation.Executor's doc comment for why that's fine.
+//
+// task 5.4 fixed two gaps found while making config writes consistent
+// across the whole server package:
+//  1. This function never called SetPending before triggerReload, so an
+//     install's history snapshot (internal/config.SnapshotConfig, taken
+//     generically at the reload boundary in llama-skein.go) got the
+//     generic "reload" attribution every other config-writing handler in
+//     this package avoids by staging a real actor/summary first.
+//  2. writeModelToConfig now reports whether it actually changed anything
+//     (same no-op-detection pattern patchModelInConfig established) — used
+//     here to skip the reload (and the model restart it would cause)
+//     entirely for task 4.7's idempotent re-registration path: resubmitting
+//     the same install plan for an already-succeeded, already-registered
+//     model writes identical config content a second time.
 func (s *Server) registerInstalledModel(op *operation.Operation, weightsPath string) error {
 	if weightsPath == "" {
 		return fmt.Errorf("operation %s: no weights artifact resolved to register", op.ID)
@@ -177,10 +191,14 @@ func (s *Server) registerInstalledModel(op *operation.Operation, weightsPath str
 	if op.Registration.TTL != nil {
 		mc.UnloadAfter = *op.Registration.TTL
 	}
-	if err := s.writeModelToConfig(op.Registration.ModelID, &mc); err != nil {
+	changed, err := s.writeModelToConfig(op.Registration.ModelID, &mc)
+	if err != nil {
 		return err
 	}
-	s.triggerReload()
+	if changed {
+		s.runtimeStateOrDefault().SetPending("api:install-model", "installed model "+op.Registration.ModelID+" (operation "+op.ID+")")
+		s.triggerReload()
+	}
 	return nil
 }
 

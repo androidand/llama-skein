@@ -334,5 +334,11 @@ func (s *Server) registerPulledModel(dest, filename string, reg *pullRegister) (
 	if reg.TTL != nil {
 		mc.UnloadAfter = *reg.TTL
 	}
-	return id, s.writeModelToConfig(id, &mc)
+	// This route predates task 5.4's no-op detection and is slated for
+	// removal once every caller migrates to the operation API (section 6);
+	// not worth threading writeModelToConfig's new changed bool through
+	// here — the caller already calls triggerReload() unconditionally on
+	// success, same as before this task.
+	_, err := s.writeModelToConfig(id, &mc)
+	return id, err
 }

@@ -199,13 +199,19 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if err := s.writeModelToConfig(req.Id, &mc); err != nil {
+	changed, err := s.writeModelToConfig(req.Id, &mc)
+	if err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError,
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
-	s.runtimeStateOrDefault().SetPending("api:add-model", "added model "+req.Id)
-	s.triggerReload()
+	// task 5.4: re-adding a model with identical content is a no-op — skip
+	// the reload (and the model restart it would cause) rather than
+	// trigger one for a config file that didn't actually change.
+	if changed {
+		s.runtimeStateOrDefault().SetPending("api:add-model", "added model "+req.Id)
+		s.triggerReload()
+	}
 	resp := apicontract.ConfigModelResponse{Id: req.Id, Status: "added"}
 	if len(warnings) > 0 {
 		resp.Warnings = &warnings
@@ -368,13 +374,21 @@ func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Reque
 		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
 		return
 	}
-	if err := s.removeModelFromConfig(realID); err != nil {
+	changed, err := s.removeModelFromConfig(realID)
+	if err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError,
 			fmt.Sprintf("write config: %v", err))
 		return
 	}
-	s.runtimeStateOrDefault().SetPending("api:remove-model", "removed model "+realID)
-	s.triggerReload()
+	// task 5.4: realID was already confirmed present in s.cfg above, so
+	// changed should always be true here in practice — but the check is
+	// kept rather than assumed, matching writeModelToConfig's own callers,
+	// in case the on-disk file and s.cfg have drifted (e.g. an external
+	// edit since the last reload).
+	if changed {
+		s.runtimeStateOrDefault().SetPending("api:remove-model", "removed model "+realID)
+		s.triggerReload()
+	}
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: realID, Status: "removed"})
 }
 
@@ -566,14 +580,27 @@ func (s *Server) writeDefaultModelToConfig(model string) error {
 	return writeYAMLRoot(s.configFile, root, 0o644)
 }
 
-// writeModelToConfig reads the config YAML, sets models[id]=mc, and writes back.
-func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) error {
+// writeModelToConfig reads the config YAML, sets models[id]=mc, and writes
+// back — skipping the actual write, and (via the caller's changed check)
+// the reload it would otherwise trigger, when the resulting content is
+// byte-identical to what's already on disk. Same no-op-detection pattern
+// patchModelInConfig already established ("Snapshot the canonical form
+// before mutation..."), applied here (task 5.4) because a full model write
+// can be a genuine no-op too — most notably, task 4.7's idempotent
+// re-registration path: resubmitting the same install plan for an
+// already-succeeded, already-registered model writes the exact same config
+// content a second time, and that write should not restart the model.
+func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) (changed bool, err error) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
 	root, err := readYAMLRoot(s.configFile)
 	if err != nil {
-		return err
+		return false, err
+	}
+	origYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return false, err
 	}
 
 	modelsNode := yamlMapGet(root, "models")
@@ -611,7 +638,17 @@ func (s *Server) writeModelToConfig(id string, mc *config.ModelConfig) error {
 	}
 	yamlMapSet(modelsNode, id, entry)
 
-	return writeYAMLRoot(s.configFile, root, 0o644)
+	newYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(origYAML, newYAML) {
+		return false, nil
+	}
+	if err := atomicWriteFile(s.configFile, newYAML, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // patchModelInConfig applies a partial model update, preserving other fields.
@@ -808,16 +845,35 @@ func (s *Server) patchGroupInConfig(id string, req apicontract.ConfigGroupPatchR
 }
 
 // removeModelFromConfig deletes models[id] from the config YAML.
-func (s *Server) removeModelFromConfig(id string) error {
+// removeModelFromConfig deletes models[id] from the config YAML, using the
+// same no-op-detection pattern writeModelToConfig now uses (task 5.4): if
+// id was already absent (or the file already matched byte-for-byte for any
+// other reason), nothing is written and changed is false, so the caller
+// can skip an avoidable reload.
+func (s *Server) removeModelFromConfig(id string) (changed bool, err error) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
 	root, err := readYAMLRoot(s.configFile)
 	if err != nil {
-		return err
+		return false, err
+	}
+	origYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return false, err
 	}
 	if modelsNode := yamlMapGet(root, "models"); modelsNode != nil {
 		yamlMapDelete(modelsNode, id)
 	}
-	return writeYAMLRoot(s.configFile, root, 0o644)
+	newYAML, err := marshalYAMLRoot(root)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(origYAML, newYAML) {
+		return false, nil
+	}
+	if err := atomicWriteFile(s.configFile, newYAML, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
