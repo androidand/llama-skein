@@ -27,42 +27,39 @@ type Registrar func(op *Operation, weightsPath string) error
 // resolving, downloading, verifying, installing, registering, reloading.
 //
 // This started as task 4.1's single-artifact vertical slice (migration plan
-// step 3: "one unsharded GGUF vertical slice") and now also carries task
-// 4.3's HTTP range resume (downloadOne/fetchArtifact), task 4.4's digest
-// verification (verify/verifyDigest), and task 4.5's shard-set awareness
-// (primaryWeightsPath picks the lowest-indexed shard, not just whichever
-// one plan order listed first; download/verify/install already treated
-// every artifact in the set as one all-or-nothing sequence since 4.1 — see
-// download/verify/install's per-artifact loops, each returning on the
-// first failure before Run ever reaches registering) — deliberately still
-// not the full design.md decision 4 flow:
-//   - no cooperative mid-flight cancellation (task 4.6): Run only stops
-//     early if ctx itself is cancelled (server shutdown); a /cancel request
-//     against the same operation ID does not interrupt an in-progress Run
-//     started from a different Operation instance, because Run does not
-//     reload the record from Store mid-flight to notice;
-//   - no idempotent short-circuit for an already-complete artifact set at
-//     the Run level (task 4.7) — downloadOne itself already skips
-//     redownloading a ".part" file that's already at or past the declared
-//     size (see its doc comment), but Run always executes preflight/verify/
-//     install/register regardless of whether every artifact turns out to
-//     already be complete;
+// step 3: "one unsharded GGUF vertical slice") and now carries all of
+// section 4: task 4.3's HTTP range resume (downloadOne/fetchArtifact),
+// task 4.4's digest verification (verify/verifyDigest), task 4.5's
+// shard-set awareness (primaryWeightsPath picks the lowest-indexed shard,
+// not just whichever one plan order listed first; download/verify/install
+// already treated every artifact in the set as one all-or-nothing sequence
+// since 4.1), task 4.6's cooperative cancellation (advance/downloadOne
+// checking stopIfCancelled, with Store's ErrAlreadyTerminal guard as the
+// actual TOCTOU-proof correctness mechanism — see store.go), and task
+// 4.7's idempotent short-circuit for an already-installed artifact
+// (downloadOne/verify/install all recognize a final destination that
+// already exists and matches, skipping the network and the rename
+// entirely for that artifact). One deliberate gap remains:
 //   - no automatic redispatch of Run() for an operation Recover() marked
 //     interrupted after a process restart: nothing in this change's task
 //     list adds a retry API or an auto-resume trigger (checked — there is no
 //     "retry" endpoint anywhere in contracts/llama-skein.openapi.json), so
 //     resumability here is a property Run()/downloadOne itself has
 //     (exercised directly by executor_test.go), not yet something that
-//     happens on its own.
+//     happens on its own. Resubmitting the same install plan (a fresh
+//     Operation, not a resumed old one) is the closest thing to a "retry"
+//     this system has, and task 4.7 is what makes that cheap when the
+//     artifacts already succeeded.
 //
 // What it does provide: real download execution moved behind the state
 // machine (the vertical slice task 4.1 asked for), atomic final rename
 // (fsync during download, rename during install), HTTP range resume with
 // restart fallback (task 4.3), SHA-256 digest verification when the plan
 // provided one and a recorded warning when it didn't (task 4.4), correct
-// shard-set handling (task 4.5), and a Run call that is not tied to any
-// HTTP request's context — the caller (internal/server) passes a context
-// whose lifetime is the server process, not the request that created the
+// shard-set handling (task 4.5), real cancellation (task 4.6), idempotent
+// re-installation (task 4.7), and a Run call that is not tied to any HTTP
+// request's context — the caller (internal/server) passes a context whose
+// lifetime is the server process, not the request that created the
 // operation. That decoupling is what lets a downloaded partial file survive
 // the client disconnecting, which is task 4.2's core requirement; task 4.2
 // additionally wants partials retained across a later *retry*, and 4.3's
@@ -388,6 +385,25 @@ func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r 
 	if err := os.MkdirAll(filepath.Dir(r.dest), 0o755); err != nil {
 		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("create destination directory: %v", err)}
 	}
+
+	// task 4.7: the final destination already exists — an earlier operation
+	// already fully installed this exact artifact. Resubmitting the same
+	// plan creates a fresh Operation rather than resuming an old one (no
+	// retry API exists in this contract — see Executor's doc comment), so
+	// this is the closest thing to a "retry" the system has, and it should
+	// be cheap and idempotent, not redownload a multi-gigabyte file that's
+	// already correct. Only size is checked here as a cheap up-front
+	// signal to skip the network at all; verify (below, later in Run) still
+	// checks the real digest against this same final file when the plan
+	// provided one, so a same-size-but-corrupt existing file is still
+	// caught rather than silently accepted.
+	if want := op.Artifacts[index].BytesTotal; want != nil {
+		if fi, err := os.Stat(r.dest); err == nil && fi.Size() == *want {
+			e.saveProgress(op, index, fi.Size())
+			return nil
+		}
+	}
+
 	partial := r.dest + ".part"
 
 	existingSize := int64(0)
@@ -571,17 +587,29 @@ func (e *Executor) saveProgress(op *Operation, index int, written int64) bool {
 	return false
 }
 
-// verify checks each downloaded ".part" file's actual size against its
-// declared BytesTotal, then its content against its declared Digest when
-// one was provided (task 4.4). ErrorDigestMismatch is reused for a size
-// mismatch too because the OpenAPI error-code enum
-// (contracts/llama-skein.openapi.json) has no separate "size mismatch"
-// code — design.md decision 4 point 5 groups "declared size and digest"
-// under one verification step, not two distinct failure reasons.
+// verify checks each artifact's actual content against its declared size,
+// then its declared Digest when one was provided (task 4.4).
+// ErrorDigestMismatch is reused for a size mismatch too because the OpenAPI
+// error-code enum (contracts/llama-skein.openapi.json) has no separate
+// "size mismatch" code — design.md decision 4 point 5 groups "declared
+// size and digest" under one verification step, not two distinct failure
+// reasons.
+//
+// Normally this checks the downloaded ".part" file. Task 4.7's shortcut in
+// downloadOne means an artifact whose final destination already existed
+// never got a ".part" file at all — for that artifact, verify checks the
+// final file directly instead, still applying the same size and digest
+// checks rather than assuming an already-present file is automatically
+// correct.
 func (e *Executor) verify(op *Operation, resolved []resolvedArtifact) *Error {
 	for i, r := range resolved {
-		partial := r.dest + ".part"
-		fi, err := os.Stat(partial)
+		path := r.dest + ".part"
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if _, destErr := os.Stat(r.dest); destErr == nil {
+				path = r.dest
+			}
+		}
+		fi, err := os.Stat(path)
 		if err != nil {
 			return &Error{Code: ErrorInternal, Message: fmt.Sprintf("stat partial file: %v", err)}
 		}
@@ -602,7 +630,7 @@ func (e *Executor) verify(op *Operation, resolved []resolvedArtifact) *Error {
 				"%s: verified by size only; no digest was provided", op.Artifacts[i].Path))
 			continue
 		}
-		if err := verifyDigest(partial, *digest); err != nil {
+		if err := verifyDigest(path, *digest); err != nil {
 			return &Error{Code: ErrorDigestMismatch, Message: fmt.Sprintf("%s: %v", op.Artifacts[i].Path, err)}
 		}
 	}
@@ -637,10 +665,19 @@ func verifyDigest(path, want string) error {
 }
 
 // install atomically renames each artifact's already-synced ".part" file to
-// its final destination.
+// its final destination. An artifact task 4.7 already found fully
+// installed (no ".part" file, because downloadOne never created one) has
+// nothing to rename — verify already confirmed the existing final file is
+// correct, so install is a no-op for it.
 func (e *Executor) install(resolved []resolvedArtifact) *Error {
 	for _, r := range resolved {
-		if err := os.Rename(r.dest+".part", r.dest); err != nil {
+		partial := r.dest + ".part"
+		if _, err := os.Stat(partial); os.IsNotExist(err) {
+			if _, destErr := os.Stat(r.dest); destErr == nil {
+				continue
+			}
+		}
+		if err := os.Rename(partial, r.dest); err != nil {
 			return &Error{Code: ErrorInternal, Message: fmt.Sprintf("install %s: %v", r.dest, err)}
 		}
 	}

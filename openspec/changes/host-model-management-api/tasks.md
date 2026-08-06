@@ -615,8 +615,58 @@
       goroutine synchronization. `make check-codegen` passes with no diff —
       no OpenAPI schema touched (the cancel endpoint's documented
       "asynchronous" contract already covered this behavior).
-- [ ] 4.7 Preserve idempotent registration when artifacts are already complete.
-- [ ] 4.7 Preserve idempotent registration when artifacts are already complete.
+- [x] 4.7 Preserve idempotent registration when artifacts are already complete.
+      Resubmitting the same install plan (a fresh Operation targeting a
+      destination an earlier, already-succeeded operation fully installed)
+      is the closest thing to a "retry" this system has — no retry API
+      exists in this contract (checked again for this task; still true).
+      Two halves closed this out:
+      - Registration itself was already idempotent for free:
+        `registerInstalledModel` calls `writeModelToConfig`, which upserts
+        via `yamlMapSet` rather than erroring on an existing ID — verified
+        by reading it, not assumed.
+      - The genuinely missing half: `downloadOne` only ever checked a
+        `.part` file's size (task 4.3's resume shortcut); it never looked
+        at whether the artifact's *final* destination already existed and
+        matched. A resubmitted plan for an already-installed model would
+        have silently redownloaded the entire artifact from scratch every
+        time. Fixed: `downloadOne` now stats the final destination first
+        and, if its size already matches the declared total, records that
+        size as downloaded and returns immediately — no network call, no
+        `.part` file ever created. `verify` and `install` both updated to
+        match: `verify` checks the final file directly when no `.part`
+        file exists (still applying the same size *and* digest checks — a
+        same-size-but-corrupt existing file is not silently accepted just
+        because the network was skipped); `install` skips the rename
+        entirely for an artifact that's already at its final path.
+      Tests: 3 new cases in `internal/operation/executor_test.go` — the
+      happy path (server would fail the test if hit at all; asserts no
+      `.part` file is ever created and the existing content is left
+      untouched), a same-path-wrong-size file correctly triggering a real
+      redownload (proving the shortcut isn't over-eager), and a
+      same-size-but-wrong-digest existing file still failing verify
+      (proving the shortcut doesn't bypass real verification, just the
+      network fetch). Caught and fixed a hand-counted-string-length bug in
+      my own first draft of the last test via its own defensive
+      length-equality assertion, before the test ever ran for real.
+      Also fixed the top-of-file `Executor` doc comment, which had drifted:
+      it still listed task 4.6 as an unimplemented limitation even though
+      4.6 landed in the previous commit — found while updating it for 4.7
+      and rewritten to reflect the actual current state of all of section 4.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1352 tests, 31 packages);
+      `go test ./... -race -count=1` green across the entire repo.
+      `make check-codegen` passes with no diff — no OpenAPI schema touched.
+      Also fixed another accidental duplicate task-list line (same pattern
+      as 4.5's), found while updating this entry.
+
+Section 4 (Resumable installation) is now complete: 4.1-4.7 all done,
+tested, and pushed individually. The operation.Executor is a real,
+working, tested download-verify-install-register pipeline with resume,
+digest verification, shard-set correctness, cancellation, and idempotent
+re-submission — everything design.md decision 4 asked for except
+automatic redispatch on process-restart recovery (explicitly out of scope
+per Executor's own doc comment; no task in this list adds it).
 
 ## 5. Inventory and lifecycle
 

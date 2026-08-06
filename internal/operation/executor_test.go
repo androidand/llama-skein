@@ -908,3 +908,149 @@ func TestExecutor_Run_StopsWhenAConcurrentCancelRequestTransitionsTheStore(t *te
 		t.Fatalf("final Phase = %s, want cancelled — Run must not overwrite the cancelled record with its own stale progress", final.Phase)
 	}
 }
+
+// TestExecutor_Run_SkipsTheNetworkWhenTheFinalDestinationAlreadyMatches is
+// task 4.7's core proof: resubmitting the same install plan (a fresh
+// Operation targeting a destination an earlier, already-succeeded
+// operation fully installed) must not redownload the artifact at all.
+func TestExecutor_Run_SkipsTheNetworkWhenTheFinalDestinationAlreadyMatches(t *testing.T) {
+	content := []byte("already installed by an earlier successful operation")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("no network request should be made when the final destination already matches")
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedFile(t, dest, content) // the FINAL file, not a ".part" one.
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(content)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	var registeredWeightsPath string
+	exec := &Executor{
+		Store:     store,
+		ModelsDir: modelsDir,
+		Client:    testClient(t, ts.URL),
+		Register: func(op *Operation, weightsPath string) error {
+			registeredWeightsPath = weightsPath
+			return nil
+		},
+	}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	if registeredWeightsPath != dest {
+		t.Fatalf("registered weightsPath = %q, want %q", registeredWeightsPath, dest)
+	}
+	if op.Artifacts[0].BytesDownloaded != int64(len(content)) {
+		t.Fatalf("BytesDownloaded = %d, want %d (the already-installed file's size)", op.Artifacts[0].BytesDownloaded, len(content))
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read final file: %v", err)
+	}
+	if !bytes.Equal(gotContent, content) {
+		t.Fatalf("final file content changed unexpectedly: got %q, want %q", gotContent, content)
+	}
+	if _, err := os.Stat(dest + ".part"); !os.IsNotExist(err) {
+		t.Fatalf("no .part file should ever have been created, stat err = %v", err)
+	}
+}
+
+// TestExecutor_Run_RedownloadsWhenTheFinalDestinationSizeDoesNotMatch
+// proves the shortcut only fires on a genuine size match — a same-name
+// file with the wrong size (e.g. a stale or unrelated file already at that
+// path) is not mistaken for a completed install.
+func TestExecutor_Run_RedownloadsWhenTheFinalDestinationSizeDoesNotMatch(t *testing.T) {
+	correct := []byte("the correct, freshly downloaded content")
+	stale := []byte("wrong size content")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(correct) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedFile(t, dest, stale)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: int64(len(correct)), Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseSucceeded {
+		t.Fatalf("Phase = %s, want succeeded (error=%+v)", op.Phase, op.Error)
+	}
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read final file: %v", err)
+	}
+	if !bytes.Equal(gotContent, correct) {
+		t.Fatalf("final file content = %q, want the freshly downloaded %q, not the stale wrong-size original", gotContent, correct)
+	}
+}
+
+// TestExecutor_Run_FailsVerifyWhenAnAlreadyPresentFileHasTheRightSizeButWrongDigest
+// proves downloadOne's size-only shortcut is not the last word: a
+// same-size-but-corrupt existing file is still caught by verify running
+// against that same final file, not silently accepted just because the
+// network was skipped.
+func TestExecutor_Run_FailsVerifyWhenAnAlreadyPresentFileHasTheRightSizeButWrongDigest(t *testing.T) {
+	// Built from the same base length rather than two hand-typed strings —
+	// an earlier draft of this test hand-counted characters in two
+	// separate string literals and got the lengths wrong, which the
+	// deliberate self-check further down caught before this landed.
+	correctContent := []byte("correct content used only to derive the expected digest")
+	wrongButRightSized := bytes.Repeat([]byte("x"), len(correctContent))
+	rightDigest := sha256Digest(correctContent)
+	if len(wrongButRightSized) != len(correctContent) {
+		t.Fatalf("test fixture bug: lengths must match (%d vs %d)", len(wrongButRightSized), len(correctContent))
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("no network request should be made — the shortcut fires on size alone; this test is specifically about what happens after that")
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	dest := filepath.Join(modelsDir, "org", "repo", "model.gguf")
+	seedFile(t, dest, wrongButRightSized)
+
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts: []Artifact{
+			{Path: "model.gguf", SizeBytes: int64(len(wrongButRightSized)), Digest: &rightDigest, Role: ArtifactRoleWeights},
+		},
+		Registration: Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{Store: store, ModelsDir: modelsDir, Client: testClient(t, ts.URL)}
+	exec.Run(context.Background(), op)
+
+	if op.Phase != PhaseFailed {
+		t.Fatalf("Phase = %s, want failed", op.Phase)
+	}
+	if op.Error == nil || op.Error.Code != ErrorDigestMismatch {
+		t.Fatalf("Error = %+v, want ErrorDigestMismatch", op.Error)
+	}
+}
