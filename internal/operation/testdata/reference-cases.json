@@ -1,0 +1,281 @@
+[
+  {
+    "note": "canonical case: org/repo, full SHA, one GGUF",
+    "repository": "unsloth/Qwen3-32B-GGUF",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "Qwen3-32B-Q4_K_M.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3-32B-GGUF/resolve/0123456789abcdef0123456789abcdef01234567/Qwen3-32B-Q4_K_M.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "seven-character short SHA is the minimum accepted revision",
+    "repository": "unsloth/Qwen3-32B-GGUF",
+    "revision": "0123456",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3-32B-GGUF/resolve/0123456/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "nested artifact path, as quantizer repos publish per-quant subdirectories",
+    "repository": "unsloth/Qwen3-32B-GGUF",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "Q4_K_M/Qwen3-32B-Q4_K_M-00001-of-00002.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3-32B-GGUF/resolve/0123456789abcdef0123456789abcdef01234567/Q4_K_M/Qwen3-32B-Q4_K_M-00001-of-00002.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "characters needing percent-encoding are encoded by net/url, not concatenated",
+    "repository": "unsloth/Qwen3-32B-GGUF",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model file (v2).gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3-32B-GGUF/resolve/0123456789abcdef0123456789abcdef01234567/model%20file%20%28v2%29.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "dots, hyphens and underscores are legal inside a name",
+    "repository": "My-Org_1.0/repo.name_v2",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/My-Org_1.0/repo.name_v2/resolve/0123456789abcdef0123456789abcdef01234567/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "a full URL is not a bare repository id",
+    "repository": "https://huggingface.co/unsloth/Qwen3-32B-GGUF",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "owner with no repo",
+    "repository": "just-a-repo-no-owner",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "an extra path segment is not part of a repository id",
+    "repository": "org/repo/extra",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "empty repository",
+    "repository": "",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "traversal in the owner position",
+    "repository": "../escape/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "an empty path segment between owner and repo",
+    "repository": "org//repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "BOUNDARY/PINNED: a trailing dot is ACCEPTED, though repositoryRe's comment claims names must end alphanumeric",
+    "repository": "org/repo.",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/org/repo./resolve/0123456789abcdef0123456789abcdef01234567/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "BOUNDARY: a leading underscore is rejected — names must start alphanumeric",
+    "repository": "org/_repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "BOUNDARY/PINNED: a trailing hyphen is ACCEPTED, same comment/pattern mismatch",
+    "repository": "org/repo-",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/org/repo-/resolve/0123456789abcdef0123456789abcdef01234567/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "BOUNDARY: non-ASCII is rejected even though Hugging Face permits it",
+    "repository": "örg/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "BOUNDARY: a space is rejected",
+    "repository": "org/re po",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "single-character owner and repo are accepted",
+    "repository": "a/b",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/a/b/resolve/0123456789abcdef0123456789abcdef01234567/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "a branch name is not an immutable revision",
+    "repository": "org/repo",
+    "revision": "main",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "a tag is not an immutable revision",
+    "repository": "org/repo",
+    "revision": "v1.0",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "fewer than seven hex characters",
+    "repository": "org/repo",
+    "revision": "dead",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "non-hex characters",
+    "repository": "org/repo",
+    "revision": "nothex123",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "empty revision",
+    "repository": "org/repo",
+    "revision": "",
+    "artifact_path": "model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "uppercase hex is accepted",
+    "repository": "org/repo",
+    "revision": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    "artifact_path": "model.gguf",
+    "url": "https://huggingface.co/org/repo/resolve/ABCDEF0123456789ABCDEF0123456789ABCDEF01/model.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  },
+  {
+    "note": "empty artifact path",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "absolute artifact path",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "/etc/passwd",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "classic traversal",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "../../../etc/passwd",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "traversal hidden mid-path",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "subdir/../secret.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "a \".\" segment is noise an artifact path should never carry",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "./model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "a doubled slash leaves an empty segment",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "subdir//model.gguf",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "a trailing slash leaves an empty segment",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "subdir/",
+    "url": "",
+    "rejected": true,
+    "untrusted_source": true
+  },
+  {
+    "note": "a backslash is not a separator here, so it stays inside one segment",
+    "repository": "org/repo",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "artifact_path": "subdir\\model.gguf",
+    "url": "https://huggingface.co/org/repo/resolve/0123456789abcdef0123456789abcdef01234567/subdir%5Cmodel.gguf",
+    "rejected": false,
+    "untrusted_source": false
+  }
+]

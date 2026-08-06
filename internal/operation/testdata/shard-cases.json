@@ -1,0 +1,237 @@
+[
+  {
+    "note": "a complete two-part set",
+    "filenames": [
+      "Qwen3-235B-Q4_K_M-00001-of-00002.gguf",
+      "Qwen3-235B-Q4_K_M-00002-of-00002.gguf"
+    ],
+    "groups": [
+      {
+        "key": "Qwen3-235B-Q4_K_M-|-of-00002.gguf",
+        "members": [
+          "Qwen3-235B-Q4_K_M-00001-of-00002.gguf",
+          "Qwen3-235B-Q4_K_M-00002-of-00002.gguf"
+        ],
+        "complete": true,
+        "total": 2
+      }
+    ]
+  },
+  {
+    "note": "shards listed out of order are grouped in index order",
+    "filenames": [
+      "model-00003-of-00003.gguf",
+      "model-00001-of-00003.gguf",
+      "model-00002-of-00003.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-|-of-00003.gguf",
+        "members": [
+          "model-00001-of-00003.gguf",
+          "model-00002-of-00003.gguf",
+          "model-00003-of-00003.gguf"
+        ],
+        "complete": true,
+        "total": 3
+      }
+    ]
+  },
+  {
+    "note": "a gap in the middle is incomplete, but the declared total survives",
+    "filenames": [
+      "model-00001-of-00003.gguf",
+      "model-00003-of-00003.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-|-of-00003.gguf",
+        "members": [
+          "model-00001-of-00003.gguf",
+          "model-00003-of-00003.gguf"
+        ],
+        "complete": false,
+        "total": 3
+      }
+    ]
+  },
+  {
+    "note": "two quant sets at the same total stay separate",
+    "filenames": [
+      "Q4_K_M/model-00001-of-00002.gguf",
+      "Q4_K_M/model-00002-of-00002.gguf",
+      "Q5_K_M/model-00001-of-00002.gguf",
+      "Q5_K_M/model-00002-of-00002.gguf"
+    ],
+    "groups": [
+      {
+        "key": "Q4_K_M/model-|-of-00002.gguf",
+        "members": [
+          "Q4_K_M/model-00001-of-00002.gguf",
+          "Q4_K_M/model-00002-of-00002.gguf"
+        ],
+        "complete": true,
+        "total": 2
+      },
+      {
+        "key": "Q5_K_M/model-|-of-00002.gguf",
+        "members": [
+          "Q5_K_M/model-00001-of-00002.gguf",
+          "Q5_K_M/model-00002-of-00002.gguf"
+        ],
+        "complete": true,
+        "total": 2
+      }
+    ]
+  },
+  {
+    "note": "an unsharded file is its own singleton group",
+    "filenames": [
+      "Qwen3-32B-Q4_K_M.gguf"
+    ],
+    "groups": [
+      {
+        "key": "Qwen3-32B-Q4_K_M.gguf",
+        "members": [
+          "Qwen3-32B-Q4_K_M.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  },
+  {
+    "note": "weights plus auxiliaries: only the weights form a shard set",
+    "filenames": [
+      "model-00001-of-00002.gguf",
+      "model-00002-of-00002.gguf",
+      "mmproj-model-f16.gguf"
+    ],
+    "groups": [
+      {
+        "key": "mmproj-model-f16.gguf",
+        "members": [
+          "mmproj-model-f16.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      },
+      {
+        "key": "model-|-of-00002.gguf",
+        "members": [
+          "model-00001-of-00002.gguf",
+          "model-00002-of-00002.gguf"
+        ],
+        "complete": true,
+        "total": 2
+      }
+    ]
+  },
+  {
+    "note": "a duplicate index is not a complete set even at the right count",
+    "filenames": [
+      "model-00001-of-00002.gguf",
+      "model-00001-of-00002.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-|-of-00002.gguf",
+        "members": [
+          "model-00001-of-00002.gguf",
+          "model-00001-of-00002.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  },
+  {
+    "note": "disagreeing totals do not form a complete set",
+    "filenames": [
+      "model-00001-of-00002.gguf",
+      "model-00002-of-00003.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-|-of-00002.gguf",
+        "members": [
+          "model-00001-of-00002.gguf"
+        ],
+        "complete": false,
+        "total": 2
+      },
+      {
+        "key": "model-|-of-00003.gguf",
+        "members": [
+          "model-00002-of-00003.gguf"
+        ],
+        "complete": false,
+        "total": 3
+      }
+    ]
+  },
+  {
+    "note": "PINNED: an out-of-range index is not an error — it degrades to a singleton",
+    "filenames": [
+      "model-00004-of-00003.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-00004-of-00003.gguf",
+        "members": [
+          "model-00004-of-00003.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  },
+  {
+    "note": "PINNED: index zero degrades to a singleton the same way",
+    "filenames": [
+      "model-00000-of-00003.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-00000-of-00003.gguf",
+        "members": [
+          "model-00000-of-00003.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  },
+  {
+    "note": "a non-GGUF extension is never a shard",
+    "filenames": [
+      "model-00001-of-00002.bin"
+    ],
+    "groups": [
+      {
+        "key": "model-00001-of-00002.bin",
+        "members": [
+          "model-00001-of-00002.bin"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  },
+  {
+    "note": "a quant suffix is not a shard suffix",
+    "filenames": [
+      "model-Q4_K_M.gguf"
+    ],
+    "groups": [
+      {
+        "key": "model-Q4_K_M.gguf",
+        "members": [
+          "model-Q4_K_M.gguf"
+        ],
+        "complete": false,
+        "total": 0
+      }
+    ]
+  }
+]

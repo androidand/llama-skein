@@ -22,12 +22,19 @@ var ErrUntrustedSource = errors.New("operation: untrusted source")
 // this function closes.
 const huggingFaceEndpoint = "https://huggingface.co"
 
-// repositoryRe matches "org/repo": exactly one slash, each side starting and
-// ending with an alphanumeric, dots/hyphens/underscores only in between.
-// Deliberately stricter than Hugging Face's actual namespace rules — the
-// goal is rejecting anything that isn't obviously a bare repository ID
-// (a scheme, a host, an extra path segment, "..", a leading slash), not
-// accepting every legal repository name.
+// repositoryRe matches "org/repo": exactly one slash, each side starting with
+// an alphanumeric and continuing with alphanumerics, dots, hyphens or
+// underscores. Deliberately stricter than Hugging Face's actual namespace
+// rules — the goal is rejecting anything that isn't obviously a bare
+// repository ID (a scheme, a host, an extra path segment, "..", a leading
+// slash), not accepting every legal repository name.
+//
+// Note that only the FIRST character of each side is constrained: "org/repo."
+// and "org/repo-" are accepted. That is safe here — a bare "." or ".."
+// *segment* is rejected by safePathSegments, and ResolveArtifactDestination
+// re-checks containment — but it is narrower than it looks, so don't read this
+// as a general-purpose name validator. Pinned by
+// TestHostBoundaryGoldenPinsKnownGaps.
 var repositoryRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // revisionRe matches a short or full commit SHA. design.md decision 2
