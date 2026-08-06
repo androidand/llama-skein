@@ -536,7 +536,86 @@
       diff — no OpenAPI schema touched by this task. Also fixed an
       accidental duplicate "4.5" line in this file left over from an
       earlier edit, found while updating this entry.
-- [ ] 4.6 Implement explicit cancellation policy and abandoned-partial cleanup.
+- [x] 4.6 Implement explicit cancellation policy and abandoned-partial cleanup.
+      Found and fixed a real bug while implementing this, not just added
+      new behavior: POST /api/models/operations/{id}/cancel
+      (handleAPICancelModelOperation, task 2.3) already correctly loaded,
+      transitioned, and saved its own `*Operation` instance — but
+      `Executor.Run` (task 4.1) held a completely separate instance and had
+      no way to notice, so its next periodic progress save would silently
+      overwrite the cancelled record with its own stale phase. Confirmed
+      via a flaking new test before the fix landed (see below).
+      Cancellation policy (`internal/operation/executor.go`): `Run` now
+      checks for a concurrent cancellation cooperatively — at every phase
+      transition (`advance`, via new `stopIfCancelled`) and periodically
+      during an in-progress download (`downloadOne`'s loop, every
+      `ProgressSaveIntervalBytes`, a new `Executor` field defaulting to
+      10 MiB). This bounds how quickly cancellation takes effect by that
+      interval; per the OpenAPI cancel endpoint's own description
+      ("the operation transitions to 'cancelled' asynchronously"), that's
+      the documented contract, not a shortcut. New `errExternallyCancelled`
+      sentinel (compared by identity) tells `Run`'s `finish` helper "the
+      store already holds the correct terminal record, don't call
+      terminate" apart from every other real failure, which still does.
+      The real fix, once a genuine race exposed a check-then-act TOCTOU gap
+      between `stopIfCancelled` and the subsequent `Store.Save` (a
+      concurrent cancellation landing in that exact window was still
+      silently overwritten): `internal/operation/store.go`'s `Save` now
+      refuses outright to overwrite an existing terminal record with a
+      *different* phase (new `ErrAlreadyTerminal`), enforced under the same
+      lock that also now serializes `Save` calls to begin with (`Store`
+      gained a `sync.Mutex` — nothing before this task ever called `Save`
+      concurrently for the same ID, so the temp-file-plus-rename write
+      itself was never actually safe against concurrent writers; task 4.6
+      is what first introduces that scenario). This closes the TOCTOU gap
+      for every caller, not just ones that remember to check first — the
+      cooperative check above is now an optimization (avoid unnecessary
+      work), not the sole correctness mechanism. Idempotent re-saves of the
+      *same* terminal phase are still allowed.
+      Abandoned-partial cleanup (`internal/operation/cleanup.go`, new file):
+      `CleanupAbandonedPartials(store, modelsDir) (int, error)` — design.md
+      decision 4: "Cancellation removes partials only when explicitly
+      requested by policy. A separate cleanup operation handles abandoned
+      partials." Removes `.part` files belonging only to `PhaseCancelled`
+      operations, deliberately not `PhaseFailed` ones (a failed operation's
+      partial can still be genuinely resumable via task 4.3's downloadOne
+      if a client resubmits the same plan; a cancelled one was stopped on
+      purpose and nothing resubmits it automatically). Same pattern as
+      `Store.Prune` (task 2.2): a real, tested, callable function, not
+      wired to any periodic scheduler or HTTP endpoint — no task in this
+      change adds either, and no OpenAPI route exists for triggering a
+      cleanup pass.
+      Tests: `internal/operation/store_test.go` — 2 new cases proving
+      `ErrAlreadyTerminal` (a stale non-terminal save is rejected after a
+      terminal one landed; re-saving the same terminal phase is still
+      allowed). `internal/operation/executor_test.go` — 1 new end-to-end
+      cancellation test reproducing the real handler's exact shape (a
+      second `Load`/`Cancel`/`Save` sequence against the same store,
+      concurrently with a running `Run`), using a real `httptest.Server`
+      whose handler sends one chunk, sleeps 50ms (long enough that the
+      test's own fast cancel sequence always completes first — the actual
+      bug this test caught was subtler than simple timing, see below),
+      then sends the rest; asserts the final stored phase is `cancelled`,
+      not clobbered. `internal/operation/cleanup_test.go`, new file — 3
+      tests: only a cancelled operation's partial is removed (a failed
+      one's and an in-flight one's are both left alone), a missing partial
+      isn't an error, and an empty store isn't an error.
+      Debugging note kept here because it's a real methodology point, not
+      just a war story: the first version of the cancellation test flaked
+      consistently, and t.Logf's buffered output initially made the two
+      concurrent goroutines' events look correctly ordered when they
+      weren't — switching to fmt.Fprintf(os.Stderr, ...) with explicit
+      RFC3339Nano timestamps on both sides was what actually revealed the
+      TOCTOU gap in true chronological order. All debug instrumentation was
+      removed before landing.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1349 tests, 31 packages);
+      `go test ./... -race -count=1` green across the *entire* repo, not
+      just the touched packages, given this task changed real cross-
+      goroutine synchronization. `make check-codegen` passes with no diff —
+      no OpenAPI schema touched (the cancel endpoint's documented
+      "asynchronous" contract already covered this behavior).
+- [ ] 4.7 Preserve idempotent registration when artifacts are already complete.
 - [ ] 4.7 Preserve idempotent registration when artifacts are already complete.
 
 ## 5. Inventory and lifecycle

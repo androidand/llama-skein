@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,6 +93,14 @@ type Executor struct {
 	// Logf receives progress/error lines; defaults to a no-op when nil so
 	// tests don't need to supply one.
 	Logf func(format string, args ...any)
+
+	// ProgressSaveIntervalBytes controls how often downloadOne persists
+	// download progress and re-checks for a concurrent cancellation
+	// (task 4.6) while downloading one artifact. Zero (the default) means
+	// 10 MiB; a test that needs to observe cancellation taking effect
+	// mid-download without transferring tens of megabytes sets this to
+	// something small.
+	ProgressSaveIntervalBytes int64
 }
 
 func (e *Executor) now() time.Time {
@@ -99,6 +108,13 @@ func (e *Executor) now() time.Time {
 		return e.Now()
 	}
 	return time.Now()
+}
+
+func (e *Executor) progressSaveInterval() int64 {
+	if e.ProgressSaveIntervalBytes > 0 {
+		return e.ProgressSaveIntervalBytes
+	}
+	return 10 * 1024 * 1024
 }
 
 func (e *Executor) logf(format string, args ...any) {
@@ -121,69 +137,91 @@ type resolvedArtifact struct {
 	dest string
 }
 
+// errExternallyCancelled is advance/downloadOne's internal signal that a
+// concurrent /cancel request (internal/server's
+// handleAPICancelModelOperation, loading and saving its own *Operation
+// instance) has already transitioned the stored record to PhaseCancelled.
+// Compared by identity in Run/finish, never wrapped or copied: it means
+// "stop now, the store already holds the correct terminal record" — a
+// distinct case from every other failure, which does still need
+// terminate() to persist it. Without this distinction, Run would call
+// op.Fail() on its own stale, non-cancelled copy and Store.Save() it,
+// silently overwriting a clean cancellation with a spurious "failed"
+// outcome (task 4.6).
+var errExternallyCancelled = &Error{Code: ErrorCancelled, Message: "operation was cancelled by a concurrent request"}
+
 // Run executes op from its current phase through to a terminal one
-// (succeeded or failed), saving op to Store after every phase change and
-// periodically during download. It returns only once op is terminal.
+// (succeeded, cancelled, or failed), saving op to Store after every phase
+// change and periodically during download. It returns only once op is
+// terminal.
 //
 // Run assumes op is freshly created (PhaseQueued) — it is the caller's job
 // (internal/server's create handler) to persist the queued record and hand
 // this exactly one Operation instance to run to completion; Run does not
 // itself guard against being called twice for the same operation ID.
+//
+// Cancellation (task 4.6) is cooperative, not preemptive: Run only notices
+// a concurrent /cancel request at phase-transition boundaries (advance) and
+// periodically during an in-progress download (downloadOne, every
+// ProgressSaveIntervalBytes), by re-reading the stored record — the only
+// way to observe a change made through a different *Operation instance.
+// This bounds how quickly cancellation takes effect by that interval; it is
+// not instantaneous.
 func (e *Executor) Run(ctx context.Context, op *Operation) {
 	if err := e.advance(op, PhasePreflighting); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	if err := e.preflight(op); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 
 	if err := e.advance(op, PhaseResolving); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	resolved, resolveErr := e.resolveArtifacts(op)
 	if resolveErr != nil {
-		e.terminate(op, resolveErr)
+		e.finish(op, resolveErr)
 		return
 	}
 
 	if err := e.advance(op, PhaseDownloading); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	if err := e.download(ctx, op, resolved); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 
 	if err := e.advance(op, PhaseVerifying); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	if err := e.verify(op, resolved); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 
 	if err := e.advance(op, PhaseInstalling); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	if err := e.install(resolved); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 
 	if err := e.advance(op, PhaseRegistering); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 	if e.Register != nil {
 		weightsPath := primaryWeightsPath(op, resolved)
 		if regErr := e.Register(op, weightsPath); regErr != nil {
-			e.terminate(op, &Error{Code: ErrorInternal, Message: regErr.Error()})
+			e.finish(op, &Error{Code: ErrorInternal, Message: regErr.Error()})
 			return
 		}
 	}
@@ -194,27 +232,65 @@ func (e *Executor) Run(ctx context.Context, op *Operation) {
 	// comment) — this transition exists so the persisted phase history
 	// still shows the full sequence even though nothing new executes here.
 	if err := e.advance(op, PhaseReloading); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 
 	if err := e.advance(op, PhaseSucceeded); err != nil {
-		e.terminate(op, err)
+		e.finish(op, err)
 		return
 	}
 }
 
-// advance transitions op to phase and persists it. A transition failure
-// here means Run called it in the wrong order — a bug in this file, not
-// something a caller or a concurrent request did — but is still handled as
-// data, not a panic, so a future real cause (like task 4.6's mid-flight
-// cancellation reaching Run) fails the operation cleanly instead of
-// crashing the process.
+// finish is Run's shared "a step failed" handler: persists the failure via
+// terminate, unless err is errExternallyCancelled — in which case the store
+// already holds the correct terminal record (written by a concurrent
+// /cancel request) and calling terminate would overwrite it with a
+// spurious "failed" one instead.
+func (e *Executor) finish(op *Operation, err *Error) {
+	if err == errExternallyCancelled {
+		return
+	}
+	e.terminate(op, err)
+}
+
+// stopIfCancelled reports whether a concurrent /cancel request has already
+// transitioned op's stored record to PhaseCancelled. A Store.Load failure
+// here is treated as "not cancelled" — a transient store hiccup must not
+// itself abort a running operation, and the next check (or a later
+// terminate/Store.Save) will surface a real, persistent store problem on
+// its own.
+func (e *Executor) stopIfCancelled(op *Operation) bool {
+	current, err := e.Store.Load(op.ID)
+	if err != nil {
+		return false
+	}
+	return current.Phase == PhaseCancelled
+}
+
+// advance transitions op to phase and persists it, first checking for a
+// concurrent cancellation (task 4.6). A TransitionTo failure here means Run
+// called it in the wrong order — a bug in this file, not something a
+// caller or a concurrent request did — but is still handled as data, not a
+// panic.
+//
+// The stopIfCancelled check and the Store.Save call below are two separate
+// round-trips, not one atomic operation, so there is still a narrow window
+// between them where a concurrent cancellation could land. Store.Save's own
+// ErrAlreadyTerminal guard (store.go) is what actually closes that window —
+// this check is an optimization that avoids doing the TransitionTo/Save at
+// all in the common case, not the sole correctness mechanism.
 func (e *Executor) advance(op *Operation, phase Phase) *Error {
+	if e.stopIfCancelled(op) {
+		return errExternallyCancelled
+	}
 	if err := op.TransitionTo(phase, e.now()); err != nil {
 		return &Error{Code: ErrorInternal, Message: err.Error()}
 	}
 	if err := e.Store.Save(op); err != nil {
+		if errors.Is(err, ErrAlreadyTerminal) {
+			return errExternallyCancelled
+		}
 		e.logf("operation %s: save after transition to %s: %v", op.ID, phase, err)
 	}
 	return nil
@@ -346,7 +422,7 @@ func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r 
 		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("open partial file: %v", err)}
 	}
 
-	const saveEvery = 10 * 1024 * 1024
+	saveEvery := e.progressSaveInterval()
 	buf := make([]byte, 256*1024)
 	written := existingSize
 	lastSaved := written
@@ -363,7 +439,23 @@ func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r 
 			}
 			written += int64(n)
 			if written-lastSaved >= saveEvery {
-				e.saveProgress(op, index, written)
+				// task 4.6: the same interval that paces progress saves also
+				// paces re-checking for a concurrent /cancel request — both
+				// need a Store round-trip, so one check serves both purposes
+				// rather than polling on two different schedules. This
+				// stopIfCancelled check is an optimization (stop before
+				// downloading more than necessary); saveProgress's own
+				// ErrAlreadyTerminal check right after is what actually
+				// guarantees correctness against the TOCTOU window between
+				// the two (see advance's doc comment for the same reasoning).
+				if e.stopIfCancelled(op) {
+					f.Close()
+					return errExternallyCancelled
+				}
+				if e.saveProgress(op, index, written) {
+					f.Close()
+					return errExternallyCancelled
+				}
 				lastSaved = written
 			}
 		}
@@ -387,7 +479,9 @@ func (e *Executor) downloadOne(ctx context.Context, op *Operation, index int, r 
 		return &Error{Code: ErrorInternal, Message: fmt.Sprintf("close partial file: %v", err)}
 	}
 
-	e.saveProgress(op, index, written)
+	if e.saveProgress(op, index, written) {
+		return errExternallyCancelled
+	}
 	return nil
 }
 
@@ -460,12 +554,21 @@ func httpStatusError(resp *http.Response, url, verb string) *Error {
 	return &Error{Code: ErrorInternal, Message: fmt.Sprintf("%s %s: HTTP %d: %s", verb, url, resp.StatusCode, string(body))}
 }
 
-func (e *Executor) saveProgress(op *Operation, index int, written int64) {
+// saveProgress persists op's current download progress. Returns true if
+// the save was rejected because the store already holds a terminal record
+// different from op's (Store.ErrAlreadyTerminal) — the caller must stop,
+// not just log and continue, since the operation has already been
+// finalized (almost always by a concurrent cancellation) by someone else.
+func (e *Executor) saveProgress(op *Operation, index int, written int64) bool {
 	op.Artifacts[index].BytesDownloaded = written
 	op.UpdatedAt = e.now()
 	if err := e.Store.Save(op); err != nil {
+		if errors.Is(err, ErrAlreadyTerminal) {
+			return true
+		}
 		e.logf("operation %s: save progress: %v", op.ID, err)
 	}
+	return false
 }
 
 // verify checks each downloaded ".part" file's actual size against its

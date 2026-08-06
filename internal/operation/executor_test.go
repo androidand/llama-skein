@@ -811,3 +811,100 @@ func TestExecutor_Run_AbortsTheWholeSetAndNeverRegistersWhenOneArtifactFails(t *
 		t.Fatalf("shard 1's partial should still be on disk: %v", err)
 	}
 }
+
+// TestExecutor_Run_StopsWhenAConcurrentCancelRequestTransitionsTheStore is
+// task 4.6's core proof: a /cancel request is a separate *Operation
+// instance loaded and saved by internal/server's
+// handleAPICancelModelOperation, not a field flipped on Run's own op. This
+// reproduces that exact shape — a second Load/Cancel/Save sequence against
+// the same store, concurrently with Run — and checks Run neither ignores
+// it nor clobbers the cancelled record with its own stale progress.
+func TestExecutor_Run_StopsWhenAConcurrentCancelRequestTransitionsTheStore(t *testing.T) {
+	firstChunkSent := make(chan struct{})
+	proceedWithRest := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server's ResponseWriter does not support flushing")
+		}
+		w.Write(bytes.Repeat([]byte("a"), 1024)) //nolint:errcheck
+		flusher.Flush()
+		close(firstChunkSent)
+		// A real sleep, not just <-proceedWithRest: HTTP/TCP buffering means
+		// "the server flushed chunk 1" does not imply "the client's Read()
+		// has already returned with just chunk 1" — if this handler raced
+		// straight to sending chunk 2 as soon as the (very fast) test-side
+		// cancel sequence closes proceedWithRest, both chunks could already
+		// be sitting in the client's read buffer before downloadOne's loop
+		// ever calls Read() for the first time, collapsing this into one
+		// read that bypasses the whole point of the test. This sleep gives
+		// the client's first Read() plenty of real wall-clock time to
+		// return with only chunk 1, so the second chunk's eventual arrival
+		// triggers a genuinely separate Read() — and by construction (see
+		// below) the test's cancellation is always saved well within this
+		// window, before <-proceedWithRest can unblock.
+		time.Sleep(50 * time.Millisecond)
+		<-proceedWithRest
+		w.Write(bytes.Repeat([]byte("b"), 1024)) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	modelsDir := t.TempDir()
+	store := testExecutorStore(t)
+	op := NewFromPlan(Plan{
+		SourceRepository: "org/repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []Artifact{{Path: "model.gguf", SizeBytes: 2048, Role: ArtifactRoleWeights}},
+		Registration:     Registration{ModelID: "my-model"},
+	}, time.Now())
+	store.Save(op) //nolint:errcheck
+
+	exec := &Executor{
+		Store:     store,
+		ModelsDir: modelsDir,
+		Client:    testClient(t, ts.URL),
+		// Small enough that the read loop re-checks cancellation well
+		// before this test's 2048-byte artifact finishes, without the test
+		// needing to transfer tens of megabytes to exercise it.
+		ProgressSaveIntervalBytes: 512,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		exec.Run(context.Background(), op)
+		close(done)
+	}()
+
+	<-firstChunkSent
+	// The real /cancel handler's exact shape: load a separate instance,
+	// transition it, save it — Run must notice this through the store, not
+	// through op (Run's own instance is never touched here).
+	cancelling, err := store.Load(op.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cancelling.Phase.Terminal() {
+		t.Fatalf("loaded phase %s is already terminal; the test's timing assumption (cancel while still downloading) broke", cancelling.Phase)
+	}
+	if err := cancelling.Cancel(time.Now()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := store.Save(cancelling); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	close(proceedWithRest)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop after a concurrent cancellation")
+	}
+
+	final, err := store.Load(op.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if final.Phase != PhaseCancelled {
+		t.Fatalf("final Phase = %s, want cancelled — Run must not overwrite the cancelled record with its own stale progress", final.Phase)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -83,9 +84,25 @@ func DefaultStateDir() (string, error) {
 // Every write is a temp-file-plus-rename so a crash or concurrent read never
 // observes a partially written record (design.md decision 3: "small atomic
 // JSON records").
+//
+// mu serializes Save calls (task 4.6): before cancellation existed, nothing
+// ever called Save concurrently for the same operation ID, so the temp-
+// file-plus-rename dance was safe without a lock — each Save's temp file
+// only ever collided with itself. Task 4.6 introduces the first genuine
+// concurrent-writer scenario: Executor.Run's background progress saves
+// racing internal/server's handleAPICancelModelOperation, both targeting
+// the same ID's files. Without this lock, two goroutines' os.WriteFile
+// calls to the same "<id>.json.tmp" path can interleave, producing a
+// corrupted or silently-lost write, not just a logical staleness issue —
+// found via TestExecutor_Run_StopsWhenAConcurrentCancelRequestTransitionsTheStore
+// flaking before this field was added. A single mutex, not per-ID, because
+// writes here are infrequent (roughly every ProgressSaveIntervalBytes) and
+// simplicity matters more than allowing concurrent Saves across different
+// operation IDs to proceed fully in parallel.
 type Store struct {
 	dir         string
 	maxTerminal int // bounds retained succeeded/cancelled/failed records; non-terminal ones are never pruned.
+	mu          sync.Mutex
 }
 
 // NewStore returns a Store rooted at dir, creating it if necessary. dir is
@@ -103,9 +120,39 @@ func (s *Store) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
 
+// ErrAlreadyTerminal is returned by Save when the stored record for op.ID
+// has already reached a terminal phase different from op's — op is stale,
+// and writing it would silently regress a finalized operation back to an
+// earlier, no-longer-true state.
+//
+// This is the general fix for a specific hazard task 4.6 introduced:
+// Executor.Run's periodic progress saves and a concurrent /cancel request's
+// save both target the same operation ID. A caller-side "check if
+// cancelled, then save" pattern (Executor.stopIfCancelled before
+// Store.Save) is not enough on its own — there is a real window between
+// the check and the write where a cancellation can land and then get
+// overwritten by the now-stale save. Enforcing "once terminal, stays
+// terminal" inside Save itself, under the same lock that already
+// serializes concurrent writes, closes that window for every caller, not
+// just the ones that remember to check first.
+var ErrAlreadyTerminal = errors.New("operation: already terminal")
+
 // Save atomically writes op's current state. Safe to call repeatedly as an
-// operation progresses — each call fully replaces the previous record.
+// operation progresses — each call fully replaces the previous record,
+// except that a terminal record is never overwritten with a different
+// phase (see ErrAlreadyTerminal). Saving the same terminal phase again
+// (e.g. an idempotent re-save) is not rejected.
 func (s *Store) Save(op *Operation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if existing, err := s.Load(op.ID); err == nil {
+		if existing.Phase.Terminal() && existing.Phase != op.Phase {
+			return fmt.Errorf("%w: stored phase is %s, refusing to overwrite with %s (operation %s)",
+				ErrAlreadyTerminal, existing.Phase, op.Phase, op.ID)
+		}
+	}
+
 	data, err := json.MarshalIndent(toRecord(op), "", "  ")
 	if err != nil {
 		return fmt.Errorf("operation store: marshal %s: %w", op.ID, err)

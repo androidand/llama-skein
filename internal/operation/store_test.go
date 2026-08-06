@@ -91,6 +91,73 @@ func TestStore_SaveOverwritesPreviousState(t *testing.T) {
 	}
 }
 
+// TestStore_SaveRejectsRegressingATerminalRecord is task 4.6's TOCTOU
+// safety net (see Save's ErrAlreadyTerminal doc comment): once a record
+// reaches a terminal phase, a save carrying a different phase must be
+// rejected outright, not silently accepted as "the second save wins" the
+// way TestStore_SaveOverwritesPreviousState expects for ordinary
+// non-terminal progress.
+func TestStore_SaveRejectsRegressingATerminalRecord(t *testing.T) {
+	store := newTestStore(t, 10)
+	op := New("org/model", "deadbeef", "model-id", nil, testNow)
+	if err := op.Cancel(testNow); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := store.Save(op); err != nil {
+		t.Fatalf("first Save (cancelled): %v", err)
+	}
+
+	// A second, stale in-memory copy that never learned about the
+	// cancellation — exactly Executor.Run's shape: its own op object is
+	// still "downloading" (or whatever phase it was in) when it tries to
+	// save progress after a concurrent /cancel request already finalized
+	// the record.
+	stale := New("org/model", "deadbeef", "model-id", nil, testNow)
+	stale.ID = op.ID
+	if err := stale.TransitionTo(PhasePreflighting, testNow); err != nil {
+		t.Fatalf("TransitionTo: %v", err)
+	}
+
+	err := store.Save(stale)
+	if !errors.Is(err, ErrAlreadyTerminal) {
+		t.Fatalf("Save(stale) error = %v, want ErrAlreadyTerminal", err)
+	}
+
+	got, loadErr := store.Load(op.ID)
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	if got.Phase != PhaseCancelled {
+		t.Fatalf("Phase = %s, want cancelled — the rejected save must not have taken effect", got.Phase)
+	}
+}
+
+// TestStore_SaveAllowsReaffirmingTheSameTerminalPhase proves the guard
+// only blocks a *different* terminal phase, not an idempotent re-save of
+// the same one (e.g. two /cancel requests racing, or a caller re-persisting
+// the same terminal record for an unrelated field update).
+func TestStore_SaveAllowsReaffirmingTheSameTerminalPhase(t *testing.T) {
+	store := newTestStore(t, 10)
+	op := New("org/model", "deadbeef", "model-id", nil, testNow)
+	if err := op.Cancel(testNow); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := store.Save(op); err != nil {
+		t.Fatalf("first Save: %v", err)
+	}
+	op.Warnings = append(op.Warnings, "an additional note")
+	if err := store.Save(op); err != nil {
+		t.Fatalf("second Save (same terminal phase) should be allowed: %v", err)
+	}
+	got, err := store.Load(op.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want the second save's update to have taken effect", got.Warnings)
+	}
+}
+
 func TestStore_ListReturnsNewestFirst(t *testing.T) {
 	store := newTestStore(t, 10)
 	older := New("org/a", "rev", "a", nil, testNow)
