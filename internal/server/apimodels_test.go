@@ -11,6 +11,7 @@ import (
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/operation"
+	"github.com/androidand/llama-skein/internal/process"
 )
 
 // newModelsTestServer wires a Server with one configured model ("my-model")
@@ -227,5 +228,133 @@ func TestHandleAPIListModels_NoOperationStoreDoesNotBreakTheList(t *testing.T) {
 	}
 	if models[0]["id"] != "my-model" {
 		t.Fatalf("id = %v, want my-model", models[0]["id"])
+	}
+}
+
+// TestHandleAPIListModels_LastErrorPopulated and
+// TestHandleAPIGetModel_LastErrorPopulated are task 5.2's fix for a gap
+// that predates this task and was mislabeled as already covered in 5.1's
+// own notes: the Model schema has documented last_error since before this
+// change, but neither handler ever actually populated it — only the
+// unrelated health endpoint did.
+func TestHandleAPIListModels_LastErrorPopulated(t *testing.T) {
+	local := newStubRouter([]string{"my-model"}, "")
+	local.modelErrors = map[string]*process.LoadError{
+		"my-model": {Message: "exit status 1", Category: process.FailureStart, Attempts: 3},
+	}
+	s := newTestServerWithConfig(config.Config{
+		Models: map[string]config.ModelConfig{"my-model": {}},
+	}, local, newStubRouter(nil, ""))
+	s.routes()
+
+	m := getModelsList(t, s)[0]
+	le, ok := m["last_error"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_error = %v (%T), want a decoded LastError object", m["last_error"], m["last_error"])
+	}
+	if le["message"] != "exit status 1" {
+		t.Fatalf("last_error.message = %v, want %q", le["message"], "exit status 1")
+	}
+}
+
+func TestHandleAPIGetModel_LastErrorPopulated(t *testing.T) {
+	local := newStubRouter([]string{"my-model"}, "")
+	local.modelErrors = map[string]*process.LoadError{
+		"my-model": {Message: "exit status 1", Category: process.FailureStart, Attempts: 3},
+	}
+	s := newTestServerWithConfig(config.Config{
+		Models: map[string]config.ModelConfig{"my-model": {}},
+	}, local, newStubRouter(nil, ""))
+	s.routes()
+
+	m := getModel(t, s, "my-model")
+	le, ok := m["last_error"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_error = %v (%T), want a decoded LastError object", m["last_error"], m["last_error"])
+	}
+	if le["attempts"] != float64(3) {
+		t.Fatalf("last_error.attempts = %v, want 3", le["attempts"])
+	}
+}
+
+// TestHandleAPILoadModel_SuccessResponseShapeIsUnchanged proves task 5.2
+// deliberately did not touch the success path's response — still plain
+// "OK" text at 200, not JSON — even though the handler now checks the
+// outcome before getting there.
+func TestHandleAPILoadModel_SuccessResponseShapeIsUnchanged(t *testing.T) {
+	local := newStubRouter([]string{"my-model"}, "")
+	s := newTestServerWithConfig(config.Config{
+		Models: map[string]config.ModelConfig{"my-model": {}},
+	}, local, newStubRouter(nil, ""))
+	s.routes()
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/load/my-model", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if w.Body.String() != "OK" {
+		t.Fatalf("body = %q, want %q", w.Body.String(), "OK")
+	}
+}
+
+// TestHandleAPILoadModel_ReportsAFailedWarmRequest is the actual bug fix:
+// before task 5.2, this endpoint returned 200 "OK" unconditionally no
+// matter what the warm request's own status was.
+func TestHandleAPILoadModel_ReportsAFailedWarmRequest(t *testing.T) {
+	local := newStubRouter([]string{"my-model"}, "boom")
+	local.serveStatus = http.StatusInternalServerError
+	s := newTestServerWithConfig(config.Config{
+		Models: map[string]config.ModelConfig{"my-model": {}},
+	}, local, newStubRouter(nil, ""))
+	s.routes()
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/load/my-model", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, w.Body.String())
+	}
+	if body["load_request_status"] != float64(http.StatusInternalServerError) {
+		t.Fatalf("load_request_status = %v, want 500", body["load_request_status"])
+	}
+}
+
+// TestHandleAPILoadModel_ReportsAFailedProcessStateEvenIfTheWarmRequestReturned200
+// covers the other disagreement direction: the warm request itself
+// returns 200, but the process is reported "failed" (e.g. it crashed
+// immediately after accepting the connection).
+func TestHandleAPILoadModel_ReportsAFailedProcessStateEvenIfTheWarmRequestReturned200(t *testing.T) {
+	local := newStubRouter([]string{"my-model"}, "")
+	local.running = map[string]process.ProcessState{"my-model": process.StateFailed}
+	local.modelErrors = map[string]*process.LoadError{
+		"my-model": {Message: "crashed on startup", Category: process.FailureCrash},
+	}
+	s := newTestServerWithConfig(config.Config{
+		Models: map[string]config.ModelConfig{"my-model": {}},
+	}, local, newStubRouter(nil, ""))
+	s.routes()
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/load/my-model", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, w.Body.String())
+	}
+	if body["state"] != "failed" {
+		t.Fatalf("state = %v, want failed", body["state"])
+	}
+	le, ok := body["last_error"].(map[string]any)
+	if !ok || le["message"] != "crashed on startup" {
+		t.Fatalf("last_error = %v, want the crash detail", body["last_error"])
 	}
 }

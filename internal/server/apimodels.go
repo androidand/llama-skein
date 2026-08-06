@@ -33,6 +33,12 @@ func (s *Server) handleAPIListModels(w http.ResponseWriter, r *http.Request) {
 	// many models ask, so one scan here is strictly better than one per
 	// model.
 	opIdx := s.buildModelOperationIndex()
+	// task 5.2: same reasoning as opIdx — s.local.ModelErrors() is already
+	// a full scan of every process's recorded failure; the Model schema
+	// has documented a last_error field since before this change, but
+	// neither this handler nor handleAPIGetModel ever actually populated
+	// it (only the unrelated health endpoint, api.go, did) until now.
+	modelErrs := s.local.ModelErrors()
 
 	entries := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
@@ -56,6 +62,9 @@ func (s *Server) handleAPIListModels(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(mc.Aliases) > 0 {
 			entry["aliases"] = mc.Aliases
+		}
+		if le, ok := modelErrs[id]; ok {
+			entry["last_error"] = le
 		}
 		addFileMeta(entry, mc)
 		addProvenanceAndOperationFields(entry, id, mc, opIdx)
@@ -87,6 +96,9 @@ func (s *Server) handleAPIGetModel(w http.ResponseWriter, r *http.Request) {
 		"object": "model",
 		"state":  state,
 		"loaded": loaded,
+	}
+	if le, ok := s.local.ModelErrors()[realName]; ok {
+		record["last_error"] = le
 	}
 	if name := strings.TrimSpace(mc.Name); name != "" {
 		record["name"] = name
@@ -146,6 +158,35 @@ func (s *Server) handleAPILoadModel(w http.ResponseWriter, r *http.Request) {
 
 	dw := &discardResponseWriter{status: http.StatusOK}
 	s.local.ServeHTTP(dw, req)
+
+	// task 5.2: report the actual outcome instead of always claiming
+	// success — dw.status was already captured before this task but never
+	// checked, so this endpoint silently reported "OK" even when the warm
+	// request failed outright. Both signals are checked because they can
+	// disagree: the warm request itself can fail (e.g. time out) while the
+	// process is still "starting", and conversely the request can succeed
+	// for a process that later reports "failed" from something unrelated
+	// to this specific warm call. The success response body is
+	// deliberately left exactly as it was (plain "OK" text, 200) — no
+	// caller could have been depending on a specific failure response
+	// before, since failure was never reported at all, but changing the
+	// success shape would be a needless breaking change to anything
+	// already parsing this endpoint.
+	state, loaded := s.modelState(realName)
+	if dw.status >= http.StatusBadRequest || state == "failed" {
+		body := map[string]any{
+			"model":               realName,
+			"state":               state,
+			"loaded":              loaded,
+			"load_request_status": dw.status,
+		}
+		if le, ok := s.local.ModelErrors()[realName]; ok {
+			body["last_error"] = le
+		}
+		writeJSONStatus(w, http.StatusBadGateway, body)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }

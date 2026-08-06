@@ -29,6 +29,10 @@ type stubRouter struct {
 	unloadCalls   atomic.Int32
 	loggers       map[string]*logmon.Monitor
 	modelErrors   map[string]*process.LoadError
+	// serveStatus overrides ServeHTTP's response status; zero means 200.
+	// Added for task 5.2's tests, which need to simulate a warm/load
+	// request that fails outright — every other field predates that task.
+	serveStatus int
 }
 
 func newStubRouter(models []string, response string) *stubRouter {
@@ -42,7 +46,11 @@ func newStubRouter(models []string, response string) *stubRouter {
 func (s *stubRouter) Handles(model string) bool      { return s.models[model] }
 func (s *stubRouter) Shutdown(_ time.Duration) error { s.shutdownCalls.Add(1); return nil }
 func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
+	status := s.serveStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
 	w.Write([]byte(s.response))
 }
 

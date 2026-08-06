@@ -743,8 +743,73 @@ per Executor's own doc comment; no task in this list adds it).
       (idempotent) — `make check-codegen` itself shows a diff pre-commit
       by design (it compares against git HEAD); re-checked clean after
       committing, per this session's established discipline.
-- [ ] 5.2 Route load and unload through current upstream llama-swap lifecycle
+- [x] 5.2 Route load and unload through current upstream llama-swap lifecycle
   behavior and expose observable terminal outcomes.
+      Routing through upstream lifecycle was already true (`handleAPILoadModel`
+      warms via the local router's own `ServeHTTP`; `handleAPIUnloadModel`/
+      `handleAPIUnloadAll` call the router's `Unload`, which blocks until each
+      targeted process has actually exited per its own doc comment) — this
+      task's real work was the second half, "expose observable terminal
+      outcomes," which was genuinely missing in two places:
+      1. **`handleAPILoadModel` always reported success.** It already
+         captured the warm request's status (`dw.status`) but never checked
+         it — real bug, not a documentation gap: the endpoint returned
+         `200 "OK"` even when the warm request failed outright. Fixed:
+         after warming, checks both `dw.status >= 400` and the resulting
+         `state == "failed"` (they can disagree — a request-level timeout
+         vs. a still-starting process, or a 200 for a process that then
+         crashes from something unrelated to that specific warm call) and
+         returns `502` with `model`/`state`/`loaded`/`load_request_status`/
+         `last_error` on either. The success response is deliberately
+         **unchanged** — still plain `"OK"` text at `200` — since nothing
+         could have depended on a specific failure shape that never existed
+         before, but changing the success shape would be a needless
+         breaking change.
+      2. **`handleAPIUnloadModel`/`handleAPIUnloadAll` had no way to
+         surface an anomaly.** `Unload` has no return value at all
+         (`func Unload(timeout, models...)`) and its contract already
+         guarantees the caller stays blocked until the process has exited,
+         so this is a defensive confirmation, not a routine code path:
+         after `Unload` returns, re-checks the model's state and, only if
+         it's still reported loaded (a genuine violation of `Unload`'s own
+         contract), returns `500` instead of the previous unconditional
+         `200 "OK"`. `handleAPIUnloadAll` reports the same anomaly via a
+         new, purely additive `still_running` array rather than changing
+         its status code — the existing `{"msg":"ok"}` shape is preserved
+         exactly when nothing is wrong.
+      3. **Corrects a mistaken claim in 5.1's own completion note above**:
+         it said `Model.last_error` "already reports failure detail" —
+         checked again for this task and that was wrong. The field has
+         been documented on the `Model` schema since before this change,
+         but neither `handleAPIListModels` nor `handleAPIGetModel` ever
+         actually populated it; only the unrelated health endpoint
+         (`api.go`) did, via the same underlying `s.local.ModelErrors()`
+         this task now also wires into both inventory handlers (built once
+         per handler call, same reasoning as 5.1's `opIdx`).
+      Extended `internal/server/server_test.go`'s shared `stubRouter` with
+      a `serveStatus` field (zero means the pre-existing 200 default) so
+      tests can simulate a failed warm request — the one existing struct
+      literal construction site (`newStubRouter`) is field-named, so this
+      is a purely additive, non-breaking extension of shared test
+      infrastructure.
+      Tests: 5 new in `internal/server/apimodels_test.go` (`last_error`
+      populated on both list and get; the success response shape provably
+      unchanged; a failed warm request reported as 502; a 200 warm request
+      whose process still ends up "failed" also reported as 502, with the
+      real crash detail attached) and 4 new in
+      `internal/server/apigroup_test.go` (the unload anomaly path on both
+      single-model and bulk unload; the additive `still_running` field
+      present only when non-empty, absent — not empty — on the normal
+      path). All of extras_test.go's three pre-existing unload tests still
+      pass unmodified, confirming the ordinary success path is untouched.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1367 tests, 31 packages);
+      `go test ./internal/server/... -race -count=1` green (328 tests).
+      `make check-codegen` passes with no diff — no OpenAPI schema touched
+      by this task (last_error already existed on Model; the load/unload
+      response changes are additive JSON fields on endpoints that were
+      never contract-typed in the first place, same hand-rolled-map
+      situation task 5.1 already documented and deliberately left alone).
 - [ ] 5.3 Make removal validate artifact ownership, unload affected models,
   remove the full artifact set, and remove configuration explicitly.
 - [ ] 5.4 Ensure config writes use existing validation/history/no-op safety
