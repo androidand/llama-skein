@@ -810,8 +810,64 @@ per Executor's own doc comment; no task in this list adds it).
       response changes are additive JSON fields on endpoints that were
       never contract-typed in the first place, same hand-rolled-map
       situation task 5.1 already documented and deliberately left alone).
-- [ ] 5.3 Make removal validate artifact ownership, unload affected models,
+- [x] 5.3 Make removal validate artifact ownership, unload affected models,
   remove the full artifact set, and remove configuration explicitly.
+      Found the same category of gap 4.6 and 5.2 each found in this
+      change: `handleAPIDeleteModel` (`DELETE /api/models/{model}`)
+      pre-existed this change but did none of design.md decision 6's four
+      things except the first:
+      - **unloads affected models**: already correct, kept as-is.
+      - **validates artifact ownership**: did not exist at all — the
+        primary weights path was read straight from the model's `cmd` and
+        passed to `os.Remove` with zero containment checking. A
+        hand-edited or corrupted config entry could have pointed anywhere
+        on the host and this endpoint would have deleted it. Fixed: new
+        `internal/server/apimodelremoval.go`'s `pathIsContained` (exact-
+        directory-prefix match against `s.modelsDir()`, the same
+        discipline `operation.ResolveArtifactDestination` established in
+        task 3.3 for the "models" vs "models-archive" false-positive) —
+        checked before anything is touched; the whole request is refused
+        (422) if `modelsDir` is unknown or any candidate path fails
+        containment, never a partial, unvalidated delete.
+      - **removes the full artifact set**: previously deleted only the
+        single primary weights file. New `resolveArtifactSetForRemoval`
+        resolves the complete set two ways: (1) from the most recent
+        succeeded install operation for this model_id (task 5.1's
+        provenance) — every artifact path it submitted, resolved under its
+        own `source_repository`, the accurate and complete answer
+        (weights, shards, auxiliaries) for anything installed through the
+        operation API; (2) a shard-sibling scan of the primary file's own
+        directory (`operation.GroupShards`, task 3.2/4.5's convention) as
+        the fallback for a model with no operation provenance (configured
+        by hand, or pulled via the older `POST /api/models/pull` route).
+      - **removes config in one explicit operation**: previously never
+        touched config at all — a deleted model stayed configured, pointing
+        at a now-missing file. Fixed: reuses `removeModelFromConfig`, the
+        same function `DELETE /api/config/models/{id}` already uses,
+        rather than duplicating it; best-effort when `configFile` isn't
+        set (the artifact files are already gone by that point, so that
+        real progress is reported, not discarded behind an error).
+      Response shape: kept the pre-existing `"deleted"` key (backward
+      compatible — same meaning it always had, the primary weights path)
+      and added `deleted_files`/`missing_files`/`config_removed` alongside
+      it, additive. A shard set where most files are already gone but one
+      remains still counts as real removal work (200, not 404) — only
+      "every candidate path was already missing" is treated as nothing to
+      delete.
+      Tests: new `internal/server/apimodelremoval_test.go`, 7 cases — the
+      happy path with no provenance (unload-then-delete-then-config-remove,
+      backward-compat key present); a path outside `modelsDir` refused
+      (422, file survives); `modelsDir` unknown refused; shard-sibling
+      fallback deleting both shards with no operation record; the full set
+      (weights + tokenizer) from real operation provenance; a partially-
+      missing set still succeeding; and `configFile` unset still deleting
+      files while reporting `config_removed: false`.
+      Verified: `gofmt -l` clean; `GOWORK=off go build ./...`, `go vet
+      ./...`, `go test ./... -count=1` green (1374 tests, 31 packages);
+      `go test ./internal/server/... -race -count=1` green (335 tests).
+      `make check-codegen` passes with no diff — this endpoint was already
+      hand-rolled before this change (same deferred-DTO-migration situation
+      5.1/5.2 documented), so no OpenAPI schema was touched.
 - [ ] 5.4 Ensure config writes use existing validation/history/no-op safety
   and do not trigger avoidable reloads.
 

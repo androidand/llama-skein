@@ -192,7 +192,13 @@ func (s *Server) handleAPILoadModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPIDeleteModel implements DELETE /api/models/{model}.
-// Unloads the model (if running) then deletes its weight file from disk.
+//
+// task 5.3 (design.md decision 6: "Remove unloads first, validates
+// ownership/path, removes the complete installed artifact set, and removes
+// config in one explicit operation"): unloads the model, validates every
+// candidate file is contained within the configured models directory,
+// removes the complete artifact set (not just the primary weights file —
+// see resolveArtifactSetForRemoval), then removes the config entry.
 func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
 	realName, found := s.cfg.RealModelName(requested)
@@ -209,25 +215,72 @@ func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve and validate the complete artifact set before touching
+	// anything on disk or in config — a failure here (unknown models
+	// directory, or a path that escapes it) aborts the whole request; never
+	// partially delete under an unvalidated set.
+	paths, err := s.resolveArtifactSetForRemoval(realName, filePath, s.buildModelOperationIndex())
+	if err != nil {
+		router.SendResponse(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	// Unload before touching any file — design.md decision 6's documented
+	// order ("Remove unloads first").
 	if s.local.Handles(realName) {
 		s.local.Unload(0, realName)
 	}
 
-	if err := removeFile(filePath); err != nil {
-		if isNotExist(err) {
-			router.SendResponse(w, r, http.StatusNotFound,
-				fmt.Sprintf("model file not found on disk: %s", filePath))
+	deleted := make([]string, 0, len(paths))
+	var missing []string
+	for _, p := range paths {
+		if err := removeFile(p); err != nil {
+			if isNotExist(err) {
+				missing = append(missing, p)
+				continue
+			}
+			router.SendResponse(w, r, http.StatusInternalServerError,
+				fmt.Sprintf("failed to delete %s: %v (already removed in this request: %v)", p, err, deleted))
 			return
 		}
-		router.SendResponse(w, r, http.StatusInternalServerError,
-			fmt.Sprintf("failed to delete %s: %v", filePath, err))
+		deleted = append(deleted, p)
+	}
+	// Every candidate path already missing (not one partial hit) is the
+	// only case treated as "nothing to delete" — a shard set where most
+	// files are gone but one remains still counts as real removal work.
+	if len(deleted) == 0 && len(missing) == len(paths) {
+		router.SendResponse(w, r, http.StatusNotFound,
+			fmt.Sprintf("no artifact files found on disk for %q (expected: %v)", realName, paths))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"deleted": filePath,
-		"model":   realName,
+	// task 5.3: "removes config in one explicit operation" — reuses the
+	// same config-removal path DELETE /api/config/models/{id} already uses
+	// (apiconfig.go's removeModelFromConfig) rather than duplicating it.
+	// Best-effort when configFile isn't set: the files are already gone by
+	// this point, so that real progress is reported rather than discarded
+	// behind an error.
+	configRemoved := false
+	if s.configFile != "" {
+		if err := s.removeModelFromConfig(realName); err != nil {
+			router.SendResponse(w, r, http.StatusInternalServerError,
+				fmt.Sprintf("deleted artifact files but failed to remove config entry: %v", err))
+			return
+		}
+		configRemoved = true
+		s.runtimeStateOrDefault().SetPending("api:delete-model", "deleted model "+realName)
+		s.triggerReload()
+	}
+
+	writeJSONStatus(w, http.StatusOK, map[string]any{
+		"model": realName,
+		// "deleted" is kept for backward compatibility with callers of the
+		// pre-5.3 single-file response — the primary weights path, same
+		// meaning it always had.
+		"deleted":        filePath,
+		"deleted_files":  deleted,
+		"missing_files":  missing,
+		"config_removed": configRemoved,
 	})
 }
 
