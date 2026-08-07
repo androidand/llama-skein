@@ -2697,6 +2697,28 @@
           "attempts": {
             "type": "integer",
             "description": "Consecutive failures; reset on a successful start."
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "gpu-oom",
+              "host-oom",
+              "unsupported-arch",
+              "missing-shard",
+              "invalid-flag",
+              "backend-error",
+              "crash-other"
+            ],
+            "x-enum-varnames": [
+              "FailureGpuOom",
+              "FailureHostOom",
+              "FailureUnsupportedArch",
+              "FailureMissingShard",
+              "FailureInvalidFlag",
+              "FailureBackendError",
+              "FailureCrashOther"
+            ],
+            "description": "Why the backend failed, distinct from category (when). Only gpu-oom and host-oom are eligible for an adaptive placement retry; crash-other means the failure was not recognized and must never be treated as a memory problem."
           }
         }
       },

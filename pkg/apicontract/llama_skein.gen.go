@@ -206,6 +206,39 @@ func (e LastErrorCategory) Valid() bool {
 	}
 }
 
+// Defines values for LastErrorClass.
+const (
+	FailureBackendError    LastErrorClass = "backend-error"
+	FailureCrashOther      LastErrorClass = "crash-other"
+	FailureGpuOom          LastErrorClass = "gpu-oom"
+	FailureHostOom         LastErrorClass = "host-oom"
+	FailureInvalidFlag     LastErrorClass = "invalid-flag"
+	FailureMissingShard    LastErrorClass = "missing-shard"
+	FailureUnsupportedArch LastErrorClass = "unsupported-arch"
+)
+
+// Valid indicates whether the value is a known member of the LastErrorClass enum.
+func (e LastErrorClass) Valid() bool {
+	switch e {
+	case FailureBackendError:
+		return true
+	case FailureCrashOther:
+		return true
+	case FailureGpuOom:
+		return true
+	case FailureHostOom:
+		return true
+	case FailureInvalidFlag:
+		return true
+	case FailureMissingShard:
+		return true
+	case FailureUnsupportedArch:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MemoryInfoLimitSource.
 const (
 	MemLimitCgroupV1 MemoryInfoLimitSource = "cgroup-v1"
@@ -1056,12 +1089,18 @@ type LastError struct {
 	// Category 'start' = never reached a serving state; 'crash' = was ready then exited on its own.
 	Category LastErrorCategory `json:"category"`
 
+	// Class Why the backend failed, distinct from category (when). Only gpu-oom and host-oom are eligible for an adaptive placement retry; crash-other means the failure was not recognized and must never be treated as a memory problem.
+	Class *LastErrorClass `json:"class,omitempty"`
+
 	// Message Human-readable failure detail.
 	Message string `json:"message"`
 }
 
 // LastErrorCategory 'start' = never reached a serving state; 'crash' = was ready then exited on its own.
 type LastErrorCategory string
+
+// LastErrorClass Why the backend failed, distinct from category (when). Only gpu-oom and host-oom are eligible for an adaptive placement retry; crash-other means the failure was not recognized and must never be treated as a memory problem.
+type LastErrorClass string
 
 // LoadedModelInfo defines model for LoadedModelInfo.
 type LoadedModelInfo struct {

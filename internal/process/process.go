@@ -55,6 +55,11 @@ type LoadError struct {
 	Category FailureCategory `json:"category"`
 	At       time.Time       `json:"at"`
 	Attempts int             `json:"attempts"`
+	// Class says WHY it failed (gpu-oom, host-oom, unsupported-arch, …),
+	// where Category says when (start vs crash). Only a memory class is
+	// eligible for an adaptive placement retry; everything else — including
+	// the unclassified default — must never trigger one.
+	Class FailureClass `json:"class,omitempty"`
 }
 
 type Process interface {

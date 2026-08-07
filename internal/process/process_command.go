@@ -144,6 +144,11 @@ type ProcessCommand struct {
 	// by run() via recordFailure; read by LastError() via atomic load.
 	lastError atomic.Pointer[LoadError]
 
+	// lastExit retains how the upstream process died (exit code / signal
+	// text) so recordFailure can classify the failure. Written by the
+	// cmd.Wait goroutine, read when a failure is recorded.
+	lastExit atomic.Pointer[ExitInfo]
+
 	// count of consecutive failures, reset on a successful start.
 	failAttempts atomic.Int64
 
@@ -715,6 +720,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 
 	go func() {
 		waitErr := cmd.Wait()
+		p.recordExit(waitErr)
 		switch st := p.State(); {
 		case waitErr == nil:
 			p.proxyLogger.Debugf("<%s> process exited cleanly", p.id)
@@ -1057,6 +1063,21 @@ func (p *ProcessCommand) LastError() *LoadError {
 	return p.lastError.Load()
 }
 
+// recordExit retains how the upstream process died, so a subsequent
+// recordFailure can classify it. A clean exit clears the record — otherwise a
+// stale kill from a previous run could misclassify a later failure.
+func (p *ProcessCommand) recordExit(waitErr error) {
+	if waitErr == nil {
+		p.lastExit.Store(nil)
+		return
+	}
+	info := ExitInfo{Code: -1, Err: waitErr.Error()}
+	if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		info.Code = exitErr.ExitCode()
+	}
+	p.lastExit.Store(&info)
+}
+
 // recordFailure retains err so a caller polling state can tell a broken model
 // from an idle one. Callers must still setState(StateFailed) — this only
 // stores the detail.
@@ -1069,7 +1090,24 @@ func (p *ProcessCommand) recordFailure(err error, cat FailureCategory) {
 		Category: cat,
 		At:       time.Now(),
 		Attempts: int(p.failAttempts.Add(1)),
+		Class:    p.classifyLastFailure(),
 	})
+}
+
+// classifyLastFailure combines the recorded exit status with the tail of the
+// backend's own output. The output is the engine's explanation (the
+// allocation that failed, the architecture it did not know); the exit status
+// is the kernel's (a cgroup OOM kill leaves no output at all).
+func (p *ProcessCommand) classifyLastFailure() FailureClass {
+	var exit ExitInfo
+	if e := p.lastExit.Load(); e != nil {
+		exit = *e
+	}
+	var output string
+	if p.processLogger != nil {
+		output = string(p.processLogger.GetHistory())
+	}
+	return ClassifyFailure(exit, output)
 }
 
 // clearFailureStreak resets the consecutive-failure count on a successful
