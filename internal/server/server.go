@@ -98,12 +98,15 @@ type Server struct {
 	// cache, too costly per request per model. Cleared with the Server on reload.
 	modelSizeCache sync.Map // map[string]int64
 
-	// placements records the automatic placement decision per model, made once
-	// in New (applyAutoPlacement) before the router captures configs. Hybrid
+	// placements records the automatic placement decision per model, made in
+	// New (applyAutoPlacement) before the router captures configs. Hybrid
 	// plans have already been applied to the in-memory cmd (never persisted);
 	// the record keeps the original command and the plan for API visibility.
-	// nil until New runs; read-only afterward.
-	placements map[string]placementRecord
+	// nil until New runs. Mostly written once, but ensurePlacement may
+	// decide a model New could not (VRAM telemetry was still warming up),
+	// so access is guarded by placementMu.
+	placements  map[string]placementRecord
+	placementMu sync.Mutex
 
 	// placementRetries tracks the adaptive-retry ladder per model. Unlike
 	// placements it is mutated while serving (each memory-class failure may
@@ -234,10 +237,10 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 
 	profilePath := ""
-	placementProfilePath := ""
+	placementHome := ""
 	if home, err := os.UserHomeDir(); err == nil {
 		profilePath = filepath.Join(home, ".llama-skein", "skein", "profile.json")
-		placementProfilePath = filepath.Join(home, ".llama-skein", "skein", "placements.json")
+		placementHome = home
 	}
 
 	operationStore, storeErr := newOperationStore()
@@ -271,7 +274,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		operationStore: operationStore,
 		// Learning is off without a resolvable home directory: a profile
 		// store with nowhere to live would silently never persist.
-		placementProfiles: placementProfileStore(placementProfilePath),
+		placementProfiles: placementProfileStore(placementHome),
 		build:             build,
 		shutdownCtx:       shutdownCtx,
 		shutdownFn:        shutdownFn,

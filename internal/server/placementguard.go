@@ -20,6 +20,12 @@ import (
 type placementRecord struct {
 	Plan        placement.Plan
 	OriginalCmd string
+	// AppliedCmd is the command the model will actually launch with once the
+	// plan is in force. Everything that JUDGES a model — the fit report, the
+	// fit guard, the prompt guard — must read this rather than the
+	// configured command, or it scores a placement that is not what runs and
+	// refuses a model the placement just rescued.
+	AppliedCmd string
 	// EffectiveArgs is llama-fit-params' stdout for the planned command
 	// (empty when the tool is unavailable or failed — preflight is advisory,
 	// never load-bearing).
@@ -134,6 +140,8 @@ func (s *Server) applyPlanned(id string, rec placementRecord) {
 		}
 		mc.Cmd = newCmd
 		s.cfg.Models[id] = mc
+		rec.AppliedCmd = newCmd
+		s.placements[id] = rec
 		s.proxylog.Infof("placement: model %q planned %s (%s): %s", id, plan.Mode, plan.PerfClass, plan.Reason)
 		if out, ok := s.preflightFitParams(mc); ok {
 			rec.EffectiveArgs = out
@@ -179,6 +187,14 @@ func (s *Server) planInputs(id string, mc config.ModelConfig) (placement.Inputs,
 	}
 	g, err := s.parseGGUFCached(ggufPath)
 	if err != nil {
+		return placement.Inputs{}, false
+	}
+	if len(g.SplitMissing) > 0 {
+		// An incomplete split set cannot load at all, and its summed size
+		// understates the real model — planning against it would produce a
+		// confident, wrong answer. Decline instead.
+		s.proxylog.Warnf("placement: model %q is an incomplete split GGUF (%d shard(s) missing, first: %s) — not planning a placement for it",
+			id, len(g.SplitMissing), g.SplitMissing[0])
 		return placement.Inputs{}, false
 	}
 	args, err := mc.SanitizedCommand()

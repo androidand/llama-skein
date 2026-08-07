@@ -76,13 +76,25 @@ func TestEngineIdentity_ChangesWithBinary(t *testing.T) {
 	}
 }
 
-// A nil store (no home directory) must not break planning or recording.
-func TestPlacementProfileStore_NilWhenNoPath(t *testing.T) {
-	if placementProfileStore("") != nil {
-		t.Fatal("an empty path must disable learning")
+// Regression (z4, 2026-08-07): the daemon runs without HOME in its
+// environment, so no home directory resolved, the store was nil, and
+// learning was silently disabled with no log line to say so. A missing home
+// must fall back to the daemon state directory instead.
+func TestPlacementProfilePaths_FallsBackWithoutHome(t *testing.T) {
+	withHome := placementProfilePaths("/root")
+	if len(withHome) != 2 || !strings.HasPrefix(withHome[0], "/root/") {
+		t.Fatalf("with a home, that path must be preferred: %v", withHome)
 	}
-	if placementProfileStore(filepath.Join(t.TempDir(), "p.json")) == nil {
-		t.Fatal("a real path must produce a store")
+	noHome := placementProfilePaths("")
+	if len(noHome) != 1 {
+		t.Fatalf("without a home there must still be a candidate: %v", noHome)
+	}
+	if !strings.Contains(noHome[0], "llama-skein") {
+		t.Fatalf("fallback path = %q", noHome[0])
+	}
+	// Both orderings must end at the same durable fallback.
+	if withHome[len(withHome)-1] != noHome[0] {
+		t.Fatal("the last-resort path must be the same either way")
 	}
 }
 

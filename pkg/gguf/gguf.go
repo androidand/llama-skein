@@ -107,7 +107,16 @@ type GGUF struct {
 	ExpertSharedFeedForwardLength int64
 
 	// File size on disk (set by caller, not from GGUF header).
+	// FileSize is the model's total weight size on disk. For a split GGUF
+	// it is the sum of every shard, not the size of the file that was
+	// parsed — see applySplitSize.
 	FileSize int64
+
+	// SplitCount is the number of shards when this is a split GGUF (0 when
+	// it is a single file); SplitMissing lists shards the set references but
+	// that are absent from disk, which makes the model unloadable.
+	SplitCount   int
+	SplitMissing []string
 
 	// Tensors holds the tensor info table (name, dims, type) when it could be
 	// read. Empty when the tensor section was unavailable or failed to parse;
@@ -157,12 +166,16 @@ func (g *GGUF) IsMTP() bool {
 // WeightBytes estimates the total size of model weights in bytes based on
 // parameter count and quantization. This is an approximation.
 func (g *GGUF) WeightBytes() int64 {
-	if g.ParamCount <= 0 {
-		return 0
-	}
-	// Use file size as the most accurate measure if available.
+	// File size is the most accurate measure and needs no parameter count:
+	// for mmap'd GGUF weights it IS the resident size. Requiring ParamCount
+	// first made every model without a general.parameter_count key (e.g.
+	// DeepSeek-V4-Flash) report a weight size of zero, which read as
+	// "unknown" to the offload recommender.
 	if g.FileSize > 0 {
 		return g.FileSize
+	}
+	if g.ParamCount <= 0 {
+		return 0
 	}
 	// Fallback: estimate based on quantization.
 	bits := g.bitsPerWeight()
@@ -417,6 +430,10 @@ func ParseFile(path string) (*GGUF, error) {
 	if err == nil {
 		g.FileSize = info.Size()
 	}
+	// A split GGUF must be sized as the whole set: shard 1 carries the
+	// header and only a fraction of the tensors, so sizing from the opened
+	// file alone reports a 91 GB model as 5 MB — which then "fits" anywhere.
+	g.applySplitSize(path)
 
 	return g, nil
 }

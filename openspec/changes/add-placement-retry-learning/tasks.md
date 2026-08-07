@@ -44,7 +44,7 @@ visibility). Blocked until its Phases 1–4 land.
 ## Phase 4 — Gate + acceptance
 - [x] 9. `go build ./... && go test -short ./... && make test-dev`.
   - Validation: `go build ./... && go test -short ./... && make test-dev`
-- [ ] 10. z4 acceptance addendum: force a GPU-OOM (undersized reserve) on the
+- [x] 10. z4 acceptance addendum: force a GPU-OOM (undersized reserve) on the
   DeepSeek-V4-Flash hybrid config, verify one ladder step recovers it, and
   verify the learned profile short-circuits the next launch. Record evidence
   in add-auto-hybrid-placement/design.md.

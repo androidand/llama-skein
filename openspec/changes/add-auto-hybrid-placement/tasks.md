@@ -90,7 +90,7 @@ Depends on: `add-container-memory-limits` (effective host RAM budget).
   ≠ RAM, why VRAM+RAM can't be summed without reserves, dense vs MoE, modes,
   policy config, container limits, inspecting/overriding the generated args.
   - Validation: manual read-through
-- [ ] 17. Acceptance (manual, z4): raise LXC 102 memory, pull
+- [x] 17. Acceptance (manual, z4): raise LXC 102 memory, pull
   `DeepSeek-V4-Flash-0731-GGUF` UD-IQ2_M, verify auto `hybrid` plan +
   successful chat completion + recorded VRAM/RAM peaks; then load a small
   model and verify untouched full-GPU settings. Compare `--cpu-moe` vs pinned

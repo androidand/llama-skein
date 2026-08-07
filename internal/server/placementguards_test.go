@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/androidand/llama-skein/internal/config"
@@ -89,5 +90,39 @@ func TestWarnSlowPlacementTimeouts_DoesNotMutateConfig(t *testing.T) {
 	s.warnSlowPlacementTimeouts()
 	if s.cfg.Models["slow"].MaxRequestTimeSecs != 60 || s.cfg.MaxRequestTimeSecs != 60 {
 		t.Fatal("the advisory must never change the operator's timeout")
+	}
+}
+
+// Regression (z4 acceptance, 2026-08-07): a model rescued by hybrid
+// placement was still refused with 507, because the fit guard judged the
+// CONFIGURED command while the placement lived only on the process. The
+// placement is the guard's third remedy — once it applies, the stale
+// "cannot fit" verdict must not keep refusing the model.
+func TestModelLoadRefusal_PlacementClearsStaleUnfittable(t *testing.T) {
+	s := placementTestServer(map[string]config.ModelConfig{
+		"big": {Cmd: "llama-server -m /models/big.gguf --ctx-size 32768"},
+	})
+	s.unfittable["big"] = "model + KV at this context exceeds VRAM"
+
+	if _, refuse := s.modelLoadRefusal("big"); !refuse {
+		t.Fatal("precondition: an unfittable model is refused")
+	}
+
+	// A viable hybrid placement takes effect.
+	s.placementMu.Lock()
+	delete(s.unfittable, "big")
+	s.placements["big"] = placementRecord{
+		OriginalCmd: "llama-server -m /models/big.gguf --ctx-size 32768",
+		AppliedCmd:  "llama-server -m /models/big.gguf --ctx-size 32768 --n-cpu-moe 16",
+		Plan:        placement.Plan{Mode: placement.ModeHybrid, Confident: true, NCpuMoe: 16},
+	}
+	s.placementMu.Unlock()
+
+	if reason, refuse := s.modelLoadRefusal("big"); refuse {
+		t.Fatalf("a hybrid-placed model must no longer be refused: %s", reason)
+	}
+	// And everything that judges the model must see the placed command.
+	if cmd, ok := s.appliedCmd("big"); !ok || !strings.Contains(cmd, "--n-cpu-moe 16") {
+		t.Fatalf("appliedCmd = %q, ok=%v", cmd, ok)
 	}
 }

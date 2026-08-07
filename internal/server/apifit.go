@@ -228,7 +228,15 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 		return mf, true
 	}
 
-	args, _ := mc.SanitizedCommand()
+	// Score the command that will ACTUALLY launch: once a placement is in
+	// force its offload flags are what determine the memory split, and
+	// judging the configured command instead would refuse a model the
+	// placement just made loadable.
+	effective := mc
+	if placed, ok := s.appliedCmd(realName); ok {
+		effective.Cmd = placed
+	}
+	args, _ := effective.SanitizedCommand()
 	p := fit.Params{}
 	if kc, ok := commandFlagString(args, "--cache-type-k", "-ctk"); ok {
 		p.KCacheBits = fit.BitsPerElement(kc)
@@ -284,12 +292,26 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	return mf, true
 }
 
+// appliedCmd returns the command a model will actually launch with when a
+// placement rewrote it, and false when it runs exactly as configured.
+func (s *Server) appliedCmd(realName string) (string, bool) {
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+	rec, ok := s.placements[realName]
+	if !ok || rec.AppliedCmd == "" {
+		return "", false
+	}
+	return rec.AppliedCmd, true
+}
+
 // attachPlacement copies the automatic placement decision (made once at
 // boot/reload by applyAutoPlacement) onto a fit response, so callers see the
 // requested-vs-effective placement, its memory expectation, and — when the
 // engine's llama-fit-params ran — the engine's own fitted arguments.
 func (s *Server) attachPlacement(mf *apicontract.ModelFit, realName string) {
+	s.placementMu.Lock()
 	rec, ok := s.placements[realName]
+	s.placementMu.Unlock()
 	if !ok {
 		return
 	}

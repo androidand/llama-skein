@@ -143,17 +143,84 @@ planner may report `refuse` sooner — disabling the draft is an operator
 decision surfaced in the reason string, not an automatic mutation (that
 ladder belongs to `add-placement-retry-learning`).
 
-## 5. Open questions (resolve during implementation)
+## 5. Acceptance evidence — z4, 2026-08-07 (PASSED)
+
+`unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-IQ2_M` (3 shards, 90.9 GB, deepseek4
+MoE, 43 layers) on z4 LXC 102: W7800 48 GB VRAM (49136 MB), container memory
+raised 48 → 80 GiB (`pct set 102 --memory 81920`, applied live — lxcfs picked
+it up with no reboot).
+
+**Result: the model loaded and generated on a card less than half its size.**
+
+| Evidence | Value |
+|---|---|
+| Placement mode | `hybrid`, `applied: true` |
+| Plan | `--n-cpu-moe 25` (experts of 25/43 layers → CPU) |
+| Estimated split | GPU 42226 MB / host 49119 MB |
+| Measured peak VRAM | 43967 MB of 49136 (inside the 2456 MB reserve) |
+| `run_mode` / `fit_level` | `moe_offload` / `tight` |
+| Performance class | `cpu-bound-hybrid` — **measured 0.81 tok/s generate, 1.6 tok/s prompt** |
+| Chat completion | succeeded (24 tokens) |
+| Small model after it | `qwythos-9b` → `custom` (pins `-ngl 999`), untouched, **70.2 tok/s** |
+| Config file writes | **zero** (`grep -c n-cpu-moe config.yaml` = 0) |
+| Learned profile | recorded to `/var/lib/llama-skein/placements.json` after the profiler tick |
+
+The measured 0.81 tok/s validates the `cpu-bound-hybrid` classification
+exactly as documented: usable for async agent work, not for interactive use.
+
+### Bugs this run found (all fixed, all with regression tests)
+
+1. **Split GGUFs were sized from one shard.** `ParseFile` set `FileSize` from
+   the opened file, so a 91 GB model reported `model_mb: 5` and "fits fully
+   in the GPU budget". Fixed by summing every shard (`pkg/gguf/split.go`).
+2. **The merged size then broke the expert math.** Per-tensor bytes derive as
+   `FileSize / total_elements`; pairing the whole set's size with shard 1's
+   tensor table inflated every tensor, which planned `--n-cpu-moe 16` for a
+   model that needed 25 — and OOM'd at load. Fixed by merging every shard's
+   tensor table.
+3. **`WeightBytes()` returned 0 without `general.parameter_count`**, which
+   this model lacks — the offload recommender read that as "size unknown".
+   File size needs no parameter count; it now takes precedence.
+4. **Pinning `--n-cpu-moe` disables the engine's own fitting** —
+   `common_fit_params: tensor_buft_overrides already set by user, abort`.
+   This answers open question 3 below: `--fit-target` alongside a pinned
+   offload is a silently ignored flag, so a pinned plan must be complete on
+   its own. The planner no longer emits it there.
+5. **Automatic placement never ran at boot.** `applyAutoPlacement` runs inside
+   `New()`, before the perf monitor's first sample, so VRAM read as unknown
+   and every model was left unplanned — on every host. Added `ensurePlacement`
+   on the load path (telemetry is warm by then), applying via the command
+   override.
+6. **The fit guard refused what placement had just rescued**, because it
+   judged the configured command while the placement lived only on the
+   process. Records now carry `AppliedCmd`, everything that judges a model
+   reads it, and a placement clears a stale unfittable verdict.
+7. **Learning was silently disabled** wherever the daemon runs without `HOME`
+   (the container case): the profile path resolved empty → nil store → no
+   log line. Now falls back to `/var/lib/llama-skein/`.
+
+### Operational notes
+
+- A 91 GB hybrid load exceeds the default 120 s health check. This model needs
+  `healthCheckTimeout: 1800`. Worth considering a placement-aware default.
+- Host memory measurement under-reports mmap'd hybrid weights: CPU-resident
+  experts are reclaimable page cache, so `available` barely moves (recorded
+  `peak_host_mb: 700` for ~49 GB of experts). The VRAM peak is the real
+  constraint and is what gating uses.
+- Container disk after the pull: 38 GB free of 450 GB.
+
+## 6. Open questions (resolve during implementation)
 
 1. Does `llama-fit-params` model host-RAM at all in its output (vs only
    device memory)? Determines whether preflight can also validate the host
-   side or only the GPU side.
+   side or only the GPU side. (The tool ships unexecutable in the gfx110X
+   release — z4 needed a `chmod +x`; the upgrade path should do that.)
 2. `--fit-target` semantics on ROCm inside LXC: whether the free-memory query
    sees other containers' VRAM usage correctly (expected yes via
    amdgpu sysfs; verify).
-3. Whether pinned `--n-cpu-moe` + `--fit on` interact cleanly (pinning `-ot`
-   patterns is what `--n-cpu-moe` expands to internally; upstream treats
-   user-set override-tensor as removing it from program control — confirm the
-   expansion counts as "user-set" in the deployed build).
+3. ~~Whether pinned `--n-cpu-moe` + `--fit on` interact cleanly.~~
+   **ANSWERED on z4 (§5): it does count as user-set.** The engine logs
+   `tensor_buft_overrides already set by user, abort` and skips fitting
+   entirely, so a pinned plan must be complete on its own.
 4. Interaction with `tuning.ApplyProfile` ordering (tuning injects fa/parallel
    flags; placement must run after tuning so both see the final cmd).

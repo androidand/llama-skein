@@ -29,7 +29,7 @@
   - Validation: `go test ./internal/perf/... ./internal/server/...`
 
 ## Phase 4 — Gate
-- [ ] 7. `go build ./... && go test -short ./... && make test-dev`; verify on
+- [x] 7. `go build ./... && go test -short ./... && make test-dev`; verify on
   z4 (LXC 102) that effective_total ≈ 48 GiB and on a bare-metal host that
   limit_source is `none`.
   - Validation: `go build ./... && go test -short ./...`

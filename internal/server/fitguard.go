@@ -133,7 +133,12 @@ func (s *Server) confidentNoFit(mf apicontract.ModelFit) bool {
 // modelLoadRefusal returns a reason and true when loading modelID now would not
 // fit host memory. Fail-open: only a confident "won't fit" verdict refuses.
 func (s *Server) modelLoadRefusal(id string) (string, bool) {
-	if r, ok := s.unfittable[id]; ok {
+	// Read under the placement lock: ensurePlacement clears an entry here
+	// when a placement makes the model loadable after all.
+	s.placementMu.Lock()
+	r, unfit := s.unfittable[id]
+	s.placementMu.Unlock()
+	if unfit {
 		return r, true
 	}
 	mf, ok := s.fitForModel(id)
@@ -184,10 +189,12 @@ func (s *Server) CreateLoadFitGateMiddleware() chain.Middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// A load is about to happen. If the last one failed for a memory
-			// reason and we planned this model's placement, install the next
-			// safer command first, so this attempt is a better one than the
-			// attempt that just failed rather than an identical repeat.
+			// A load is about to happen. Decide the placement now if boot ran
+			// before VRAM telemetry was available, then — if the last attempt
+			// failed for a memory reason — install the next safer command, so
+			// this attempt is a better one than the one that just failed
+			// rather than an identical repeat.
+			s.ensurePlacement(data.ModelID)
 			s.escalateIfMemoryFailure(data.ModelID)
 			reason, refuse := s.modelLoadRefusal(data.ModelID)
 			if !refuse {

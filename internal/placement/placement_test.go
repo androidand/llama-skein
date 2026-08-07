@@ -73,16 +73,20 @@ func TestCompute_DeepSeekLike_Hybrid(t *testing.T) {
 	if p.NCpuMoe <= 0 || p.NCpuMoe > 61 {
 		t.Fatalf("n_cpu_moe = %d", p.NCpuMoe)
 	}
-	var hasNCpuMoe, hasFitTarget bool
+	var hasNCpuMoe bool
 	for _, op := range p.FlagOps {
-		switch op.Name {
-		case "--n-cpu-moe":
+		if op.Name == "--n-cpu-moe" {
 			hasNCpuMoe = true
-		case "--fit-target":
-			hasFitTarget = true
+		}
+		// Pinning --n-cpu-moe makes the engine abandon its own fitting
+		// ("tensor_buft_overrides already set by user, abort"), so emitting
+		// --fit-target alongside it would be a silently ignored flag that
+		// makes the plan look more complete than it is. Verified on z4.
+		if op.Name == "--fit-target" || op.Name == "--fit-ctx" {
+			t.Fatalf("a pinned MoE plan must not rely on engine fitting: %+v", p.FlagOps)
 		}
 	}
-	if !hasNCpuMoe || !hasFitTarget {
+	if !hasNCpuMoe {
 		t.Fatalf("ops = %+v", p.FlagOps)
 	}
 	// The GPU estimate must respect the budget; the host share carries most

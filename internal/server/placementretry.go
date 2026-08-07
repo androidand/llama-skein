@@ -27,6 +27,78 @@ func newPlacementRetry() *placementRetry {
 	return &placementRetry{state: map[string]*retryState{}}
 }
 
+// ensurePlacement re-plans a model whose boot-time placement could not be
+// decided, and installs the result for its next start.
+//
+// This exists because applyAutoPlacement runs inside New(), before the perf
+// monitor has produced its first sample: at that moment VRAM telemetry is
+// unknown, the planner correctly refuses to guess, and every model would be
+// left unplanned forever. By the time a load is actually requested the
+// telemetry is warm, so the decision can be made properly — and applied via
+// the same command override the retry ladder uses, since the router has
+// already captured its configs by then.
+//
+// A model that was planned successfully at boot is untouched.
+func (s *Server) ensurePlacement(modelID string) {
+	if s.local == nil || s.placements == nil {
+		return
+	}
+	realName, found := s.cfg.RealModelName(modelID)
+	if !found {
+		realName = modelID
+	}
+
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+
+	rec, known := s.placements[realName]
+	if known && rec.Plan.Mode != placement.ModeUnknown {
+		return // already decided
+	}
+	mc, ok := s.cfg.Models[realName]
+	if !ok {
+		return
+	}
+	// Plan from the ORIGINAL command when we have one, so a re-plan never
+	// composes onto flags a previous plan added.
+	orig := mc
+	if known && rec.OriginalCmd != "" {
+		orig.Cmd = rec.OriginalCmd
+	}
+	fresh, ok := s.planModel(realName, orig)
+	if !ok || fresh.Plan.Mode == placement.ModeUnknown {
+		return // still cannot decide; leave the model exactly as configured
+	}
+
+	s.placements[realName] = fresh
+	switch {
+	case fresh.Plan.Mode == placement.ModeRefuse && fresh.Plan.Confident:
+		s.unfittable[realName] = fresh.Plan.Reason
+		s.proxylog.Warnf("placement: model %q cannot be placed within safe memory budgets — refusing rather than loading. %s",
+			realName, fresh.Plan.Reason)
+	case fresh.Plan.Applies():
+		newCmd, err := applyFlagOps(orig.Cmd, fresh.Plan.FlagOps)
+		if err != nil {
+			s.proxylog.Warnf("placement: model %q deferred plan not applied: %v", realName, err)
+			return
+		}
+		if !s.local.SetCommandOverride(realName, newCmd) {
+			return
+		}
+		fresh.AppliedCmd = newCmd
+		s.placements[realName] = fresh
+		// The placement IS the remedy that makes this model loadable, so a
+		// stale "cannot fit" verdict recorded against the unplaced command
+		// must not keep refusing it. Dropping the entry here is what makes
+		// hybrid placement the fit guard's third remedy in the deferred
+		// path, alongside shrinking the context and refusing outright.
+		delete(s.unfittable, realName)
+		s.maxSafeCtxCache.Delete(realName)
+		s.proxylog.Infof("placement: model %q planned %s (%s) on first load: %s",
+			realName, fresh.Plan.Mode, fresh.Plan.PerfClass, fresh.Plan.Reason)
+	}
+}
+
 // escalateIfMemoryFailure is the adaptive-retry entry point, called on the
 // load path just before a NOT-resident model would be launched. When that
 // model's last failure was memory-related and its placement was planned

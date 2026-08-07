@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/placement"
 	"github.com/androidand/llama-skein/internal/process"
+	"github.com/androidand/llama-skein/pkg/gguf"
 )
 
 // placementProfileInterval is how often the profiler checks whether a
@@ -18,14 +20,28 @@ import (
 // catch allocation still settling.
 const placementProfileInterval = 30 * time.Second
 
-// placementProfileStore returns a store at path, or nil when there is
-// nowhere to persist to (no resolvable home directory) — a nil store is a
-// safe no-op, so learning simply does not happen.
-func placementProfileStore(path string) *placement.ProfileStore {
-	if path == "" {
-		return nil
+// placementProfilePaths are the candidate locations for the learned-placement
+// store, in preference order. A daemon started without HOME in its
+// environment (the container entrypoint case on z4) resolves no home
+// directory at all, which silently disabled learning entirely — so fall back
+// to the conventional daemon state directory rather than giving up.
+func placementProfilePaths(home string) []string {
+	var paths []string
+	if home != "" {
+		paths = append(paths, filepath.Join(home, ".llama-skein", "skein", "placements.json"))
 	}
-	return placement.NewProfileStore(path)
+	return append(paths, filepath.Join("/var/lib", "llama-skein", "placements.json"))
+}
+
+// placementProfileStore returns a store at the first candidate path whose
+// directory can be created. nil (learning disabled) only when none can.
+func placementProfileStore(home string) *placement.ProfileStore {
+	for _, p := range placementProfilePaths(home) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err == nil {
+			return placement.NewProfileStore(p)
+		}
+	}
+	return nil
 }
 
 // placementKey builds the identity a learned profile is valid for. ok=false
@@ -40,6 +56,13 @@ func (s *Server) placementKey(mc config.ModelConfig, ctx int) (placement.Key, bo
 	if err != nil {
 		return placement.Key{}, false
 	}
+	// Key on the whole split set's size, not the shard we happen to point
+	// at: shard 1 is a few MB of header, so keying on it would fail to
+	// invalidate a profile when the shards holding the actual weights change.
+	modelSize := info.Size()
+	if split := gguf.InspectSplit(path); split.IsSplit && split.TotalBytes > 0 {
+		modelSize = split.TotalBytes
+	}
 	vramTotal, _ := s.vramMB()
 	if vramTotal <= 0 {
 		return placement.Key{}, false
@@ -50,7 +73,7 @@ func (s *Server) placementKey(mc config.ModelConfig, ctx int) (placement.Key, bo
 		engine = engineIdentity(args[0])
 	}
 	return placement.Key{
-		ModelPath: path, ModelSize: info.Size(), ModelMtime: info.ModTime().Unix(),
+		ModelPath: path, ModelSize: modelSize, ModelMtime: info.ModTime().Unix(),
 		Engine: engine, VRAMTotal: vramTotal, HostTotal: hostTotal, Ctx: ctx,
 	}, true
 }
@@ -158,6 +181,13 @@ func (s *Server) recordReadyPlacements() {
 
 // currentUsageMB samples what is resident right now: VRAM in use, and host
 // memory in use within the effective (cgroup-aware) limit.
+//
+// The host figure UNDER-reports a hybrid placement's weights: llama.cpp
+// mmaps them, so CPU-resident experts live in reclaimable page cache rather
+// than anonymous memory and barely move "available". Treat the host number
+// as a floor, not a measurement — which is why WorthLearning gates on the
+// VRAM peak (real, and the constraint that actually bites) and only checks
+// the host peak when one was observed.
 func (s *Server) currentUsageMB() (vramMB, hostMB int) {
 	if s.perf == nil {
 		return 0, 0

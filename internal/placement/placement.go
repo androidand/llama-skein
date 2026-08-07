@@ -284,10 +284,14 @@ func planMoE(in Inputs, hostBudget int, analyze func(fit.Params, bool) fit.Resul
 	if res.HostResidentMB > hostBudget {
 		return Plan{}, false
 	}
-	gpuReserve := in.Policy.GpuReserveMB(in.VRAMBudgetMB)
-	ops := append([]offload.FlagOp{
-		{Name: "--n-cpu-moe", Value: strconv.Itoa(found)},
-	}, fitTargetOps(gpuReserve, in.Policy.MinCtx())...)
+	// Pinning --n-cpu-moe sets tensor_buft_overrides, and the engine then
+	// abandons its own fitting entirely ("tensor_buft_overrides already set
+	// by user, abort") — so --fit-target would be silently ignored and the
+	// plan must be complete on its own. Verified on z4 (llama.cpp 956973c),
+	// where relying on the engine to finish the job left 57 GB on a 48 GB
+	// card and OOM'd. The reserve is already inside vramBudget, so the
+	// pinned split alone respects it.
+	ops := []offload.FlagOp{{Name: "--n-cpu-moe", Value: strconv.Itoa(found)}}
 	return Plan{
 		Mode:      ModeHybrid,
 		FlagOps:   ops,
