@@ -161,6 +161,33 @@ func (e HypotheticalFitResponseBackend) Valid() bool {
 	}
 }
 
+// Defines values for HypotheticalVariantFitPlacement.
+const (
+	VariantPlacementCpu     HypotheticalVariantFitPlacement = "cpu"
+	VariantPlacementGpu     HypotheticalVariantFitPlacement = "gpu"
+	VariantPlacementHybrid  HypotheticalVariantFitPlacement = "hybrid"
+	VariantPlacementRefuse  HypotheticalVariantFitPlacement = "refuse"
+	VariantPlacementUnknown HypotheticalVariantFitPlacement = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HypotheticalVariantFitPlacement enum.
+func (e HypotheticalVariantFitPlacement) Valid() bool {
+	switch e {
+	case VariantPlacementCpu:
+		return true
+	case VariantPlacementGpu:
+		return true
+	case VariantPlacementHybrid:
+		return true
+	case VariantPlacementRefuse:
+		return true
+	case VariantPlacementUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LastErrorCategory.
 const (
 	Crash LastErrorCategory = "crash"
@@ -181,19 +208,19 @@ func (e LastErrorCategory) Valid() bool {
 
 // Defines values for MemoryInfoLimitSource.
 const (
-	CgroupV1 MemoryInfoLimitSource = "cgroup-v1"
-	CgroupV2 MemoryInfoLimitSource = "cgroup-v2"
-	None     MemoryInfoLimitSource = "none"
+	MemLimitCgroupV1 MemoryInfoLimitSource = "cgroup-v1"
+	MemLimitCgroupV2 MemoryInfoLimitSource = "cgroup-v2"
+	MemLimitNone     MemoryInfoLimitSource = "none"
 )
 
 // Valid indicates whether the value is a known member of the MemoryInfoLimitSource enum.
 func (e MemoryInfoLimitSource) Valid() bool {
 	switch e {
-	case CgroupV1:
+	case MemLimitCgroupV1:
 		return true
-	case CgroupV2:
+	case MemLimitCgroupV2:
 		return true
-	case None:
+	case MemLimitNone:
 		return true
 	default:
 		return false
@@ -413,6 +440,60 @@ const (
 func (e MtpMetadataSpecType) Valid() bool {
 	switch e {
 	case DraftMtp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlacementDecisionMode.
+const (
+	PlacementCpu     PlacementDecisionMode = "cpu"
+	PlacementCustom  PlacementDecisionMode = "custom"
+	PlacementGpu     PlacementDecisionMode = "gpu"
+	PlacementHybrid  PlacementDecisionMode = "hybrid"
+	PlacementRefuse  PlacementDecisionMode = "refuse"
+	PlacementUnknown PlacementDecisionMode = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the PlacementDecisionMode enum.
+func (e PlacementDecisionMode) Valid() bool {
+	switch e {
+	case PlacementCpu:
+		return true
+	case PlacementCustom:
+		return true
+	case PlacementGpu:
+		return true
+	case PlacementHybrid:
+		return true
+	case PlacementRefuse:
+		return true
+	case PlacementUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlacementDecisionPerfClass.
+const (
+	PerfCpuBoundHybrid PlacementDecisionPerfClass = "cpu-bound-hybrid"
+	PerfCpuOnly        PlacementDecisionPerfClass = "cpu-only"
+	PerfFastHybrid     PlacementDecisionPerfClass = "fast-hybrid"
+	PerfNativeGpu      PlacementDecisionPerfClass = "native-gpu"
+)
+
+// Valid indicates whether the value is a known member of the PlacementDecisionPerfClass enum.
+func (e PlacementDecisionPerfClass) Valid() bool {
+	switch e {
+	case PerfCpuBoundHybrid:
+		return true
+	case PerfCpuOnly:
+		return true
+	case PerfFastHybrid:
+		return true
+	case PerfNativeGpu:
 		return true
 	default:
 		return false
@@ -913,6 +994,9 @@ type HypotheticalQuantVariant struct {
 
 // HypotheticalVariantFit defines model for HypotheticalVariantFit.
 type HypotheticalVariantFit struct {
+	// EstHostMb Estimated host-RAM weight share for a hybrid/cpu placement, MB.
+	EstHostMb *int `json:"est_host_mb,omitempty"`
+
 	// FitLevel Same vocabulary as ModelFit.fit_level. A hypothetical model earns an honest "no" — the deployed-model rescue to "marginal" does not apply.
 	FitLevel         FitLevel `json:"fit_level"`
 	KvMbAtMaxSafeCtx *int     `json:"kv_mb_at_max_safe_ctx,omitempty"`
@@ -921,12 +1005,18 @@ type HypotheticalVariantFit struct {
 	MaxFitCtx *int `json:"max_fit_ctx,omitempty"`
 
 	// MaxSafeCtx Prompt budget at the scored context; 0 when the variant does not fit.
-	MaxSafeCtx     int     `json:"max_safe_ctx"`
-	ModelMb        *int    `json:"model_mb,omitempty"`
-	Name           string  `json:"name"`
-	Reason         *string `json:"reason,omitempty"`
-	VramRequiredMb *int    `json:"vram_required_mb,omitempty"`
+	MaxSafeCtx int    `json:"max_safe_ctx"`
+	ModelMb    *int   `json:"model_mb,omitempty"`
+	Name       string `json:"name"`
+
+	// Placement How this variant could run here: gpu = fits fully in VRAM; hybrid = larger than VRAM but loadable with host RAM under safe reserves (fit_level then describes the GPU-side fit, and ranking should treat the variant as loadable-with-caveats, not unloadable); cpu = host RAM only; refuse = exceeds every safe budget; unknown = budgets unknown. Descriptor-based (no tensor table), so MoE expert placement is approximated as a dense spill.
+	Placement      *HypotheticalVariantFitPlacement `json:"placement,omitempty"`
+	Reason         *string                          `json:"reason,omitempty"`
+	VramRequiredMb *int                             `json:"vram_required_mb,omitempty"`
 }
+
+// HypotheticalVariantFitPlacement How this variant could run here: gpu = fits fully in VRAM; hybrid = larger than VRAM but loadable with host RAM under safe reserves (fit_level then describes the GPU-side fit, and ranking should treat the variant as loadable-with-caveats, not unloadable); cpu = host RAM only; refuse = exceeds every safe budget; unknown = budgets unknown. Descriptor-based (no tensor table), so MoE expert placement is approximated as a dense spill.
+type HypotheticalVariantFitPlacement string
 
 // InferenceInfo Live inference load: in-flight model-dispatched requests vs. serving slots. The exact busy signal for schedulers — GPU utilization is sampled over a window and reads low between tokens; this does not.
 type InferenceInfo struct {
@@ -1096,6 +1186,12 @@ type ModelFit struct {
 	// FitLevel How well the model fits this host. "unknown" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case.
 	FitLevel FitLevel `json:"fit_level"`
 
+	// GpuResidentMb Weight share resident in VRAM, MB. Equals model_mb unless the command offloads weights to the CPU.
+	GpuResidentMb *int `json:"gpu_resident_mb,omitempty"`
+
+	// HostResidentMb Weight share resident in host/system RAM, MB (CPU-offloaded experts and layers).
+	HostResidentMb *int `json:"host_resident_mb,omitempty"`
+
 	// KvMbAtMaxSafeCtx KV-cache size (MB) at max_safe_ctx, given the host's cache-type quantization.
 	KvMbAtMaxSafeCtx *int `json:"kv_mb_at_max_safe_ctx,omitempty"`
 
@@ -1110,6 +1206,9 @@ type ModelFit struct {
 
 	// ModelMb Model weights resident size (MB).
 	ModelMb *int `json:"model_mb,omitempty"`
+
+	// Placement The automatic placement decision for a model: whether llama-skein rewrote its launch flags (in memory only) to run it hybrid GPU + system-RAM, refused it, or left it untouched.
+	Placement *PlacementDecision `json:"placement,omitempty"`
 
 	// Reason Human-readable explanation of the fit verdict.
 	Reason *string `json:"reason,omitempty"`
@@ -1298,6 +1397,39 @@ type OffloadRecommendation struct {
 	// VramFreeMb Free VRAM (MB) used for the calculation; falls back to system RAM when no GPU is present.
 	VramFreeMb *int `json:"vram_free_mb,omitempty"`
 }
+
+// PlacementDecision The automatic placement decision for a model: whether llama-skein rewrote its launch flags (in memory only) to run it hybrid GPU + system-RAM, refused it, or left it untouched.
+type PlacementDecision struct {
+	// Applied True when the plan rewrote the model's in-memory command (the config file is never touched).
+	Applied *bool `json:"applied,omitempty"`
+
+	// EffectiveArgs llama-fit-params preflight output (the engine's own fitted arguments) when the tool is available; advisory.
+	EffectiveArgs *string `json:"effective_args,omitempty"`
+
+	// EstGpuMb Planned GPU memory footprint (weights share + KV + overhead), MB.
+	EstGpuMb *int `json:"est_gpu_mb,omitempty"`
+
+	// EstHostMb Planned host-RAM weight footprint, MB.
+	EstHostMb *int `json:"est_host_mb,omitempty"`
+
+	// Mode gpu: fits fully, untouched. hybrid: flags rewritten to place weights in host RAM. cpu: planned CPU-only. refuse: exceeds safe budgets, load is refused. custom: operator pinned placement flags, automation stays out. unknown: could not plan confidently, untouched.
+	Mode *PlacementDecisionMode `json:"mode,omitempty"`
+
+	// NCpuMoe Layers whose MoE experts were planned onto the CPU (hybrid MoE plans only).
+	NCpuMoe *int `json:"n_cpu_moe,omitempty"`
+
+	// PerfClass Qualitative performance expectation; never a tokens-per-second prediction.
+	PerfClass *PlacementDecisionPerfClass `json:"perf_class,omitempty"`
+
+	// Reason Human-readable explanation of the placement decision.
+	Reason *string `json:"reason,omitempty"`
+}
+
+// PlacementDecisionMode gpu: fits fully, untouched. hybrid: flags rewritten to place weights in host RAM. cpu: planned CPU-only. refuse: exceeds safe budgets, load is refused. custom: operator pinned placement flags, automation stays out. unknown: could not plan confidently, untouched.
+type PlacementDecisionMode string
+
+// PlacementDecisionPerfClass Qualitative performance expectation; never a tokens-per-second prediction.
+type PlacementDecisionPerfClass string
 
 // PowerProfile defines model for PowerProfile.
 type PowerProfile struct {

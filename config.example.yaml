@@ -157,6 +157,20 @@ apiKeys:
 #  checkInterval: 5     # seconds between checks
 #  cooldown: 60         # seconds between two triggers
 
+# placement: automatic hybrid GPU + system-RAM model placement (fork extension)
+# - optional. Models larger than VRAM are planned into a hybrid split (MoE
+#   experts to CPU via --n-cpu-moe, dense layer split delegated to the
+#   engine's --fit) instead of being refused. Plans rewrite launch flags in
+#   MEMORY ONLY — this file is never modified, and a command that pins any
+#   placement flag (-ngl, --n-cpu-moe, --cpu-moe, -ot, --tensor-split) is
+#   never touched. See docs/placement.md.
+#placement:
+#  mode: auto             # auto | gpu (never rewrite) | hybrid | cpu
+#  hostReserveGiB: 0      # 0 = max(12 GiB, 10% of effective RAM)
+#  gpuReserveGiB: 0       # 0 = max(2 GiB, 5% of VRAM); also the --fit-target
+#  minimumContext: 0      # 0 = 8192; also the --fit-ctx floor
+#  allowKvQuantization: false  # KV quality is never traded silently
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests

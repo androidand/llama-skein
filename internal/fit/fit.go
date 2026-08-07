@@ -180,6 +180,9 @@ type Result struct {
 	// (hybrid placement) and VRAMRequiredMB covers only the GPU share.
 	GPUResidentMB  int
 	HostResidentMB int
+	// RunMode is how the model runs given its command's placement flags:
+	// gpu | moe_offload | cpu_offload | cpu_only (contract vocabulary).
+	RunMode string
 }
 
 const (
@@ -365,6 +368,21 @@ func cpuOffloadBytes(g ModelShape, p Params) int64 {
 	return expertCPU
 }
 
+// runMode names how the weights run given the command's placement flags,
+// in the contract's run_mode vocabulary.
+func runMode(p Params, gpuMB, hostMB int) string {
+	switch {
+	case hostMB <= 0:
+		return "gpu"
+	case gpuMB <= 0:
+		return "cpu_only"
+	case p.CpuMoeAll || p.NCpuMoe > 0:
+		return "moe_offload"
+	default:
+		return "cpu_offload"
+	}
+}
+
 // Analyze computes the fit of a model (parsed GGUF) on a host (Params).
 func Analyze(g *gguf.GGUF, p Params) Result {
 	return AnalyzeShape(ShapeFromGGUF(g), p)
@@ -406,6 +424,7 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		VRAMTotalMB:     p.VRAMTotalMB,
 		GPUResidentMB:   gpuWeightMB,
 		HostResidentMB:  hostWeightMB,
+		RunMode:         runMode(p, gpuWeightMB, hostWeightMB),
 	}
 	if kvPerTok <= 0 || modelMB <= 0 {
 		res.FitLevel = "no"

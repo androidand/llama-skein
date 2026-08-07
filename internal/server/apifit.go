@@ -28,6 +28,20 @@ func (s *Server) vramMB() (total, free int) {
 	return hostVRAM(sysStats, gpuStats, unified, gpuWiredLimitMB())
 }
 
+// hostMemMB returns the cgroup-effective host memory figures (available,
+// total) in MB from the latest perf snapshot; zeros when unknown.
+func (s *Server) hostMemMB() (availMB, totalMB int) {
+	if s.perf == nil {
+		return 0, 0
+	}
+	sysStats, _ := s.perf.Current()
+	if len(sysStats) == 0 {
+		return 0, 0
+	}
+	sys := sysStats[len(sysStats)-1]
+	return sys.EffectiveMemAvailableMB(), sys.EffectiveMemTotalMB()
+}
+
 // hostBudgetMB returns the effective host RAM budget (MB) available for
 // CPU-resident model weights in a hybrid placement: cgroup-aware available
 // memory minus the configured host reserve. 0 = unknown (perf monitor still
@@ -266,7 +280,37 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	}
 
 	fillModelFit(&mf, fit.Analyze(g, p))
+	s.attachPlacement(&mf, realName)
 	return mf, true
+}
+
+// attachPlacement copies the automatic placement decision (made once at
+// boot/reload by applyAutoPlacement) onto a fit response, so callers see the
+// requested-vs-effective placement, its memory expectation, and — when the
+// engine's llama-fit-params ran — the engine's own fitted arguments.
+func (s *Server) attachPlacement(mf *apicontract.ModelFit, realName string) {
+	rec, ok := s.placements[realName]
+	if !ok {
+		return
+	}
+	plan := rec.Plan
+	pd := apicontract.PlacementDecision{
+		Mode:      ptrOf(apicontract.PlacementDecisionMode(plan.Mode)),
+		Reason:    ptrOf(plan.Reason),
+		Applied:   ptrOf(plan.Applies()),
+		EstGpuMb:  ptrOf(plan.Estimate.GPUMB),
+		EstHostMb: ptrOf(plan.Estimate.HostMB),
+	}
+	if plan.PerfClass != "" {
+		pd.PerfClass = ptrOf(apicontract.PlacementDecisionPerfClass(plan.PerfClass))
+	}
+	if plan.NCpuMoe > 0 {
+		pd.NCpuMoe = ptrOf(plan.NCpuMoe)
+	}
+	if rec.EffectiveArgs != "" {
+		pd.EffectiveArgs = ptrOf(rec.EffectiveArgs)
+	}
+	mf.Placement = &pd
 }
 
 // modelGetsWholeGPU reports whether modelID will have the entire GPU to
@@ -314,6 +358,11 @@ func fillModelFit(mf *apicontract.ModelFit, r fit.Result) {
 		mf.MaxFitCtx = ptrOf(r.MaxFitCtx)
 	}
 	mf.Reason = ptrOf(r.Reason)
+	mf.GpuResidentMb = ptrOf(r.GPUResidentMB)
+	mf.HostResidentMb = ptrOf(r.HostResidentMB)
+	if r.RunMode != "" {
+		mf.RunMode = ptrOf(apicontract.ModelFitRunMode(r.RunMode))
+	}
 }
 
 // handleAPIFitReport implements GET /api/fit — fit of every configured model

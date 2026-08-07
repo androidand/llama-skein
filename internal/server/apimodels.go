@@ -115,6 +115,7 @@ func (s *Server) handleAPIGetModel(w http.ResponseWriter, r *http.Request) {
 	}
 	record["details"] = inferModelDetails(realName, filename)
 	addModelRuntimeHints(record, mc)
+	s.addPlacementHint(record, realName)
 	addGGUFMetadata(record, mc)
 	if len(mc.Metadata) > 0 {
 		if metaMap, ok := record["meta"].(map[string]any); ok {

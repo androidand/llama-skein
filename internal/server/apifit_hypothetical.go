@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/androidand/llama-skein/internal/fit"
+	"github.com/androidand/llama-skein/internal/placement"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 )
@@ -80,12 +81,16 @@ func (s *Server) handleAPIHypotheticalFit(w http.ResponseWriter, r *http.Request
 	copy(variants, req.Variants)
 	sort.Slice(variants, func(i, j int) bool { return variants[i].FileBytes > variants[j].FileBytes })
 
+	// Host budget for hybrid feasibility (a variant larger than VRAM can
+	// still be loadable): planner-gated, cgroup-effective, reserve-applied.
+	hostAvailMB, hostTotalMB := s.hostMemMB()
+
 	resp := apicontract.HypotheticalFitResponse{
 		Backend:  apicontract.HypotheticalFitResponseBackend(backend),
 		Model:    req.Model,
 		Variants: make([]apicontract.HypotheticalVariantFit, 0, len(variants)),
 	}
-	var tightFallback string
+	var tightFallback, hybridFallback string
 	for _, v := range variants {
 		shape, estimated := fit.ShapeFromDescriptor(d, v.FileBytes)
 		resp.Estimated = resp.Estimated || estimated
@@ -102,6 +107,29 @@ func (s *Server) handleAPIHypotheticalFit(w http.ResponseWriter, r *http.Request
 		if res.MaxFitCtx > 0 {
 			vf.MaxFitCtx = ptrOf(res.MaxFitCtx)
 		}
+		// Placement verdict: distinguishes "hybrid-loadable" from "won't
+		// fit" so a 90 GB quant on a 48 GB card ranks as loadable-with-
+		// caveats. Descriptor shapes carry no tensor table, so MoE expert
+		// placement is approximated as a dense spill (llamacpp only).
+		if backend == apicontract.HypotheticalFitRequestBackendLlamacpp {
+			plan := placement.Compute(placement.Inputs{
+				Shape:           shape,
+				ConfiguredCtx:   p.ConfiguredCtx,
+				KCacheBits:      p.KCacheBits,
+				VCacheBits:      p.VCacheBits,
+				VRAMBudgetMB:    p.VRAMTotalMB,
+				HostAvailableMB: hostAvailMB,
+				HostTotalMB:     hostTotalMB,
+				Policy:          s.cfg.Placement,
+			})
+			vf.Placement = ptrOf(apicontract.HypotheticalVariantFitPlacement(plan.Mode))
+			if plan.Estimate.HostMB > 0 {
+				vf.EstHostMb = ptrOf(plan.Estimate.HostMB)
+			}
+			if plan.Mode == placement.ModeHybrid && hybridFallback == "" {
+				hybridFallback = v.Name
+			}
+		}
 		resp.Variants = append(resp.Variants, vf)
 		if resp.Recommended == nil {
 			switch res.FitLevel {
@@ -116,6 +144,11 @@ func (s *Server) handleAPIHypotheticalFit(w http.ResponseWriter, r *http.Request
 	}
 	if resp.Recommended == nil && tightFallback != "" {
 		resp.Recommended = ptrOf(tightFallback)
+	}
+	// Nothing fits fully: the largest hybrid-loadable variant is still a
+	// better recommendation than nothing (walk order is largest-first).
+	if resp.Recommended == nil && hybridFallback != "" {
+		resp.Recommended = ptrOf(hybridFallback)
 	}
 	if total, free := s.vramMB(); total > 0 {
 		resp.VramTotalMb = ptrOf(total)

@@ -2,6 +2,16 @@ export type ConnectionState = "connected" | "connecting" | "disconnected";
 
 export type ModelStatus = "ready" | "starting" | "stopping" | "stopped" | "shutdown" | "unknown";
 
+export interface ModelPlacement {
+  /** gpu | hybrid | cpu | refuse | custom | unknown */
+  mode: string;
+  /** native-gpu | fast-hybrid | cpu-bound-hybrid | cpu-only */
+  perf_class?: string;
+  /** true when the launch command was rewritten (in memory) by the plan */
+  applied: boolean;
+  reason: string;
+}
+
 export interface Model {
   id: string;
   state: ModelStatus;
@@ -10,6 +20,7 @@ export interface Model {
   unlisted: boolean;
   peerID: string;
   aliases?: string[];
+  placement?: ModelPlacement;
 }
 
 export interface TokenMetrics {

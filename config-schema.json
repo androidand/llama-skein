@@ -585,6 +585,47 @@
       "type": "object",
       "description": "Named tuning profiles selectable per host.",
       "additionalProperties": true
+    },
+    "placement": {
+      "type": "object",
+      "description": "Automatic model placement policy: hybrid GPU + system-RAM loading for models larger than VRAM. Plans rewrite launch flags in memory only; the config file is never touched. See docs/placement.md.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "gpu",
+            "hybrid",
+            "cpu"
+          ],
+          "default": "auto",
+          "description": "auto: plan per model (full GPU when it fits, hybrid when it doesn't, refuse when unsafe). gpu: never rewrite commands (legacy behavior)."
+        },
+        "hostReserveGiB": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Host RAM never allocated to CPU-resident weights. 0 = max(12 GiB, 10% of effective RAM)."
+        },
+        "gpuReserveGiB": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "VRAM left free by the planner (also the --fit-target margin). 0 = max(2 GiB, 5% of VRAM)."
+        },
+        "minimumContext": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Smallest context automatic placement may plan for (also --fit-ctx). 0 = 8192."
+        },
+        "allowKvQuantization": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permit the planner to quantize the KV cache to make a model fit. Never done silently."
+        }
+      }
     }
   },
   "allOf": [

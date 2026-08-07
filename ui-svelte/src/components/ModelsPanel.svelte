@@ -6,7 +6,7 @@
   } from "../stores/api";
   import { isNarrow } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
-  import type { Model, ResourcesResponse, ModelFileInfo } from "../lib/types";
+  import type { Model, ModelPlacement, ResourcesResponse, ModelFileInfo } from "../lib/types";
   import StorageBar from "./StorageBar.svelte";
   import PullModelModal from "./PullModelModal.svelte";
 
@@ -85,6 +85,29 @@
   function toggleShowUnlisted() { showUnlistedStore.update((prev) => !prev); }
   function getModelDisplay(model: Model) {
     return $showIdorNameStore === "id" ? model.id : (model.name || model.id);
+  }
+
+  // Human labels for the automatic placement decision (see docs/placement.md).
+  function placementLabel(p: ModelPlacement): string {
+    switch (p.mode) {
+      case "hybrid":
+        return "Hybrid GPU + RAM";
+      case "cpu":
+        return "System RAM only";
+      case "refuse":
+        return "Insufficient safe memory";
+      case "custom":
+        return "Manual placement";
+      default:
+        return p.mode;
+    }
+  }
+
+  function placementTooltip(p: ModelPlacement): string {
+    const parts = [p.reason];
+    if (p.perf_class) parts.push(`Expected performance: ${p.perf_class}`);
+    if (p.applied) parts.push("Launch flags were adjusted automatically (config file untouched).");
+    return parts.join("\n");
   }
 </script>
 
@@ -183,6 +206,17 @@
                   {/if}
                   {#if model.aliases && model.aliases.length > 0}
                     <p class="text-xs text-txtsecondary">Aliases: {model.aliases.join(", ")}</p>
+                  {/if}
+                  {#if model.placement && (model.placement.mode === "hybrid" || model.placement.mode === "cpu" || model.placement.mode === "refuse")}
+                    <p class="text-xs" title={placementTooltip(model.placement)}>
+                      <span
+                        class="inline-block px-1.5 py-0.5 rounded font-semibold {model.placement.mode === 'refuse'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-amber-100 text-amber-800'}"
+                      >
+                        {placementLabel(model.placement)}
+                      </span>
+                    </p>
                   {/if}
                 </div>
               </div>

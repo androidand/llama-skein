@@ -198,6 +198,27 @@ func addModelRuntimeHints(record map[string]any, mc config.ModelConfig) {
 	}
 }
 
+// addPlacementHint surfaces the automatic placement decision on a model
+// listing record: the effective mode, its qualitative performance class, and
+// whether the launch command was rewritten. Offload flag read-back
+// (addModelRuntimeHints) already reflects the rewritten command; this names
+// the decision behind it.
+func (s *Server) addPlacementHint(record map[string]any, realName string) {
+	rec, ok := s.placements[realName]
+	if !ok {
+		return
+	}
+	hint := map[string]any{
+		"mode":    string(rec.Plan.Mode),
+		"applied": rec.Plan.Applies(),
+		"reason":  rec.Plan.Reason,
+	}
+	if rec.Plan.PerfClass != "" {
+		hint["perf_class"] = string(rec.Plan.PerfClass)
+	}
+	record["placement"] = hint
+}
+
 // addGGUFMetadata reads GGUF headers from the model file and adds them to
 // the record under record["meta"]["llamaswap"]["gguf"].
 func addGGUFMetadata(record map[string]any, mc config.ModelConfig) {
