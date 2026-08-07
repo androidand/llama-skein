@@ -12,6 +12,7 @@ import (
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/event"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/placement"
 	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/shared"
@@ -222,6 +223,17 @@ func (s *Server) CreateMemoryPressureGateMiddleware() chain.Middleware {
 			st, statsErr := s.readSysStats()
 
 			reason, refuse := memoryPressureRefusal(mg, mgErr, st, statsErr)
+			if !refuse && statsErr == nil {
+				// Placement admission: a hybrid plan sized against the memory
+				// free at planning time can be stale by the time the model is
+				// actually requested (another model resident, an unrelated
+				// process grown). Refuse a load whose planned host-RAM
+				// footprint no longer fits what's available now — before the
+				// weights start streaming into RAM — rather than discovering
+				// it via the OOM killer. Transient, so 503/retryable.
+				plan, planned := s.placementFor(data.ModelID)
+				reason, refuse = placementAdmissionRefusal(plan, planned, st)
+			}
 			if !refuse {
 				next.ServeHTTP(w, r)
 				return
@@ -249,6 +261,40 @@ func memoryPressureRefusal(mg config.MemoryGuardConfig, mgErr error, st perf.Sys
 	}
 	_, critical, reason := hostUnderPressure(st, mg.MinAvailablePct)
 	return reason, critical
+}
+
+// placementFor returns the planned placement for a model, if one was made.
+func (s *Server) placementFor(id string) (plan placement.Plan, ok bool) {
+	realName, found := s.cfg.RealModelName(id)
+	if !found {
+		realName = id
+	}
+	rec, ok := s.placements[realName]
+	return rec.Plan, ok
+}
+
+// placementAdmissionRefusal refuses a load whose planned host-RAM footprint
+// exceeds the memory effectively available right now. Pure, so the decision
+// is testable without a host.
+//
+// Only host-resident weights are checked: a full-GPU plan puts nothing in
+// system RAM, and the VRAM side is already gated by the fit guard (507) at
+// plan time. Fails open on everything uncertain — no plan, an estimate of
+// zero, or unreadable memory figures — because refusing a load we cannot
+// size is worse than attempting it.
+func placementAdmissionRefusal(plan placement.Plan, ok bool, st perf.SysStat) (reason string, refuse bool) {
+	if !ok || !plan.Confident || plan.Estimate.HostMB <= 0 {
+		return "", false
+	}
+	availableMB := st.EffectiveMemAvailableMB()
+	if availableMB <= 0 {
+		return "", false
+	}
+	if plan.Estimate.HostMB <= availableMB {
+		return "", false
+	}
+	return fmt.Sprintf("planned host-memory footprint %d MB exceeds the %d MB available now (placement: %s)",
+		plan.Estimate.HostMB, availableMB, plan.Mode), true
 }
 
 // readSysStats samples current system memory stats, or returns

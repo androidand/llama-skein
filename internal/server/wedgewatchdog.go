@@ -3,10 +3,13 @@ package server
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/androidand/llama-skein/internal/offload"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/placement"
 	"github.com/androidand/llama-skein/internal/process"
 )
 
@@ -139,6 +142,18 @@ func (s *Server) wedgeWatchdogTick(gpuMin, memMax float64, needSamples int, stal
 			stalls[id] = 0
 			continue
 		}
+		// The GPU-stall signature (card pinned busy, memory controller idle)
+		// only diagnoses a wedge for a model whose work is actually ON the
+		// card. A hybrid/CPU-placed model runs its expert FFNs in host RAM
+		// while the GPU waits between small bursts — legitimately producing
+		// the same high-util/low-mem-activity reading for as long as
+		// generation takes. Restarting on it would kill a healthy but slow
+		// model, so host-heavy placements are exempt from this verdict. The
+		// stderr fatal-pattern check above still covers them.
+		if s.placementIsHostHeavy(id) {
+			stalls[id] = 0
+			continue
+		}
 		stalls[id]++
 		if stalls[id] >= needSamples {
 			s.proxylog.Warnf("<%s> wedge watchdog: GPU %.0f%% busy / %.0f%% mem-activity persisted for %d samples with no progress — restarting wedged backend", id, gpus[0].GpuUtilPct, gpus[0].MemActivityPct, stalls[id])
@@ -151,6 +166,41 @@ func (s *Server) wedgeWatchdogTick(gpuMin, memMax float64, needSamples int, stal
 			delete(stalls, id)
 		}
 	}
+}
+
+// placementIsHostHeavy reports whether a model runs with a meaningful share
+// of its weights in host RAM (a hybrid or CPU-only placement) — either
+// because automatic placement planned it that way, or because the operator
+// pinned CPU-offload flags themselves.
+func (s *Server) placementIsHostHeavy(id string) bool {
+	if rec, ok := s.placements[id]; ok {
+		switch rec.Plan.Mode {
+		case placement.ModeHybrid, placement.ModeCPU:
+			return true
+		}
+	}
+	mc, ok := s.cfg.Models[id]
+	if !ok {
+		return false
+	}
+	args, err := mc.SanitizedCommand()
+	if err != nil {
+		return false
+	}
+	spec := offload.For(mc.Backend).Parse(args)
+	if (spec.CpuMoe != nil && *spec.CpuMoe) ||
+		(spec.NCpuMoe != nil && *spec.NCpuMoe > 0) ||
+		(spec.OverrideTensor != nil && *spec.OverrideTensor != "") {
+		return true
+	}
+	// An explicit -ngl 0 is CPU-only. Read it as a raw string: commandFlagInt
+	// parses *positive* ints and reports 0 as "absent".
+	if v, ok := commandFlagString(args, "--n-gpu-layers", "-ngl", "--gpu-layers"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // gpuStalled reports the wedge signature: the GPU is pinned busy while its

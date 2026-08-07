@@ -78,7 +78,35 @@ func (s *Server) applyAutoPlacement() {
 		}
 		s.applyPlanned(id, rec)
 	}
+	s.warnSlowPlacementTimeouts()
 }
+
+// warnSlowPlacementTimeouts flags request-time caps that a legitimately slow
+// hybrid model will trip. A cpu-bound-hybrid decode is paced by host memory
+// bandwidth and can take many times longer than the same model would on the
+// card — a timeout tuned for GPU serving reads that as a hang and kills a
+// working model. Warn rather than silently raising the cap: the operator
+// chose that number, and placement must not quietly override it.
+func (s *Server) warnSlowPlacementTimeouts() {
+	for id, rec := range s.placements {
+		if rec.Plan.PerfClass != placement.PerfCPUBoundHybrid && rec.Plan.PerfClass != placement.PerfCPUOnly {
+			continue
+		}
+		cap := s.cfg.MaxRequestTimeSecs
+		if mc, ok := s.cfg.Models[id]; ok && mc.MaxRequestTimeSecs > 0 {
+			cap = mc.MaxRequestTimeSecs
+		}
+		if cap > 0 && cap < slowPlacementTimeoutAdviceSecs {
+			s.proxylog.Warnf("placement: model %q runs %s — generation is paced by host memory bandwidth and may take minutes per response, but maxRequestTimeSecs is %ds. Raise it for this model or requests will be cut off mid-generation.",
+				id, rec.Plan.PerfClass, cap)
+		}
+	}
+}
+
+// slowPlacementTimeoutAdviceSecs is the request-time cap below which a
+// host-bandwidth-paced placement is likely to be cut off mid-generation.
+// Advisory only — it triggers a log line, never a config change.
+const slowPlacementTimeoutAdviceSecs = 600
 
 // applyPlanned records one model's placement decision and enacts it: hybrid/
 // CPU plans rewrite the in-memory command, confident refusals mark the model
