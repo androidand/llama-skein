@@ -87,9 +87,9 @@ type SysStat struct {
 	// "none" | "cgroup-v2" | "cgroup-v1".
 	MemLimitSource string      `json:"mem_limit_source"`
 	SwapTotalMB    int         `json:"swap_total_mb"`
-	SwapUsedMB       int         `json:"swap_used_mb"`
-	LoadAvg1         float64     `json:"load_avg_1"`
-	LoadAvg5         float64     `json:"load_avg_5"`
-	LoadAvg15        float64     `json:"load_avg_15"`
-	NetIO            []NetIOStat `json:"net_io"`
+	SwapUsedMB     int         `json:"swap_used_mb"`
+	LoadAvg1       float64     `json:"load_avg_1"`
+	LoadAvg5       float64     `json:"load_avg_5"`
+	LoadAvg15      float64     `json:"load_avg_15"`
+	NetIO          []NetIOStat `json:"net_io"`
 }

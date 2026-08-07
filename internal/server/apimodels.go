@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/fit"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 	"github.com/androidand/llama-skein/pkg/gguf"
@@ -406,7 +407,16 @@ func (s *Server) handleAPIOffloadRecommendation(w http.ResponseWriter, r *http.R
 	ctxInt := int(ctxLen)
 	resp.CtxSize = &ctxInt
 
-	plan := g.RecommendCpuMoe(freeBytes, ctxLen)
+	// Cache-type-aware KV estimate (single source of truth with /api/fit):
+	// the legacy FP16-only KVCacheBytes over-budgets quantized-KV commands.
+	kBits, vBits := 16.0, 16.0
+	if kc, ok := commandFlagString(args, "--cache-type-k", "-ctk"); ok {
+		kBits = fit.BitsPerElement(kc)
+	}
+	if vc, ok := commandFlagString(args, "--cache-type-v", "-ctv"); ok {
+		vBits = fit.BitsPerElement(vc)
+	}
+	plan := g.RecommendCpuMoe(freeBytes, ctxLen, fit.KVBytesPerToken(g, kBits, vBits))
 	resp.Applicable = plan.Applicable
 	resp.Reason = stringPtr(plan.Reason)
 	if plan.ExpertBytesTotal > 0 {

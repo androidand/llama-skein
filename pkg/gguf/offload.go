@@ -67,11 +67,11 @@ func (g *GGUF) ExpertWeightBytes() (total int64, perLayer map[int]int64, ok bool
 	return total, perLayer, true
 }
 
-// estimateExpertBytesFromDims approximates total expert weight bytes from
+// EstimateExpertBytesFromDims approximates total expert weight bytes from
 // architecture dimensions when the tensor table is unavailable. Expert FFN
 // params per layer ~= expert_count * 3 (gate, up, down) * embedding * expert_ff.
 // Returns 0 when the required dimensions are missing.
-func (g *GGUF) estimateExpertBytesFromDims() int64 {
+func (g *GGUF) EstimateExpertBytesFromDims() int64 {
 	if !g.IsMoE() || g.LayerCount <= 0 || g.EmbeddingLength <= 0 {
 		return 0
 	}
@@ -113,9 +113,13 @@ type OffloadPlan struct {
 // layers whose MoE experts must move to CPU so that the remaining weights, the
 // KV cache for ctxLen, and overhead fit within freeBytes of VRAM.
 //
+// kvBytesPerToken is the caller's cache-type-aware KV estimate (the fit
+// engine's KVBytesPerToken with the command's --cache-type-k/v); pass <= 0 to
+// fall back to this package's legacy FP16-only KVCacheBytes.
+//
 // It is MoE-scoped: non-MoE models return Applicable=false. When the exact
 // tensor table is available it is used; otherwise a dimensional estimate is.
-func (g *GGUF) RecommendCpuMoe(freeBytes, ctxLen int64) OffloadPlan {
+func (g *GGUF) RecommendCpuMoe(freeBytes, ctxLen, kvBytesPerToken int64) OffloadPlan {
 	if !g.IsMoE() {
 		return OffloadPlan{Reason: "model is not a mixture-of-experts model; CPU/MoE offload does not apply"}
 	}
@@ -125,7 +129,7 @@ func (g *GGUF) RecommendCpuMoe(freeBytes, ctxLen int64) OffloadPlan {
 
 	expertTotal, perLayer, exact := g.ExpertWeightBytes()
 	if !exact {
-		expertTotal = g.estimateExpertBytesFromDims()
+		expertTotal = g.EstimateExpertBytesFromDims()
 	}
 	if expertTotal <= 0 {
 		return OffloadPlan{Reason: "could not determine expert tensor sizes for this model"}
@@ -136,6 +140,9 @@ func (g *GGUF) RecommendCpuMoe(freeBytes, ctxLen int64) OffloadPlan {
 		return OffloadPlan{ExpertBytesTotal: expertTotal, Reason: "model weight size unknown; cannot compute a recommendation"}
 	}
 	kv := g.KVCacheBytes(ctxLen)
+	if kvBytesPerToken > 0 {
+		kv = kvBytesPerToken * ctxLen
+	}
 	overhead := (weights + kv) * 8 / 100 // ~8% for activations and compute buffers
 	required := weights + kv + overhead
 

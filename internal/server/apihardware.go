@@ -50,8 +50,6 @@ func (s *Server) loadedModelInfo() (id string, modelMB int64) {
 	return id, modelMB
 }
 
-// handleAPIHardware implements GET /api/hardware.
-// Returns a point-in-time snapshot: storage, memory, CPU, and GPU stats.
 // memLimitSourceOrNone maps an unpopulated snapshot (predating the effective
 // fields) to the contract's "none".
 func memLimitSourceOrNone(src string) string {
@@ -61,6 +59,8 @@ func memLimitSourceOrNone(src string) string {
 	return src
 }
 
+// handleAPIHardware implements GET /api/hardware.
+// Returns a point-in-time snapshot: storage, memory, CPU, and GPU stats.
 func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{}
 
@@ -93,11 +93,11 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 				"effective_available_mb": sys.EffectiveMemAvailableMB(),
 				"limit_source":           memLimitSourceOrNone(sys.MemLimitSource),
 				"swap_total":             sys.SwapTotalMB,
-				"swap_used":    sys.SwapUsedMB,
-				"type":         memType,
-				"load_avg1":    sys.LoadAvg1,
-				"load_avg5":    sys.LoadAvg5,
-				"load_avg15":   sys.LoadAvg15,
+				"swap_used":              sys.SwapUsedMB,
+				"type":                   memType,
+				"load_avg1":              sys.LoadAvg1,
+				"load_avg5":              sys.LoadAvg5,
+				"load_avg15":             sys.LoadAvg15,
 			}
 
 			var cpuAvg float64

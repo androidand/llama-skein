@@ -10,6 +10,7 @@ import (
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/fit"
+	"github.com/androidand/llama-skein/internal/offload"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/pkg/apicontract"
@@ -25,6 +26,27 @@ func (s *Server) vramMB() (total, free int) {
 	sysStats, gpuStats := s.perf.Current()
 	unified := runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 	return hostVRAM(sysStats, gpuStats, unified, gpuWiredLimitMB())
+}
+
+// hostBudgetMB returns the effective host RAM budget (MB) available for
+// CPU-resident model weights in a hybrid placement: cgroup-aware available
+// memory minus the configured host reserve. 0 = unknown (perf monitor still
+// warming up) — fit and placement then skip the host-side check (fail open).
+func (s *Server) hostBudgetMB() int {
+	if s.perf == nil {
+		return 0
+	}
+	sysStats, _ := s.perf.Current()
+	if len(sysStats) == 0 {
+		return 0
+	}
+	sys := sysStats[len(sysStats)-1]
+	total := sys.EffectiveMemTotalMB()
+	avail := sys.EffectiveMemAvailableMB()
+	if total <= 0 || avail <= 0 {
+		return 0
+	}
+	return max0(avail - s.cfg.Placement.HostReserveMB(total))
 }
 
 // hostVRAM computes the VRAM budget from perf snapshots. Pure so every
@@ -209,6 +231,22 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	if v, ok := commandFlagInt(args, "--n-predict", "-n"); ok && v > 0 {
 		p.OutputReserve = v
 	}
+	// Offload flags: weights the command moves to CPU are scored against host
+	// RAM, not VRAM — without this, a hand- or auto-offloaded model larger
+	// than the card reads as fit_level "no" despite loading fine.
+	spec := offload.For(backend).Parse(args)
+	if spec.CpuMoe != nil && *spec.CpuMoe {
+		p.CpuMoeAll = true
+	}
+	if spec.NCpuMoe != nil && *spec.NCpuMoe > 0 {
+		p.NCpuMoe = *spec.NCpuMoe
+	}
+	if v, ok := commandFlagInt(args, "--n-gpu-layers", "-ngl", "--gpu-layers"); ok {
+		// Numeric only: "auto"/"all" mean upstream fitting owns placement,
+		// which this engine conservatively treats as full-GPU (nil).
+		p.NGpuLayers = &v
+	}
+	p.HostBudgetMB = s.hostBudgetMB()
 	p.VRAMTotalMB, p.VRAMFreeMB = s.vramMB()
 	if modelGetsWholeGPU(s.cfg, realName) {
 		// This model belongs to an exclusive swap group: loading it evicts

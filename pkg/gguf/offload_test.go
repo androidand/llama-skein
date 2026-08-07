@@ -62,7 +62,7 @@ func TestGGUF_ExpertWeightBytes_NoTensorInfo(t *testing.T) {
 
 func TestGGUF_RecommendCpuMoe_NotMoE(t *testing.T) {
 	g := &GGUF{Architecture: "llama", LayerCount: 32, FileSize: 1000}
-	plan := g.RecommendCpuMoe(1<<30, 8192)
+	plan := g.RecommendCpuMoe(1<<30, 8192, 0)
 	if plan.Applicable {
 		t.Errorf("dense model should not be applicable: %+v", plan)
 	}
@@ -70,7 +70,7 @@ func TestGGUF_RecommendCpuMoe_NotMoE(t *testing.T) {
 
 func TestGGUF_RecommendCpuMoe_FitsFully(t *testing.T) {
 	g := buildMoE(4, 1000) // weights 8000, kv 0 (EmbeddingLength unset), overhead 640
-	plan := g.RecommendCpuMoe(10000, 8192)
+	plan := g.RecommendCpuMoe(10000, 8192, 0)
 	if !plan.Applicable || !plan.FitsFullyOnGPU || plan.NCpuMoe != 0 {
 		t.Errorf("expected fits-fully with NCpuMoe 0, got %+v", plan)
 	}
@@ -79,18 +79,18 @@ func TestGGUF_RecommendCpuMoe_FitsFully(t *testing.T) {
 func TestGGUF_RecommendCpuMoe_PartialOffload(t *testing.T) {
 	g := buildMoE(4, 1000) // required = 8640
 	// deficit 640 -> first layer (frees 1000) is enough.
-	if plan := g.RecommendCpuMoe(8000, 8192); plan.NCpuMoe != 1 || plan.FitsFullyOnGPU {
+	if plan := g.RecommendCpuMoe(8000, 8192, 0); plan.NCpuMoe != 1 || plan.FitsFullyOnGPU {
 		t.Errorf("expected NCpuMoe 1, got %+v", plan)
 	}
 	// deficit 2640 -> layers 0,1,2 free 3000 >= 2640.
-	if plan := g.RecommendCpuMoe(6000, 8192); plan.NCpuMoe != 3 {
+	if plan := g.RecommendCpuMoe(6000, 8192, 0); plan.NCpuMoe != 3 {
 		t.Errorf("expected NCpuMoe 3, got %+v", plan)
 	}
 }
 
 func TestGGUF_RecommendCpuMoe_CannotFit(t *testing.T) {
 	g := buildMoE(4, 1000) // all experts free only 4000
-	plan := g.RecommendCpuMoe(1000, 8192)
+	plan := g.RecommendCpuMoe(1000, 8192, 0)
 	if plan.NCpuMoe != 4 || plan.FitsFullyOnGPU {
 		t.Errorf("expected NCpuMoe = layerCount (4), got %+v", plan)
 	}
@@ -109,7 +109,7 @@ func TestGGUF_RecommendCpuMoe_DimensionalFallback(t *testing.T) {
 		FileSize:                10_000_000,
 	}
 	// Ample VRAM: the model fits fully, but the estimate must still be applicable.
-	plan := g.RecommendCpuMoe(1<<30, 4096)
+	plan := g.RecommendCpuMoe(1<<30, 4096, 0)
 	if !plan.Applicable {
 		t.Fatalf("expected applicable with dimensional fallback, got %+v", plan)
 	}

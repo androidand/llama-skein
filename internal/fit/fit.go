@@ -139,6 +139,21 @@ type Params struct {
 	// configured-model rescue from "no" and the under-configured flag are
 	// disabled, and "no" stays "no".
 	Unproven bool
+
+	// CPU-offload placement, parsed from the launch command by the server
+	// layer (offload translator + -ngl). Weights placed on CPU leave the
+	// VRAM requirement and are budgeted against HostBudgetMB instead.
+	CpuMoeAll bool // --cpu-moe: every layer's experts on CPU
+	NCpuMoe   int  // --n-cpu-moe N: experts of the first N layers on CPU (0 = none)
+	// NGpuLayers is the parsed -ngl value; nil = unset/auto/all (everything
+	// the engine can place goes to GPU — upstream --fit may still adjust,
+	// which this engine cannot model and treats as full-GPU, conservative).
+	// An explicit 0 is CPU-only.
+	NGpuLayers *int
+	// HostBudgetMB is the effective host RAM available for CPU-resident
+	// weights (cgroup-aware available minus reserves). 0 = unknown: host-side
+	// feasibility is then not checked (fail-open, matching VRAM semantics).
+	HostBudgetMB int
 }
 
 // Result is the computed fit. It mirrors the apicontract.ModelFit fields the
@@ -160,6 +175,11 @@ type Result struct {
 	// a starved config that would otherwise be invisible — the fit report echoes
 	// the tiny configured_ctx and nothing signals the model is under-sized.
 	UnderConfigured bool
+	// Weight placement split. GPUResidentMB + HostResidentMB ≈ ModelMB;
+	// HostResidentMB > 0 means the command offloads weights to CPU/system RAM
+	// (hybrid placement) and VRAMRequiredMB covers only the GPU share.
+	GPUResidentMB  int
+	HostResidentMB int
 }
 
 const (
@@ -210,6 +230,13 @@ type ModelShape struct {
 	// overhead isn't otherwise modeled by this engine (LayerCount/kvBytesPerShape
 	// only know about the base transformer stack) — see mtpExtraSafetyFrac.
 	IsMTP bool
+	// IsMoE + expert byte sizes power hybrid GPU/CPU placement math: expert
+	// tensors moved to CPU (--cpu-moe / --n-cpu-moe) leave VRAM and are
+	// budgeted against host RAM instead. ExpertBytesPerLayer is keyed by
+	// layer index (nil when only a dimensional total estimate exists).
+	IsMoE               bool
+	ExpertBytesTotal    int64
+	ExpertBytesPerLayer map[int]int64
 }
 
 // ShapeFromGGUF projects a parsed GGUF onto the neutral shape. WeightBytes
@@ -223,7 +250,7 @@ func ShapeFromGGUF(g *gguf.GGUF) ModelShape {
 	if weightBytes <= 0 {
 		weightBytes = g.FileSize
 	}
-	return ModelShape{
+	shape := ModelShape{
 		LayerCount:            g.LayerCount,
 		EmbeddingLength:       g.EmbeddingLength,
 		KeyLength:             g.KeyLength,
@@ -233,8 +260,18 @@ func ShapeFromGGUF(g *gguf.GGUF) ModelShape {
 		FullAttentionInterval: g.FullAttentionInterval,
 		WeightBytes:           weightBytes,
 		IsMTP:                 g.IsMTP(),
+		IsMoE:                 g.IsMoE(),
 		TrainedCtx:            g.MinCtxSize(),
 	}
+	if shape.IsMoE {
+		if total, perLayer, ok := g.ExpertWeightBytes(); ok {
+			shape.ExpertBytesTotal = total
+			shape.ExpertBytesPerLayer = perLayer
+		} else if est := g.EstimateExpertBytesFromDims(); est > 0 {
+			shape.ExpertBytesTotal = est
+		}
+	}
+	return shape
 }
 
 // KVBytesPerToken returns the KV-cache bytes consumed per context token, using
@@ -288,6 +325,46 @@ func kvBytesPerShape(g ModelShape, kBits, vBits float64) int64 {
 	return int64(bytesPerLayer * float64(attnLayers))
 }
 
+// cpuOffloadBytes computes the weight bytes the launch command places on the
+// CPU: MoE expert tensors moved by --cpu-moe / --n-cpu-moe, plus the layer
+// share excluded by an explicit -ngl below the layer count. The -ngl split is
+// proportional — an approximation (embeddings/output live off-layer), kept
+// conservative by applying it only to the non-expert remainder.
+func cpuOffloadBytes(g ModelShape, p Params) int64 {
+	var expertCPU int64
+	if g.IsMoE && g.ExpertBytesTotal > 0 {
+		switch {
+		case p.CpuMoeAll:
+			expertCPU = g.ExpertBytesTotal
+		case p.NCpuMoe > 0:
+			n := p.NCpuMoe
+			if g.LayerCount > 0 && int64(n) > g.LayerCount {
+				n = int(g.LayerCount)
+			}
+			if g.ExpertBytesPerLayer != nil {
+				// --n-cpu-moe N offloads the experts of the FIRST N layers.
+				for layer := 0; layer < n; layer++ {
+					expertCPU += g.ExpertBytesPerLayer[layer]
+				}
+			} else if g.LayerCount > 0 {
+				expertCPU = g.ExpertBytesTotal * int64(n) / g.LayerCount
+			}
+		}
+	}
+	rest := g.WeightBytes - expertCPU
+	if rest < 0 {
+		rest = 0
+	}
+	if p.NGpuLayers != nil && g.LayerCount > 0 && int64(*p.NGpuLayers) < g.LayerCount {
+		ngl := int64(*p.NGpuLayers)
+		if ngl < 0 {
+			ngl = 0
+		}
+		expertCPU += rest * (g.LayerCount - ngl) / g.LayerCount
+	}
+	return expertCPU
+}
+
 // Analyze computes the fit of a model (parsed GGUF) on a host (Params).
 func Analyze(g *gguf.GGUF, p Params) Result {
 	return AnalyzeShape(ShapeFromGGUF(g), p)
@@ -313,11 +390,22 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	// any fallback before we get here.
 	modelMB := int(g.WeightBytes / mib)
 
+	// Hybrid placement: weights the command moves to CPU leave the VRAM
+	// requirement and are budgeted against host RAM below. gpuWeightMB is the
+	// VRAM-side share all subsequent math uses.
+	hostWeightMB := int(cpuOffloadBytes(g, p) / mib)
+	if hostWeightMB > modelMB {
+		hostWeightMB = modelMB
+	}
+	gpuWeightMB := modelMB - hostWeightMB
+
 	res := Result{
 		KVBytesPerToken: kvPerTok,
 		ModelMB:         modelMB,
 		ConfiguredCtx:   p.ConfiguredCtx,
 		VRAMTotalMB:     p.VRAMTotalMB,
+		GPUResidentMB:   gpuWeightMB,
+		HostResidentMB:  hostWeightMB,
 	}
 	if kvPerTok <= 0 || modelMB <= 0 {
 		res.FitLevel = "no"
@@ -341,7 +429,7 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	// compute overhead, and the safety cap. Use free VRAM when known, else total.
 	budgetMB := p.VRAMTotalMB
 	if p.VRAMFreeMB > 0 {
-		budgetMB = p.VRAMFreeMB + modelMB // free + the weights we'll (re)place
+		budgetMB = p.VRAMFreeMB + gpuWeightMB // free + the (GPU share of) weights we'll (re)place
 		// "free + weights we'll place" is only correct when the free figure
 		// already excludes a DIFFERENT resident model this one will evict —
 		// then the weights genuinely land in newly-freed space. When nothing
@@ -362,7 +450,7 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	if g.IsMTP {
 		usableMB *= mtpExtraSafetyFrac
 	}
-	kvBudgetMB := usableMB - float64(modelMB)*(1+computeOverheadFrac)
+	kvBudgetMB := usableMB - float64(gpuWeightMB)*(1+computeOverheadFrac)
 	vramMaxCtx := 0
 	if kvBudgetMB > 0 {
 		vramMaxCtx = int(kvBudgetMB * mib / float64(kvPerTok))
@@ -403,7 +491,10 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	}
 	res.MaxSafeCtx = safe
 	res.KVMBAtMaxSafeCtx = int(kvPerTok * int64(safe) / mib)
-	res.VRAMRequiredMB = modelMB + int(float64(modelMB)*computeOverheadFrac) + int(kvPerTok*int64(hardCtx)/mib)
+	// VRAM requirement covers only the GPU-resident share; KV stays on GPU
+	// (llama.cpp --kv-offload defaults on) and the compute overhead follows
+	// the GPU-resident weights.
+	res.VRAMRequiredMB = gpuWeightMB + int(float64(gpuWeightMB)*computeOverheadFrac) + int(kvPerTok*int64(hardCtx)/mib)
 
 	// Fit verdict from headroom of the hard ctx against VRAM.
 	switch {
@@ -422,6 +513,16 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	default:
 		res.FitLevel = "good"
 		res.Reason = "fits comfortably at this context"
+	}
+
+	// Host-side feasibility for hybrid placement: CPU-resident weights must
+	// fit the effective host budget (when known). This is the check upstream
+	// llama.cpp's --fit does not perform — it happily overflows into system
+	// RAM the cgroup will OOM-kill. Unknown budget fails open, matching the
+	// VRAM semantics above.
+	if hostWeightMB > 0 && p.HostBudgetMB > 0 && hostWeightMB > p.HostBudgetMB {
+		res.FitLevel = "no"
+		res.Reason = fmt.Sprintf("CPU-offloaded weights (%d MB) exceed the safe host memory budget (%d MB)", hostWeightMB, p.HostBudgetMB)
 	}
 
 	// Safety net: a configured (deployed) model demonstrably loads at this ctx.

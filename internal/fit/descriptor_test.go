@@ -1,6 +1,7 @@
 package fit
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/androidand/llama-skein/pkg/gguf"
@@ -27,7 +28,7 @@ func TestShapeFromDescriptor_ExplicitDimsMatchGGUF(t *testing.T) {
 	if estimated {
 		t.Fatal("all dims supplied explicitly; must not be flagged estimated")
 	}
-	if descShape != ggufShape {
+	if !reflect.DeepEqual(descShape, ggufShape) {
 		t.Fatalf("descriptor shape %+v != gguf shape %+v", descShape, ggufShape)
 	}
 

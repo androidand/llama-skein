@@ -185,6 +185,9 @@ type Config struct {
 	// silent mode — reduce GPU power to lower fan noise on blower coolers.
 	SilentMode SilentModeConfig `yaml:"silentMode"`
 
+	// automatic model placement policy (hybrid GPU + system-RAM loading).
+	Placement PlacementConfig `yaml:"placement"`
+
 	// model to use when a request omits the "model" field. Must be a
 	// configured model ID or alias.
 	DefaultModel string `yaml:"defaultModel"`
@@ -313,6 +316,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	}
 
 	if config.MemoryGuard, err = config.MemoryGuard.Normalize(); err != nil {
+		return Config{}, err
+	}
+
+	if err = config.Placement.Validate(); err != nil {
 		return Config{}, err
 	}
 
