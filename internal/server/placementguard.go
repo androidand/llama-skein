@@ -1,0 +1,216 @@
+package server
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/fit"
+	"github.com/androidand/llama-skein/internal/placement"
+)
+
+// placementRecord is what applyAutoPlacement decided for one model: the plan,
+// the command as configured (before any rewrite), and — when the engine ships
+// a llama-fit-params utility — the engine's own fitted arguments as a
+// preflight cross-check.
+type placementRecord struct {
+	Plan        placement.Plan
+	OriginalCmd string
+	// EffectiveArgs is llama-fit-params' stdout for the planned command
+	// (empty when the tool is unavailable or failed — preflight is advisory,
+	// never load-bearing).
+	EffectiveArgs string
+}
+
+// pinnedPlacementFlags are the arguments whose presence hands placement
+// wholly to the operator: upstream llama.cpp disables its own fitting
+// per-argument on exactly these, and automatic placement follows the same
+// contract (tuning-injection precedent: explicit flags always win).
+var pinnedPlacementFlags = []string{
+	"--n-gpu-layers", "-ngl", "--gpu-layers",
+	"--n-cpu-moe", "-ncmoe",
+	"--cpu-moe", "-cmoe",
+	"--override-tensor", "-ot",
+	"--tensor-split", "-ts",
+}
+
+func hasPinnedPlacement(args []string) bool {
+	for _, a := range args {
+		flag, _, _ := strings.Cut(a, "=")
+		for _, p := range pinnedPlacementFlags {
+			if flag == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// applyAutoPlacement computes a placement plan for every llama.cpp model and
+// applies hybrid/CPU plans to the in-memory command (never persisted to the
+// config file — the original is kept in the placement record, and a model
+// whose plan is "gpu" is left byte-for-byte untouched, which is also what
+// makes "revert to normal" automatic for small models). Confident refusals
+// go to s.unfittable so the load gate and preload refuse them instead of
+// OOM-ing the host. Everything else fails open.
+//
+// Must run after s.cfg and s.perf are set, before clampModelsToFit (the
+// clamp should judge the rewritten command) and before the router captures
+// per-model configs.
+func (s *Server) applyAutoPlacement() {
+	if s.placements == nil {
+		s.placements = map[string]placementRecord{}
+	}
+	if s.unfittable == nil {
+		s.unfittable = map[string]string{}
+	}
+	if s.cfg.Placement.EffectiveMode() == config.PlacementModeGPU {
+		return // never rewrite anything in gpu mode
+	}
+	for id, mc := range s.cfg.Models {
+		rec, ok := s.planModel(id, mc)
+		if !ok {
+			continue
+		}
+		s.applyPlanned(id, rec)
+	}
+}
+
+// applyPlanned records one model's placement decision and enacts it: hybrid/
+// CPU plans rewrite the in-memory command, confident refusals mark the model
+// unfittable, everything else is a no-op record. Split from the planning loop
+// so the enactment rules are testable with synthetic plans.
+func (s *Server) applyPlanned(id string, rec placementRecord) {
+	s.placements[id] = rec
+	plan := rec.Plan
+	switch {
+	case plan.Mode == placement.ModeRefuse && plan.Confident:
+		s.unfittable[id] = plan.Reason
+		s.proxylog.Warnf("placement: model %q cannot be placed within safe memory budgets — it will be refused rather than loaded. %s", id, plan.Reason)
+	case plan.Applies():
+		mc, ok := s.cfg.Models[id]
+		if !ok {
+			return
+		}
+		newCmd, err := applyFlagOps(mc.Cmd, plan.FlagOps)
+		if err != nil {
+			s.proxylog.Warnf("placement: model %q plan not applied (cmd rewrite failed): %v", id, err)
+			return
+		}
+		mc.Cmd = newCmd
+		s.cfg.Models[id] = mc
+		s.proxylog.Infof("placement: model %q planned %s (%s): %s", id, plan.Mode, plan.PerfClass, plan.Reason)
+		if out, ok := s.preflightFitParams(mc); ok {
+			rec.EffectiveArgs = out
+			s.placements[id] = rec
+		}
+	}
+}
+
+// planModel computes the placement plan for one model. ok=false means the
+// model is out of scope (non-llamacpp backend, no GGUF path, unreadable
+// metadata) and no record is kept.
+func (s *Server) planModel(id string, mc config.ModelConfig) (placementRecord, bool) {
+	if mc.Backend != "" && mc.Backend != config.BackendLlamaCpp {
+		return placementRecord{}, false
+	}
+	ggufPath := parseModelPath(mc.Cmd)
+	if ggufPath == "" {
+		return placementRecord{}, false
+	}
+	g, err := s.parseGGUFCached(ggufPath)
+	if err != nil {
+		return placementRecord{}, false
+	}
+	args, err := mc.SanitizedCommand()
+	if err != nil {
+		return placementRecord{}, false
+	}
+
+	in := placement.Inputs{
+		Shape:           fit.ShapeFromGGUF(g),
+		PinnedPlacement: hasPinnedPlacement(args),
+		Policy:          s.cfg.Placement,
+	}
+	if v, ok := commandFlagInt(args, "--ctx-size", "-c"); ok {
+		in.ConfiguredCtx = v
+	}
+	if v, ok := commandFlagInt(args, "--parallel", "-np"); ok {
+		in.ParallelSlots = v
+	}
+	if kc, ok := commandFlagString(args, "--cache-type-k", "-ctk"); ok {
+		in.KCacheBits = fit.BitsPerElement(kc)
+	}
+	if vc, ok := commandFlagString(args, "--cache-type-v", "-ctv"); ok {
+		in.VCacheBits = fit.BitsPerElement(vc)
+	}
+
+	// VRAM budget: what this model gets once resident. Exclusive-group
+	// models get the whole card (same reasoning as fitForModel); shared
+	// models get what is free right now.
+	total, free := s.vramMB()
+	in.VRAMBudgetMB = free
+	if modelGetsWholeGPU(s.cfg, id) || free <= 0 {
+		in.VRAMBudgetMB = total
+	}
+
+	// Host budget inputs: cgroup-effective figures; the planner applies the
+	// policy reserve itself.
+	if s.perf != nil {
+		if sysStats, _ := s.perf.Current(); len(sysStats) > 0 {
+			sys := sysStats[len(sysStats)-1]
+			in.HostTotalMB = sys.EffectiveMemTotalMB()
+			in.HostAvailableMB = sys.EffectiveMemAvailableMB()
+		}
+	}
+
+	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd}, true
+}
+
+// preflightFitParams cross-checks a planned command against the engine's own
+// allocator: llama-fit-params (shipped beside llama-server in current
+// llama.cpp releases) prints the fitted arguments for a command without
+// loading the model. Advisory only — a missing or failing tool never blocks
+// a load; the output is stored for API/UI visibility.
+func (s *Server) preflightFitParams(mc config.ModelConfig) (string, bool) {
+	args, err := mc.SanitizedCommand()
+	if err != nil || len(args) == 0 {
+		return "", false
+	}
+	tool := fitParamsPath(args[0])
+	if tool == "" {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tool, args[1:]...)
+	cmd.Env = append(os.Environ(), mc.Env...)
+	out, err := cmd.Output()
+	if err != nil {
+		s.proxylog.Warnf("placement: llama-fit-params preflight failed (advisory only): %v", err)
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// fitParamsPath locates llama-fit-params next to the engine binary. Empty
+// when absent or not executable (older engine builds).
+func fitParamsPath(engineBinary string) string {
+	dir := filepath.Dir(engineBinary)
+	if dir == "." {
+		// Engine resolved via PATH; try PATH for the tool too.
+		if p, err := exec.LookPath("llama-fit-params"); err == nil {
+			return p
+		}
+		return ""
+	}
+	p := filepath.Join(dir, "llama-fit-params")
+	if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return p
+	}
+	return ""
+}

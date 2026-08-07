@@ -341,7 +341,12 @@ func (s *Server) buildCmd(modelPath, extraFlags string) string {
 			return strings.Join(rebuilt, " ")
 		}
 	}
-	return "llama-server --port ${PORT} --model " + modelPath + " --n-gpu-layers 99"
+	// No -ngl in the default: current llama.cpp defaults --n-gpu-layers to
+	// "auto" and fits unset arguments to device memory (--fit, default on).
+	// Pinning 99 here disabled both that and llama-skein's own automatic
+	// placement for every newly registered model — exactly the models most
+	// likely to need a hybrid plan.
+	return "llama-server --port ${PORT} --model " + modelPath
 }
 
 // ModelDetails holds inferred model family/quantization/size derived from

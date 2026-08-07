@@ -97,6 +97,13 @@ type Server struct {
 	// cache, too costly per request per model. Cleared with the Server on reload.
 	modelSizeCache sync.Map // map[string]int64
 
+	// placements records the automatic placement decision per model, made once
+	// in New (applyAutoPlacement) before the router captures configs. Hybrid
+	// plans have already been applied to the in-memory cmd (never persisted);
+	// the record keeps the original command and the plan for API visibility.
+	// nil until New runs; read-only afterward.
+	placements map[string]placementRecord
+
 	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
 	// every poll from every client. Dies with the Server on config reload.
@@ -269,6 +276,13 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 			proxylog.Warnf("could not re-apply saved profile on startup: %v", err)
 		}
 	}
+
+	// Automatic placement: rewrite oversized models' commands (in memory
+	// only) into a hybrid GPU + system-RAM configuration BEFORE the fit
+	// guard runs, so the guard judges the rewritten command — a model hybrid
+	// placement rescues is neither ctx-clamped nor refused. Confident
+	// "refuse" plans feed s.unfittable directly. Fails open.
+	s.applyAutoPlacement()
 
 	// Fit guard (proactive half): shrink over-large contexts and flag models
 	// whose weights exceed host memory BEFORE the router captures per-model
