@@ -149,6 +149,13 @@ type ProcessCommand struct {
 	// cmd.Wait goroutine, read when a failure is recorded.
 	lastExit atomic.Pointer[ExitInfo]
 
+	// cmdOverride replaces config.Cmd for the NEXT start. Adaptive placement
+	// retry uses it to relaunch a model with a more conservative command
+	// after a memory failure, without rebuilding the process or reloading
+	// the whole config. Only the command is overridable — env, proxy, and
+	// check endpoint are placement-invariant.
+	cmdOverride atomic.Pointer[string]
+
 	// count of consecutive failures, reset on a successful start.
 	failAttempts atomic.Int64
 
@@ -569,7 +576,8 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return startResult{err: fmt.Errorf("upstream proxy missing")}
 	}
 
-	args, err := p.config.SanitizedCommand()
+	effCfg := p.effectiveConfig()
+	args, err := effCfg.SanitizedCommand()
 	if err != nil {
 		return startResult{err: fmt.Errorf("unable to get sanitized command: %w", err)}
 	}
@@ -1061,6 +1069,36 @@ func (p *ProcessCommand) State() ProcessState {
 // stays auditable.
 func (p *ProcessCommand) LastError() *LoadError {
 	return p.lastError.Load()
+}
+
+// SetCommandOverride replaces the launch command used by the next start.
+// Pass "" to clear it and go back to the configured command. It takes effect
+// on the next start, never on a running process — the caller is responsible
+// for stopping first if it wants the change to apply now.
+func (p *ProcessCommand) SetCommandOverride(cmd string) {
+	if cmd == "" {
+		p.cmdOverride.Store(nil)
+		return
+	}
+	p.cmdOverride.Store(&cmd)
+}
+
+// CommandOverride returns the current override, or "" when none is set.
+func (p *ProcessCommand) CommandOverride() string {
+	if c := p.cmdOverride.Load(); c != nil {
+		return *c
+	}
+	return ""
+}
+
+// effectiveConfig is the model config as the next start should see it: the
+// configured one, with the command replaced when an override is set.
+func (p *ProcessCommand) effectiveConfig() config.ModelConfig {
+	c := p.config
+	if override := p.cmdOverride.Load(); override != nil {
+		c.Cmd = *override
+	}
+	return c
 }
 
 // recordExit retains how the upstream process died, so a subsequent

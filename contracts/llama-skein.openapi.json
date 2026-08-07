@@ -3437,6 +3437,47 @@
           "effective_args": {
             "type": "string",
             "description": "llama-fit-params preflight output (the engine's own fitted arguments) when the tool is available; advisory."
+          },
+          "retry_attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementAttempt"
+            },
+            "description": "Adaptive retry ladder history, oldest first. Empty when the model has never failed for a memory reason."
+          }
+        }
+      },
+      "PlacementAttempt": {
+        "type": "object",
+        "description": "One rung of the adaptive placement retry ladder and how it ended.",
+        "properties": {
+          "rung": {
+            "type": "string",
+            "enum": [
+              "widen-gpu-reserve",
+              "shrink-batch",
+              "shrink-context",
+              "full-cpu-moe"
+            ],
+            "x-enum-varnames": [
+              "RungWidenGpuReserve",
+              "RungShrinkBatch",
+              "RungShrinkContext",
+              "RungFullCpuMoe"
+            ],
+            "description": "Which escalation step was applied."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Placement mode of the retried plan."
+          },
+          "reason": {
+            "type": "string",
+            "description": "What the retried plan changed and why."
+          },
+          "failure": {
+            "type": "string",
+            "description": "The failure this rung was a response to."
           }
         }
       }

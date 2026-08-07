@@ -479,6 +479,30 @@ func (e MtpMetadataSpecType) Valid() bool {
 	}
 }
 
+// Defines values for PlacementAttemptRung.
+const (
+	RungFullCpuMoe      PlacementAttemptRung = "full-cpu-moe"
+	RungShrinkBatch     PlacementAttemptRung = "shrink-batch"
+	RungShrinkContext   PlacementAttemptRung = "shrink-context"
+	RungWidenGpuReserve PlacementAttemptRung = "widen-gpu-reserve"
+)
+
+// Valid indicates whether the value is a known member of the PlacementAttemptRung enum.
+func (e PlacementAttemptRung) Valid() bool {
+	switch e {
+	case RungFullCpuMoe:
+		return true
+	case RungShrinkBatch:
+		return true
+	case RungShrinkContext:
+		return true
+	case RungWidenGpuReserve:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlacementDecisionMode.
 const (
 	PlacementCpu     PlacementDecisionMode = "cpu"
@@ -1437,6 +1461,24 @@ type OffloadRecommendation struct {
 	VramFreeMb *int `json:"vram_free_mb,omitempty"`
 }
 
+// PlacementAttempt One rung of the adaptive placement retry ladder and how it ended.
+type PlacementAttempt struct {
+	// Failure The failure this rung was a response to.
+	Failure *string `json:"failure,omitempty"`
+
+	// Mode Placement mode of the retried plan.
+	Mode *string `json:"mode,omitempty"`
+
+	// Reason What the retried plan changed and why.
+	Reason *string `json:"reason,omitempty"`
+
+	// Rung Which escalation step was applied.
+	Rung *PlacementAttemptRung `json:"rung,omitempty"`
+}
+
+// PlacementAttemptRung Which escalation step was applied.
+type PlacementAttemptRung string
+
 // PlacementDecision The automatic placement decision for a model: whether llama-skein rewrote its launch flags (in memory only) to run it hybrid GPU + system-RAM, refused it, or left it untouched.
 type PlacementDecision struct {
 	// Applied True when the plan rewrote the model's in-memory command (the config file is never touched).
@@ -1462,6 +1504,9 @@ type PlacementDecision struct {
 
 	// Reason Human-readable explanation of the placement decision.
 	Reason *string `json:"reason,omitempty"`
+
+	// RetryAttempts Adaptive retry ladder history, oldest first. Empty when the model has never failed for a memory reason.
+	RetryAttempts *[]PlacementAttempt `json:"retry_attempts,omitempty"`
 }
 
 // PlacementDecisionMode gpu: fits fully, untouched. hybrid: flags rewritten to place weights in host RAM. cpu: planned CPU-only. refuse: exceeds safe budgets, load is refused. custom: operator pinned placement flags, automation stays out. unknown: could not plan confidently, untouched.

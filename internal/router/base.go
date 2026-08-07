@@ -710,6 +710,18 @@ func (b *baseRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	return nil, false
 }
 
+// SetCommandOverride replaces the launch command a model's process will use
+// on its next start, for adaptive placement retry. Returns false when the
+// model is not known to this router. modelID must be a real (non-alias)
+// config key.
+func (b *baseRouter) SetCommandOverride(modelID, cmd string) bool {
+	if p, ok := b.processes[modelID]; ok {
+		p.SetCommandOverride(cmd)
+		return true
+	}
+	return false
+}
+
 // RunningModels returns the current state of every process that is not stopped
 // or shut down. The processes map keys are fixed at construction and State()
 // is a snapshot, so this is safe to call without the run loop.

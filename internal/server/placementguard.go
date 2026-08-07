@@ -65,6 +65,9 @@ func (s *Server) applyAutoPlacement() {
 	if s.placements == nil {
 		s.placements = map[string]placementRecord{}
 	}
+	if s.placementRetries == nil {
+		s.placementRetries = newPlacementRetry()
+	}
 	if s.unfittable == nil {
 		s.unfittable = map[string]string{}
 	}
@@ -143,20 +146,32 @@ func (s *Server) applyPlanned(id string, rec placementRecord) {
 // model is out of scope (non-llamacpp backend, no GGUF path, unreadable
 // metadata) and no record is kept.
 func (s *Server) planModel(id string, mc config.ModelConfig) (placementRecord, bool) {
-	if mc.Backend != "" && mc.Backend != config.BackendLlamaCpp {
+	in, ok := s.planInputs(id, mc)
+	if !ok {
 		return placementRecord{}, false
+	}
+	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd}, true
+}
+
+// planInputs builds the planner inputs for a model from its command and the
+// host's current memory picture. Shared by the boot-time plan and the
+// adaptive retry, so a retry plans against the same rules — but against
+// memory as it is at retry time.
+func (s *Server) planInputs(id string, mc config.ModelConfig) (placement.Inputs, bool) {
+	if mc.Backend != "" && mc.Backend != config.BackendLlamaCpp {
+		return placement.Inputs{}, false
 	}
 	ggufPath := parseModelPath(mc.Cmd)
 	if ggufPath == "" {
-		return placementRecord{}, false
+		return placement.Inputs{}, false
 	}
 	g, err := s.parseGGUFCached(ggufPath)
 	if err != nil {
-		return placementRecord{}, false
+		return placement.Inputs{}, false
 	}
 	args, err := mc.SanitizedCommand()
 	if err != nil {
-		return placementRecord{}, false
+		return placement.Inputs{}, false
 	}
 
 	in := placement.Inputs{
@@ -196,7 +211,7 @@ func (s *Server) planModel(id string, mc config.ModelConfig) (placementRecord, b
 		}
 	}
 
-	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd}, true
+	return in, true
 }
 
 // preflightFitParams cross-checks a planned command against the engine's own

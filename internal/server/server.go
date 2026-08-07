@@ -104,6 +104,11 @@ type Server struct {
 	// nil until New runs; read-only afterward.
 	placements map[string]placementRecord
 
+	// placementRetries tracks the adaptive-retry ladder per model. Unlike
+	// placements it is mutated while serving (each memory-class failure may
+	// advance a rung), so it carries its own lock.
+	placementRetries *placementRetry
+
 	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
 	// every poll from every client. Dies with the Server on config reload.

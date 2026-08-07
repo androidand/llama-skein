@@ -310,6 +310,18 @@ func (s *Server) attachPlacement(mf *apicontract.ModelFit, realName string) {
 	if rec.EffectiveArgs != "" {
 		pd.EffectiveArgs = ptrOf(rec.EffectiveArgs)
 	}
+	if attempts := s.retryAttempts(realName); len(attempts) > 0 {
+		out := make([]apicontract.PlacementAttempt, 0, len(attempts))
+		for _, a := range attempts {
+			out = append(out, apicontract.PlacementAttempt{
+				Rung:    ptrOf(apicontract.PlacementAttemptRung(a.Rung)),
+				Mode:    ptrOf(string(a.Plan.Mode)),
+				Reason:  ptrOf(a.Plan.Reason),
+				Failure: ptrOf(a.Failure),
+			})
+		}
+		pd.RetryAttempts = &out
+	}
 	mf.Placement = &pd
 }
 

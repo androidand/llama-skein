@@ -33,6 +33,11 @@ type PlacementConfig struct {
 	// AllowKvQuantization permits the planner to quantize the KV cache to
 	// make a model fit. Default false: KV quality is never traded silently.
 	AllowKvQuantization bool `yaml:"allowKvQuantization"`
+
+	// MaxRetries bounds how many progressively safer placements are tried
+	// after a memory-class load failure before the model is given up on.
+	// 0 = default 3. Set to a negative value to disable adaptive retry.
+	MaxRetries int `yaml:"maxRetries"`
 }
 
 const (
@@ -41,8 +46,9 @@ const (
 	PlacementModeHybrid = "hybrid"
 	PlacementModeCPU    = "cpu"
 
-	defaultPlacementMinCtx = 8192
-	gib                    = 1024 // MB per GiB
+	defaultPlacementMinCtx     = 8192
+	defaultPlacementMaxRetries = 3
+	gib                        = 1024 // MB per GiB
 )
 
 // EffectiveMode returns the configured mode with the default applied.
@@ -98,4 +104,18 @@ func (p PlacementConfig) MinCtx() int {
 		return p.MinimumContext
 	}
 	return defaultPlacementMinCtx
+}
+
+// RetryBudget is the number of adaptive placement retries allowed after a
+// memory-class failure: the configured value, else 3. A negative
+// configured value disables adaptive retry entirely (0 attempts).
+func (p PlacementConfig) RetryBudget() int {
+	switch {
+	case p.MaxRetries < 0:
+		return 0
+	case p.MaxRetries == 0:
+		return defaultPlacementMaxRetries
+	default:
+		return p.MaxRetries
+	}
 }

@@ -184,6 +184,11 @@ func (s *Server) CreateLoadFitGateMiddleware() chain.Middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// A load is about to happen. If the last one failed for a memory
+			// reason and we planned this model's placement, install the next
+			// safer command first, so this attempt is a better one than the
+			// attempt that just failed rather than an identical repeat.
+			s.escalateIfMemoryFailure(data.ModelID)
 			reason, refuse := s.modelLoadRefusal(data.ModelID)
 			if !refuse {
 				next.ServeHTTP(w, r)

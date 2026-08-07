@@ -24,6 +24,7 @@ type fakeProcess struct {
 	mu          sync.Mutex
 	state       process.ProcessState
 	lastError   *process.LoadError
+	cmdOverride string
 	readyCh     chan struct{}
 	stopCh      chan struct{}
 	runStarted  chan struct{} // closed on the first Run call
@@ -181,6 +182,9 @@ func (f *fakeProcess) WaitReady(ctx context.Context) error {
 }
 
 func (f *fakeProcess) Logger() *logmon.Monitor { return logmon.NewWriter(io.Discard) }
+
+func (f *fakeProcess) SetCommandOverride(cmd string) { f.cmdOverride = cmd }
+func (f *fakeProcess) CommandOverride() string       { return f.cmdOverride }
 
 func (f *fakeProcess) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	f.serveCalls.Add(1)

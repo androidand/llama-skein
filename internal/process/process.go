@@ -94,4 +94,13 @@ type Process interface {
 
 	// Logger returns the monitor that captures this process's stdout/stderr.
 	Logger() *logmon.Monitor
+
+	// SetCommandOverride replaces the launch command used by the NEXT start
+	// ("" clears it). Adaptive placement retry uses this to relaunch a model
+	// with a more conservative command after a memory failure, without
+	// rebuilding the process or reloading the whole config.
+	SetCommandOverride(cmd string)
+
+	// CommandOverride returns the current override, or "" when none is set.
+	CommandOverride() string
 }

@@ -33,6 +33,8 @@ type stubRouter struct {
 	// Added for task 5.2's tests, which need to simulate a warm/load
 	// request that fails outright — every other field predates that task.
 	serveStatus int
+	// cmdOverrides records adaptive-placement retry commands per model.
+	cmdOverrides map[string]string
 }
 
 func newStubRouter(models []string, response string) *stubRouter {
@@ -58,6 +60,14 @@ func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.
 
 func (s *stubRouter) ModelErrors() map[string]*process.LoadError { return s.modelErrors }
 func (s *stubRouter) Unload(_ time.Duration, _ ...string)        { s.unloadCalls.Add(1) }
+func (s *stubRouter) SetCommandOverride(modelID, cmd string) bool {
+	if s.cmdOverrides == nil {
+		s.cmdOverrides = map[string]string{}
+	}
+	s.cmdOverrides[modelID] = cmd
+	return true
+}
+
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
 		if lg, ok := s.loggers[modelID]; ok {

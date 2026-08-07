@@ -103,6 +103,12 @@ type LocalRouter interface {
 	// modelID must be a real (non-alias) config key. Returns false when the
 	// model is not known to this router.
 	ProcessLogger(modelID string) (*logmon.Monitor, bool)
+
+	// SetCommandOverride replaces the launch command a model's process will
+	// use on its NEXT start ("" clears it), for adaptive placement retry.
+	// modelID must be a real (non-alias) config key. Returns false when the
+	// model is not known to this router.
+	SetCommandOverride(modelID, cmd string) bool
 }
 
 // FetchContext will attempt to get the model id from the context then
