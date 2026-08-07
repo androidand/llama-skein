@@ -291,7 +291,7 @@ func (s *Server) preflightFitParams(mc config.ModelConfig) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, tool, args[1:]...)
+	cmd := exec.CommandContext(ctx, tool, fitParamsArgs(args[1:])...)
 	cmd.Env = append(os.Environ(), mc.Env...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -299,6 +299,36 @@ func (s *Server) preflightFitParams(mc config.ModelConfig) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(string(out)), true
+}
+
+// serverOnlyFitParamsFlags are llama-server arguments that llama-fit-params
+// does not accept. It is a parameter-fitting utility, not a server, so it
+// rejects the serving flags outright ("error: invalid argument: --port") and
+// exits non-zero — which silently reduced the preflight to nothing.
+var serverOnlyFitParamsFlags = map[string]bool{
+	"--port": true, "--host": true, "--api-key": true, "--alias": true,
+	"--timeout": true, "--threads-http": true,
+}
+
+// fitParamsArgs drops the serving-only flags (and their values) from a
+// llama-server command so llama-fit-params will accept what remains. The
+// memory-shaping arguments — model, context, parallelism, offload — are
+// exactly what it needs and are all preserved.
+func fitParamsArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		flag, _, hasEq := strings.Cut(args[i], "=")
+		if !serverOnlyFitParamsFlags[flag] {
+			out = append(out, args[i])
+			continue
+		}
+		// "--flag=value" carries its value inline; "--flag value" does not,
+		// so the following token has to go too.
+		if !hasEq && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+		}
+	}
+	return out
 }
 
 // fitParamsPath locates llama-fit-params next to the engine binary. Empty

@@ -149,3 +149,39 @@ func TestRaiseLoadDeadline(t *testing.T) {
 		t.Fatalf("got %d, want the configured 120 when size is unknown", got)
 	}
 }
+
+// llama-fit-params is a parameter-fitting utility, not a server: handed
+// llama-server's serving flags it exits non-zero ("error: invalid argument:
+// --port"), which silently reduced the preflight to nothing on z4.
+func TestFitParamsArgs_DropsServerOnlyFlags(t *testing.T) {
+	in := []string{
+		"--port", "9000",
+		"--model", "/models/x.gguf",
+		"--ctx-size", "32768",
+		"--parallel", "1",
+		"--n-cpu-moe", "25",
+		"--host=0.0.0.0",
+	}
+	got := strings.Join(fitParamsArgs(in), " ")
+
+	for _, gone := range []string{"--port", "9000", "--host"} {
+		if strings.Contains(got, gone) {
+			t.Fatalf("%q survived: %s", gone, got)
+		}
+	}
+	// Everything that shapes memory must be preserved — that is the whole
+	// point of asking the engine to check the plan.
+	for _, kept := range []string{"--model /models/x.gguf", "--ctx-size 32768", "--parallel 1", "--n-cpu-moe 25"} {
+		if !strings.Contains(got, kept) {
+			t.Fatalf("%q was dropped: %s", kept, got)
+		}
+	}
+}
+
+// A flag whose value looks like a flag must not eat the next argument.
+func TestFitParamsArgs_DoesNotOverconsume(t *testing.T) {
+	got := fitParamsArgs([]string{"--port", "--model", "/x.gguf"})
+	if len(got) != 2 || got[0] != "--model" {
+		t.Fatalf("over-consumed: %v", got)
+	}
+}
