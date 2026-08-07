@@ -83,7 +83,7 @@ Depends on: `add-container-memory-limits` (effective host RAM budget).
   - Validation: `make test-ui`
 
 ## Phase 6 — Gate + docs
-- [ ] 15. `go build ./... && go test -short ./... && make test-dev && make
+- [x] 15. `go build ./... && go test -short ./... && make test-dev && make
   test-all`; push origin before any skein/opencode consumption.
   - Validation: `go build ./... && go test -short ./... && make test-dev`
 - [x] 16. Docs: `docs/placement.md` — how auto placement works, why file size
