@@ -3,6 +3,7 @@ package server
 import (
 	"sync"
 
+	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/placement"
 )
 
@@ -97,7 +98,34 @@ func (s *Server) ensurePlacement(modelID string) {
 		s.maxSafeCtxCache.Delete(realName)
 		s.proxylog.Infof("placement: model %q planned %s (%s) on first load: %s",
 			realName, fresh.Plan.Mode, fresh.Plan.PerfClass, fresh.Plan.Reason)
+
+		// Cross-check the planned command against the engine's own allocator
+		// in the background. Boot-time planning is usually deferred to here
+		// (VRAM telemetry is not up yet inside New), so without this the
+		// preflight never runs at all in practice. It must not run inline:
+		// this is the load path, and it holds placementMu.
+		placed := mc
+		placed.Cmd = newCmd
+		go s.recordPreflight(realName, placed)
 	}
+}
+
+// recordPreflight runs the llama-fit-params cross-check and stores its output
+// on the placement record. Advisory only — a missing or failing tool leaves
+// the record as it is.
+func (s *Server) recordPreflight(realName string, mc config.ModelConfig) {
+	out, ok := s.preflightFitParams(mc)
+	if !ok {
+		return
+	}
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+	rec, exists := s.placements[realName]
+	if !exists {
+		return
+	}
+	rec.EffectiveArgs = out
+	s.placements[realName] = rec
 }
 
 // escalateIfMemoryFailure is the adaptive-retry entry point, called on the
