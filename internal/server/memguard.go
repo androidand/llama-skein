@@ -87,10 +87,14 @@ func hostUnderPressure(st perf.SysStat, minAvailablePct float64) (pressured, cri
 		pressured = critical
 		return pressured, critical, fmt.Sprintf("kernel pressure level %d", st.MemPressureLevel)
 	}
-	if st.MemTotalMB <= 0 || st.MemAvailableMB < 0 {
+	// Pressure evaluates against the effective (cgroup-clamped) figures: a
+	// container at its limit is about to be OOM-killed no matter how much
+	// memory the host as a whole still has.
+	totalMB, availableMB := st.EffectiveMemTotalMB(), st.EffectiveMemAvailableMB()
+	if totalMB <= 0 || availableMB < 0 {
 		return false, false, ""
 	}
-	pct := float64(st.MemAvailableMB) / float64(st.MemTotalMB) * 100
+	pct := float64(availableMB) / float64(totalMB) * 100
 	pressured = pct < minAvailablePct
 	critical = pct < minAvailablePct/2
 	return pressured, critical, fmt.Sprintf("available %.1f%% (threshold %.0f%%)", pct, minAvailablePct)
@@ -172,8 +176,8 @@ func (s *Server) startMemoryGuard() {
 			// Surface a structured error to clients (UI/skein) so models don't
 			// just silently vanish — the log line alone is easy to miss.
 			event.Emit(shared.MemoryGuardTrippedEvent{
-				AvailableMB:    st.MemAvailableMB,
-				TotalMB:        st.MemTotalMB,
+				AvailableMB:    st.EffectiveMemAvailableMB(),
+				TotalMB:        st.EffectiveMemTotalMB(),
 				ThresholdPct:   mg.MinAvailablePct,
 				UnloadedModels: ready,
 			})

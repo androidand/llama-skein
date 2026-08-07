@@ -43,18 +43,21 @@ func hostVRAM(sysStats []perf.SysStat, gpuStats []perf.GpuStat, unified bool, wi
 		return 0, 0
 	}
 	sys := sysStats[len(sysStats)-1]
-	availableMB := sys.MemAvailableMB
-	if availableMB == 0 {
+	// Host-RAM budgets use the effective (cgroup-clamped) figures: in a
+	// Docker/LXC deployment the raw meminfo numbers can be the host's, while
+	// the container is OOM-killed at its cgroup limit.
+	availableMB := sys.EffectiveMemAvailableMB()
+	if availableMB == 0 && sys.MemLimitSource == "" {
 		availableMB = sys.MemFreeMB
 	}
 
 	gpus := perf.LatestGPUs(gpuStats)
 	if len(gpus) == 0 {
 		if unified {
-			budget := unifiedBudgetMB(sys.MemTotalMB, wiredLimitMB)
+			budget := unifiedBudgetMB(sys.EffectiveMemTotalMB(), wiredLimitMB)
 			return budget, max0(min(budget, availableMB))
 		}
-		return sys.MemTotalMB, max0(availableMB)
+		return sys.EffectiveMemTotalMB(), max0(availableMB)
 	}
 
 	var totalMB, usedMB int

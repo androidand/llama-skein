@@ -179,6 +179,27 @@ func (e LastErrorCategory) Valid() bool {
 	}
 }
 
+// Defines values for MemoryInfoLimitSource.
+const (
+	CgroupV1 MemoryInfoLimitSource = "cgroup-v1"
+	CgroupV2 MemoryInfoLimitSource = "cgroup-v2"
+	None     MemoryInfoLimitSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MemoryInfoLimitSource enum.
+func (e MemoryInfoLimitSource) Valid() bool {
+	switch e {
+	case CgroupV1:
+		return true
+	case CgroupV2:
+		return true
+	case None:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ModelState.
 const (
 	ModelStateFailed   ModelState = "failed"
@@ -966,16 +987,30 @@ type LoadedModelInfo struct {
 
 // MemoryInfo defines model for MemoryInfo.
 type MemoryInfo struct {
-	FreeMb    *int     `json:"free_mb,omitempty"`
-	LoadAvg1  *float32 `json:"load_avg1,omitempty"`
-	LoadAvg15 *float32 `json:"load_avg15,omitempty"`
-	LoadAvg5  *float32 `json:"load_avg5,omitempty"`
-	SwapTotal *int     `json:"swap_total,omitempty"`
-	SwapUsed  *int     `json:"swap_used,omitempty"`
-	TotalMb   *int     `json:"total_mb,omitempty"`
-	Type      *string  `json:"type,omitempty"`
-	UsedMb    *int     `json:"used_mb,omitempty"`
+	// AvailableMb Memory available for new allocations without paging (reclaimable included).
+	AvailableMb *int `json:"available_mb,omitempty"`
+
+	// EffectiveAvailableMb available_mb additionally capped by the cgroup limit minus current cgroup usage.
+	EffectiveAvailableMb *int `json:"effective_available_mb,omitempty"`
+
+	// EffectiveTotalMb Process-visible memory limit: total_mb clamped by an applicable cgroup limit (Docker/LXC). Equals total_mb when no limit applies. Budget consumers use this, never total_mb.
+	EffectiveTotalMb *int `json:"effective_total_mb,omitempty"`
+	FreeMb           *int `json:"free_mb,omitempty"`
+
+	// LimitSource Where the effective limit came from.
+	LimitSource *MemoryInfoLimitSource `json:"limit_source,omitempty"`
+	LoadAvg1    *float32               `json:"load_avg1,omitempty"`
+	LoadAvg15   *float32               `json:"load_avg15,omitempty"`
+	LoadAvg5    *float32               `json:"load_avg5,omitempty"`
+	SwapTotal   *int                   `json:"swap_total,omitempty"`
+	SwapUsed    *int                   `json:"swap_used,omitempty"`
+	TotalMb     *int                   `json:"total_mb,omitempty"`
+	Type        *string                `json:"type,omitempty"`
+	UsedMb      *int                   `json:"used_mb,omitempty"`
 }
+
+// MemoryInfoLimitSource Where the effective limit came from.
+type MemoryInfoLimitSource string
 
 // Model defines model for Model.
 type Model struct {

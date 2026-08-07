@@ -28,6 +28,26 @@ type GpuStat struct {
 	PowerDrawW       float64 `json:"power_draw_w"`
 }
 
+// EffectiveMemTotalMB is the budgeting total: the cgroup-clamped figure when
+// this snapshot carries one, else the raw total (older snapshots predating
+// the effective fields have an empty MemLimitSource).
+func (s SysStat) EffectiveMemTotalMB() int {
+	if s.MemLimitSource != "" {
+		return s.MemEffectiveTotalMB
+	}
+	return s.MemTotalMB
+}
+
+// EffectiveMemAvailableMB is the budgeting headroom counterpart of
+// EffectiveMemTotalMB. A genuine 0 (cgroup at its limit) is meaningful and
+// must not be mistaken for "unknown".
+func (s SysStat) EffectiveMemAvailableMB() int {
+	if s.MemLimitSource != "" {
+		return s.MemEffectiveAvailableMB
+	}
+	return s.MemAvailableMB
+}
+
 type NetIOStat struct {
 	Name      string `json:"name"`
 	BytesRecv uint64 `json:"bytes_recv"`
@@ -52,8 +72,21 @@ type SysStat struct {
 	// a raw available-% figure, which a legitimately-resident large model
 	// drives low without the system being in any danger. 0 on platforms that
 	// don't expose it (Linux, Windows).
-	MemPressureLevel int         `json:"mem_pressure_level"`
-	SwapTotalMB      int         `json:"swap_total_mb"`
+	MemPressureLevel int `json:"mem_pressure_level"`
+	// MemEffectiveTotalMB is the process-visible memory limit: MemTotalMB
+	// clamped by an applicable cgroup limit (Docker/LXC). Where lxcfs already
+	// virtualizes /proc/meminfo (Proxmox LXC) the clamp is a no-op. Budget
+	// consumers (fit, memory guard, placement) MUST use the effective
+	// figures, never the raw ones — a Docker deployment sees the full host
+	// RAM in /proc/meminfo while the cgroup OOM-kills far earlier.
+	MemEffectiveTotalMB int `json:"mem_effective_total_mb"`
+	// MemEffectiveAvailableMB is MemAvailableMB additionally capped by the
+	// cgroup limit minus current cgroup usage.
+	MemEffectiveAvailableMB int `json:"mem_effective_available_mb"`
+	// MemLimitSource is where the effective limit came from:
+	// "none" | "cgroup-v2" | "cgroup-v1".
+	MemLimitSource string      `json:"mem_limit_source"`
+	SwapTotalMB    int         `json:"swap_total_mb"`
 	SwapUsedMB       int         `json:"swap_used_mb"`
 	LoadAvg1         float64     `json:"load_avg_1"`
 	LoadAvg5         float64     `json:"load_avg_5"`

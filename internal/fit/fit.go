@@ -43,9 +43,11 @@ func FromSnapshot(backend string, sysStats []perf.SysStat, gpuStats []perf.GpuSt
 		return spec
 	}
 	sys := sysStats[len(sysStats)-1]
-	spec.RAMTotalMB = sys.MemTotalMB
-	spec.RAMAvailableMB = sys.MemAvailableMB
-	if spec.RAMAvailableMB == 0 {
+	// Budget against the effective (cgroup-clamped) figures — in a container
+	// the raw meminfo numbers can be the host's.
+	spec.RAMTotalMB = sys.EffectiveMemTotalMB()
+	spec.RAMAvailableMB = sys.EffectiveMemAvailableMB()
+	if spec.RAMAvailableMB == 0 && sys.MemLimitSource == "" {
 		spec.RAMAvailableMB = sys.MemFreeMB
 	}
 

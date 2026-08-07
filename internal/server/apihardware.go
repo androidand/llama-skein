@@ -52,6 +52,15 @@ func (s *Server) loadedModelInfo() (id string, modelMB int64) {
 
 // handleAPIHardware implements GET /api/hardware.
 // Returns a point-in-time snapshot: storage, memory, CPU, and GPU stats.
+// memLimitSourceOrNone maps an unpopulated snapshot (predating the effective
+// fields) to the contract's "none".
+func memLimitSourceOrNone(src string) string {
+	if src == "" {
+		return "none"
+	}
+	return src
+}
+
 func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{}
 
@@ -78,7 +87,12 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 				// signal). On macOS this is free+inactive+purgeable, far larger
 				// and more meaningful than free_mb — use it for fit decisions.
 				"available_mb": sys.MemAvailableMB,
-				"swap_total":   sys.SwapTotalMB,
+				// effective_* are the budgeting figures: raw totals clamped
+				// by an applicable cgroup (Docker/LXC) limit. See #19.
+				"effective_total_mb":     sys.EffectiveMemTotalMB(),
+				"effective_available_mb": sys.EffectiveMemAvailableMB(),
+				"limit_source":           memLimitSourceOrNone(sys.MemLimitSource),
+				"swap_total":             sys.SwapTotalMB,
 				"swap_used":    sys.SwapUsedMB,
 				"type":         memType,
 				"load_avg1":    sys.LoadAvg1,

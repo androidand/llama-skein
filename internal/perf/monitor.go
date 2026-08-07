@@ -198,7 +198,42 @@ func (m *Monitor) Current() ([]SysStat, []GpuStat) {
 }
 
 func ReadSysStats() (SysStat, error) {
-	return readSysStats()
+	s, err := readSysStats()
+	if err != nil {
+		return s, err
+	}
+	return applyEffectiveMemoryLimit(s, EffectiveMemoryLimit), nil
+}
+
+// applyEffectiveMemoryLimit fills the effective-memory fields from the cgroup
+// limit resolver. Fail-open: without an applicable limit the effective
+// figures equal the raw ones. Swap is never part of any effective figure.
+func applyEffectiveMemoryLimit(s SysStat, resolve func() (memoryLimit, bool)) SysStat {
+	s.MemEffectiveTotalMB = s.MemTotalMB
+	s.MemEffectiveAvailableMB = s.MemAvailableMB
+	s.MemLimitSource = "none"
+
+	lim, ok := resolve()
+	if !ok {
+		return s
+	}
+	const toMB = 1024 * 1024
+	limitMB := int(lim.LimitBytes / toMB)
+	// A limit above physical RAM constrains nothing (common cgroup default
+	// on bare metal); report it as no limit.
+	if limitMB <= 0 || limitMB > s.MemTotalMB {
+		return s
+	}
+	s.MemLimitSource = lim.Source
+	s.MemEffectiveTotalMB = limitMB
+	remainMB := limitMB - int(lim.UsageBytes/toMB)
+	if remainMB < 0 {
+		remainMB = 0
+	}
+	if remainMB < s.MemEffectiveAvailableMB {
+		s.MemEffectiveAvailableMB = remainMB
+	}
+	return s
 }
 
 func GetGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {

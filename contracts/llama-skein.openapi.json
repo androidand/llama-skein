@@ -1385,6 +1385,27 @@
           "free_mb": {
             "type": "integer"
           },
+          "available_mb": {
+            "type": "integer",
+            "description": "Memory available for new allocations without paging (reclaimable included)."
+          },
+          "effective_total_mb": {
+            "type": "integer",
+            "description": "Process-visible memory limit: total_mb clamped by an applicable cgroup limit (Docker/LXC). Equals total_mb when no limit applies. Budget consumers use this, never total_mb."
+          },
+          "effective_available_mb": {
+            "type": "integer",
+            "description": "available_mb additionally capped by the cgroup limit minus current cgroup usage."
+          },
+          "limit_source": {
+            "type": "string",
+            "enum": [
+              "none",
+              "cgroup-v2",
+              "cgroup-v1"
+            ],
+            "description": "Where the effective limit came from."
+          },
           "swap_total": {
             "type": "integer"
           },
@@ -2081,7 +2102,10 @@
       },
       "HypotheticalQuantVariant": {
         "type": "object",
-        "required": ["name", "file_bytes"],
+        "required": [
+          "name",
+          "file_bytes"
+        ],
         "properties": {
           "name": {
             "type": "string",
@@ -2128,7 +2152,9 @@
       },
       "HypotheticalFitRequest": {
         "type": "object",
-        "required": ["variants"],
+        "required": [
+          "variants"
+        ],
         "properties": {
           "model": {
             "type": "string",
@@ -2136,7 +2162,10 @@
           },
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx"],
+            "enum": [
+              "llamacpp",
+              "mlx"
+            ],
             "description": "Backend the model would run under. Defaults to llamacpp. MLX scores against the unified-memory budget with f16 KV."
           },
           "params_b": {
@@ -2173,13 +2202,21 @@
       },
       "HypotheticalVariantFit": {
         "type": "object",
-        "required": ["name", "fit_level", "max_safe_ctx"],
+        "required": [
+          "name",
+          "fit_level",
+          "max_safe_ctx"
+        ],
         "properties": {
           "name": {
             "type": "string"
           },
           "fit_level": {
-            "allOf": [{ "$ref": "#/components/schemas/FitLevel" }],
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FitLevel"
+              }
+            ],
             "description": "Same vocabulary as ModelFit.fit_level. A hypothetical model earns an honest \"no\" — the deployed-model rescue to \"marginal\" does not apply."
           },
           "max_safe_ctx": {
@@ -2206,14 +2243,21 @@
       },
       "HypotheticalFitResponse": {
         "type": "object",
-        "required": ["backend", "estimated", "variants"],
+        "required": [
+          "backend",
+          "estimated",
+          "variants"
+        ],
         "properties": {
           "model": {
             "type": "string"
           },
           "backend": {
             "type": "string",
-            "enum": ["llamacpp", "mlx"]
+            "enum": [
+              "llamacpp",
+              "mlx"
+            ]
           },
           "estimated": {
             "type": "boolean",
@@ -2239,7 +2283,14 @@
       },
       "FitLevel": {
         "type": "string",
-        "enum": ["perfect", "good", "tight", "marginal", "no", "unknown"],
+        "enum": [
+          "perfect",
+          "good",
+          "tight",
+          "marginal",
+          "no",
+          "unknown"
+        ],
         "description": "How well a model fits a host. \"unknown\" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case. Shared by ModelFit (an installed model) and HypotheticalVariantFit (a gallery candidate not yet on disk) so both report identically."
       },
       "FitScore": {
@@ -2291,7 +2342,11 @@
             "description": "Inference backend."
           },
           "fit_level": {
-            "allOf": [{ "$ref": "#/components/schemas/FitLevel" }],
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FitLevel"
+              }
+            ],
             "description": "How well the model fits this host. \"unknown\" means host VRAM could not be read yet (not that the model does not fit); max_safe_ctx is 0 in that case."
           },
           "under_configured": {
