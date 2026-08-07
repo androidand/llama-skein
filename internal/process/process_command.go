@@ -156,6 +156,15 @@ type ProcessCommand struct {
 	// check endpoint are placement-invariant.
 	cmdOverride atomic.Pointer[string]
 
+	// pid is the running upstream process's PID (0 when not running), so its
+	// real resident memory can be sampled — see ResidentBytes.
+	pid atomic.Int64
+
+	// healthCheckFloorSecs raises the load deadline for the next start when
+	// placement determined the model needs longer than config allows. 0 =
+	// use whatever the router passes.
+	healthCheckFloorSecs atomic.Int64
+
 	// count of consecutive failures, reset on a successful start.
 	failAttempts atomic.Int64
 
@@ -726,8 +735,13 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return startResult{err: fmt.Errorf("failed to start command '%s': %w", strings.Join(args, " "), err)}
 	}
 
+	if cmd.Process != nil {
+		p.pid.Store(int64(cmd.Process.Pid))
+	}
+
 	go func() {
 		waitErr := cmd.Wait()
+		p.pid.Store(0)
 		p.recordExit(waitErr)
 		switch st := p.State(); {
 		case waitErr == nil:
@@ -1010,6 +1024,9 @@ func (p *ProcessCommand) ID() string {
 }
 
 func (p *ProcessCommand) Run(timeout time.Duration) error {
+	if floor := time.Duration(p.healthCheckFloorSecs.Load()) * time.Second; floor > timeout {
+		timeout = floor
+	}
 	req := runReq{
 		timeout: timeout,
 		respond: make(chan error, 1),
@@ -1071,16 +1088,25 @@ func (p *ProcessCommand) LastError() *LoadError {
 	return p.lastError.Load()
 }
 
-// SetCommandOverride replaces the launch command used by the next start.
-// Pass "" to clear it and go back to the configured command. It takes effect
-// on the next start, never on a running process — the caller is responsible
-// for stopping first if it wants the change to apply now.
-func (p *ProcessCommand) SetCommandOverride(cmd string) {
+// SetCommandOverride replaces the launch command used by the next start, and
+// optionally raises the load deadline that start is given.
+//
+// Pass "" to clear the command override. healthCheckSecs <= 0 leaves the
+// deadline alone; a positive value acts as a FLOOR on whatever the router
+// passes to Run, because a placement that moves 50 GB of weights into host
+// RAM changes how long the model needs to become answerable — and the router
+// cannot know that from config alone.
+//
+// Takes effect on the next start, never on a running process.
+func (p *ProcessCommand) SetCommandOverride(cmd string, healthCheckSecs int) {
 	if cmd == "" {
 		p.cmdOverride.Store(nil)
-		return
+	} else {
+		p.cmdOverride.Store(&cmd)
 	}
-	p.cmdOverride.Store(&cmd)
+	if healthCheckSecs > 0 {
+		p.healthCheckFloorSecs.Store(int64(healthCheckSecs))
+	}
 }
 
 // CommandOverride returns the current override, or "" when none is set.

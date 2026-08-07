@@ -99,8 +99,14 @@ type Process interface {
 	// ("" clears it). Adaptive placement retry uses this to relaunch a model
 	// with a more conservative command after a memory failure, without
 	// rebuilding the process or reloading the whole config.
-	SetCommandOverride(cmd string)
+	SetCommandOverride(cmd string, healthCheckSecs int)
 
 	// CommandOverride returns the current override, or "" when none is set.
 	CommandOverride() string
+
+	// ResidentBytes reports how much memory the upstream process actually
+	// has resident (0 when not running or unavailable). Host-level
+	// "available memory" cannot measure a hybrid placement, because mmap'd
+	// weights are reclaimable page cache; this counts them.
+	ResidentBytes() int64
 }

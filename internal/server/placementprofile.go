@@ -164,7 +164,7 @@ func (s *Server) recordReadyPlacements() {
 			continue // already learned for this exact world
 		}
 
-		peakVRAM, peakHost := s.currentUsageMB()
+		peakVRAM, peakHost := s.currentUsageMB(id)
 		profile, worth := placement.ProfileFrom(key, rec.Plan, peakVRAM, peakHost, 0,
 			time.Now().Unix(), s.cfg.Placement)
 		if !worth {
@@ -179,22 +179,28 @@ func (s *Server) recordReadyPlacements() {
 	}
 }
 
-// currentUsageMB samples what is resident right now: VRAM in use, and host
-// memory in use within the effective (cgroup-aware) limit.
+// currentUsageMB samples what modelID has resident right now: VRAM in use,
+// and the model process's own resident memory.
 //
-// The host figure UNDER-reports a hybrid placement's weights: llama.cpp
-// mmaps them, so CPU-resident experts live in reclaimable page cache rather
-// than anonymous memory and barely move "available". Treat the host number
-// as a floor, not a measurement — which is why WorthLearning gates on the
-// VRAM peak (real, and the constraint that actually bites) and only checks
-// the host peak when one was observed.
-func (s *Server) currentUsageMB() (vramMB, hostMB int) {
+// The host figure comes from the PROCESS, not from host "available memory".
+// llama.cpp mmaps weights, so a hybrid placement's CPU-resident experts are
+// reclaimable page cache: they barely move MemAvailable, and the host-delta
+// reading for ~49 GB of resident experts came out at 700 MB on z4. The
+// process's RSS counts those mapped pages, so it describes what the model
+// actually uses. Falls back to the host delta only when the process figure
+// is unavailable (non-Linux, or the process already gone).
+func (s *Server) currentUsageMB(modelID string) (vramMB, hostMB int) {
 	if s.perf == nil {
 		return 0, 0
 	}
 	sysStats, gpuStats := s.perf.Current()
 	for _, g := range perf.LatestGPUs(gpuStats) {
 		vramMB += g.MemUsedMB
+	}
+	if s.local != nil {
+		if rss := s.local.ResidentBytes(modelID); rss > 0 {
+			return vramMB, int(rss / (1024 * 1024))
+		}
 	}
 	if len(sysStats) > 0 {
 		sys := sysStats[len(sysStats)-1]

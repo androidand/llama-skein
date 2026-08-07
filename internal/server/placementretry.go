@@ -82,7 +82,8 @@ func (s *Server) ensurePlacement(modelID string) {
 			s.proxylog.Warnf("placement: model %q deferred plan not applied: %v", realName, err)
 			return
 		}
-		if !s.local.SetCommandOverride(realName, newCmd) {
+		deadline := placement.LoadDeadlineSeconds(fresh.WeightBytes, fresh.Plan.Mode)
+		if !s.local.SetCommandOverride(realName, newCmd, deadline) {
 			return
 		}
 		fresh.AppliedCmd = newCmd
@@ -170,7 +171,7 @@ func (s *Server) escalateIfMemoryFailure(modelID string) {
 		s.proxylog.Warnf("placement retry: model %q could not build the %s command: %v", realName, rung, err)
 		return
 	}
-	if !s.local.SetCommandOverride(realName, newCmd) {
+	if !s.local.SetCommandOverride(realName, newCmd, placement.LoadDeadlineSeconds(rec.WeightBytes, next.Mode)) {
 		return
 	}
 

@@ -108,7 +108,11 @@ type LocalRouter interface {
 	// use on its NEXT start ("" clears it), for adaptive placement retry.
 	// modelID must be a real (non-alias) config key. Returns false when the
 	// model is not known to this router.
-	SetCommandOverride(modelID, cmd string) bool
+	SetCommandOverride(modelID, cmd string, healthCheckSecs int) bool
+
+	// ResidentBytes reports a model process's actual resident memory, or 0
+	// when it is unknown or not running.
+	ResidentBytes(modelID string) int64
 }
 
 // FetchContext will attempt to get the model id from the context then

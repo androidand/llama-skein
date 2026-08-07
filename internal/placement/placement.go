@@ -52,6 +52,43 @@ const (
 	PerfCPUOnly        PerfClass = "cpu-only"
 )
 
+// Load-deadline sizing. Weights have to be read from disk (or faulted in
+// from page cache) before a model can answer a health check, so the deadline
+// has to scale with the model, not sit at one global constant. The z4
+// acceptance run hit exactly this: a 91 GB model was killed at the 120 s
+// default mid-load, repeatedly, and looked like a broken model rather than
+// one that simply needed longer.
+//
+// loadSecondsPerGB is deliberately pessimistic (a cold spinning-disk read,
+// not a warm page-cache one): this is a deadline for giving up, so being
+// generous costs only a slower failure, while being tight costs a model
+// that can never load at all.
+const (
+	loadSecondsPerGB  = 12
+	loadBaseSeconds   = 120
+	loadMaxSeconds    = 3600
+	hybridLoadPenalty = 1.5 // CPU-side expert setup on top of the read
+	bytesPerGigabyte  = 1 << 30
+)
+
+// LoadDeadlineSeconds is the health-check timeout a model of this size and
+// placement needs. Callers raise a configured timeout to this floor; they
+// never lower one an operator chose.
+func LoadDeadlineSeconds(weightBytes int64, mode Mode) int {
+	if weightBytes <= 0 {
+		return 0
+	}
+	gb := float64(weightBytes) / bytesPerGigabyte
+	secs := float64(loadBaseSeconds) + gb*loadSecondsPerGB
+	if mode == ModeHybrid || mode == ModeCPU {
+		secs *= hybridLoadPenalty
+	}
+	if secs > loadMaxSeconds {
+		secs = loadMaxSeconds
+	}
+	return int(secs)
+}
+
 // fastHybridMaxHostFrac splits fast-hybrid from cpu-bound-hybrid: with up to
 // ~a third of the weights in host RAM, decode is usually still GPU-paced;
 // beyond that, host memory bandwidth dominates every token.

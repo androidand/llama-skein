@@ -1,10 +1,12 @@
 package server
 
 import (
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/placement"
 )
@@ -124,5 +126,26 @@ func TestModelLoadRefusal_PlacementClearsStaleUnfittable(t *testing.T) {
 	// And everything that judges the model must see the placed command.
 	if cmd, ok := s.appliedCmd("big"); !ok || !strings.Contains(cmd, "--n-cpu-moe 16") {
 		t.Fatalf("appliedCmd = %q, ok=%v", cmd, ok)
+	}
+}
+
+// The deadline is a floor: it lifts a too-short timeout but never overrides
+// an operator who set a longer one.
+func TestRaiseLoadDeadline(t *testing.T) {
+	const gb = int64(1) << 30
+	log := logmon.NewWriter(io.Discard)
+
+	// Default 120s against a 91 GB hybrid model: raised.
+	raised := raiseLoadDeadline(120, 91*gb, placement.ModeHybrid, "big", log)
+	if raised <= 120 {
+		t.Fatalf("raised = %d, want more than the 120s that killed this load", raised)
+	}
+	// An operator's larger value wins.
+	if got := raiseLoadDeadline(3000, 91*gb, placement.ModeHybrid, "big", log); got != 3000 {
+		t.Fatalf("got %d, must never lower an operator's %d", got, 3000)
+	}
+	// Unknown weight size: leave the configured value alone.
+	if got := raiseLoadDeadline(120, 0, placement.ModeGPU, "x", log); got != 120 {
+		t.Fatalf("got %d, want the configured 120 when size is unknown", got)
 	}
 }

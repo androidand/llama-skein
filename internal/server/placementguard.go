@@ -10,6 +10,7 @@ import (
 
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/fit"
+	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/placement"
 )
 
@@ -30,6 +31,24 @@ type placementRecord struct {
 	// (empty when the tool is unavailable or failed — preflight is advisory,
 	// never load-bearing).
 	EffectiveArgs string
+	// WeightBytes is the model's total weight size (the whole set for a
+	// split GGUF), used to size the load deadline.
+	WeightBytes int64
+}
+
+// raiseLoadDeadline lifts a model's health-check timeout to what its size
+// and placement actually need, never lowering one the operator set higher.
+// Without this a large model is killed mid-load and reported as a failure,
+// which is what happened repeatedly to a 91 GB model on z4 under the 120 s
+// default.
+func raiseLoadDeadline(configured int, weightBytes int64, mode placement.Mode, id string, log *logmon.Monitor) int {
+	need := placement.LoadDeadlineSeconds(weightBytes, mode)
+	if need <= configured {
+		return configured
+	}
+	log.Infof("placement: model %q needs longer to load than the configured %ds (%.0f GB, %s placement) — raising its health-check deadline to %ds",
+		id, configured, float64(weightBytes)/(1<<30), mode, need)
+	return need
 }
 
 // pinnedPlacementFlags are the arguments whose presence hands placement
@@ -124,6 +143,20 @@ const slowPlacementTimeoutAdviceSecs = 600
 func (s *Server) applyPlanned(id string, rec placementRecord) {
 	s.placements[id] = rec
 	plan := rec.Plan
+
+	// Size the load deadline for EVERY model we could size, not just the
+	// ones we rewrite: a 40 GB full-GPU model also needs longer than 120 s to
+	// page in. Weight size is known here even when the plan is "unknown"
+	// (VRAM telemetry still warming up at boot), so this is the one placement
+	// decision that can always be made this early — and doing it here, before
+	// the router captures configs, keeps it race-free.
+	if mc, ok := s.cfg.Models[id]; ok && rec.WeightBytes > 0 {
+		if raised := raiseLoadDeadline(mc.HealthCheckTimeout, rec.WeightBytes, plan.Mode, id, s.proxylog); raised != mc.HealthCheckTimeout {
+			mc.HealthCheckTimeout = raised
+			s.cfg.Models[id] = mc
+		}
+	}
+
 	switch {
 	case plan.Mode == placement.ModeRefuse && plan.Confident:
 		s.unfittable[id] = plan.Reason
@@ -166,11 +199,11 @@ func (s *Server) planModel(id string, mc config.ModelConfig) (placementRecord, b
 		if key, ok := s.placementKey(mc, in.ConfiguredCtx); ok {
 			if profile, found := s.placementProfiles.Lookup(id, key); found {
 				s.proxylog.Infof("placement: model %q reusing a known-good %s placement measured on this host", id, profile.Mode)
-				return placementRecord{Plan: planFromProfile(profile), OriginalCmd: mc.Cmd}, true
+				return placementRecord{Plan: planFromProfile(profile), OriginalCmd: mc.Cmd, WeightBytes: in.Shape.WeightBytes}, true
 			}
 		}
 	}
-	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd}, true
+	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd, WeightBytes: in.Shape.WeightBytes}, true
 }
 
 // planInputs builds the planner inputs for a model from its command and the

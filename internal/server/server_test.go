@@ -35,6 +35,8 @@ type stubRouter struct {
 	serveStatus int
 	// cmdOverrides records adaptive-placement retry commands per model.
 	cmdOverrides map[string]string
+	// resident maps model id -> resident bytes reported by the fake.
+	resident map[string]int64
 }
 
 func newStubRouter(models []string, response string) *stubRouter {
@@ -60,13 +62,15 @@ func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.
 
 func (s *stubRouter) ModelErrors() map[string]*process.LoadError { return s.modelErrors }
 func (s *stubRouter) Unload(_ time.Duration, _ ...string)        { s.unloadCalls.Add(1) }
-func (s *stubRouter) SetCommandOverride(modelID, cmd string) bool {
+func (s *stubRouter) SetCommandOverride(modelID, cmd string, _ int) bool {
 	if s.cmdOverrides == nil {
 		s.cmdOverrides = map[string]string{}
 	}
 	s.cmdOverrides[modelID] = cmd
 	return true
 }
+
+func (s *stubRouter) ResidentBytes(modelID string) int64 { return s.resident[modelID] }
 
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {

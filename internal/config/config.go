@@ -372,7 +372,15 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	nextPort := config.StartPort
 	for _, modelId := range modelIds {
 		modelConfig := config.Models[modelId]
-		modelConfig.HealthCheckTimeout = config.HealthCheckTimeout
+		// Inherit the global health-check timeout only when the model does
+		// not set its own — the same rule MaxRequestTimeSecs uses below.
+		// This used to overwrite unconditionally, so a per-model
+		// healthCheckTimeout (a documented model key in config-schema.json)
+		// was silently discarded: a large model that legitimately needs
+		// minutes to load could not be given them.
+		if modelConfig.HealthCheckTimeout == 0 {
+			modelConfig.HealthCheckTimeout = config.HealthCheckTimeout
+		}
 
 		// Inherit the global request-time cap unless the model sets its own.
 		if modelConfig.MaxRequestTimeSecs == 0 && config.MaxRequestTimeSecs > 0 {

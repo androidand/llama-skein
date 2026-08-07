@@ -614,8 +614,13 @@ func (b *baseRouter) doSwap(modelID string, toStop []string) {
 
 	target := b.processes[modelID]
 	if target.State() == process.StateStopped {
+		// The model being STARTED gets its own load deadline; `timeout`
+		// above paces stopping the models it evicts, which is a different
+		// question. A 91 GB hybrid model needs minutes to page in, while the
+		// 9 GB model it replaces should still be given up on quickly.
+		startTimeout := b.healthCheckTimeoutFor(modelID)
 		go func() {
-			if err := target.Run(timeout); err != nil {
+			if err := target.Run(startTimeout); err != nil {
 				b.logger.Warnf("%s: running %s exited: %v", b.name, modelID, err)
 			}
 		}()
@@ -698,6 +703,17 @@ func (b *baseRouter) healthCheckTimeout() time.Duration {
 	return t
 }
 
+// healthCheckTimeoutFor returns the load deadline for one model. A model's
+// own healthCheckTimeout wins over the global one: weights that take minutes
+// to page in need minutes, and a single global value cannot serve both a 9 GB
+// model and a 91 GB hybrid one on the same host.
+func (b *baseRouter) healthCheckTimeoutFor(modelID string) time.Duration {
+	if mc, ok := b.config.Models[modelID]; ok && mc.HealthCheckTimeout > 0 {
+		return time.Duration(mc.HealthCheckTimeout) * time.Second
+	}
+	return b.healthCheckTimeout()
+}
+
 func (b *baseRouter) Handles(model string) bool {
 	_, ok := b.processes[model]
 	return ok
@@ -714,12 +730,21 @@ func (b *baseRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 // on its next start, for adaptive placement retry. Returns false when the
 // model is not known to this router. modelID must be a real (non-alias)
 // config key.
-func (b *baseRouter) SetCommandOverride(modelID, cmd string) bool {
+func (b *baseRouter) SetCommandOverride(modelID, cmd string, healthCheckSecs int) bool {
 	if p, ok := b.processes[modelID]; ok {
-		p.SetCommandOverride(cmd)
+		p.SetCommandOverride(cmd, healthCheckSecs)
 		return true
 	}
 	return false
+}
+
+// ResidentBytes reports the resident memory of a model's process, or 0 when
+// the model is unknown or not running.
+func (b *baseRouter) ResidentBytes(modelID string) int64 {
+	if p, ok := b.processes[modelID]; ok {
+		return p.ResidentBytes()
+	}
+	return 0
 }
 
 // RunningModels returns the current state of every process that is not stopped

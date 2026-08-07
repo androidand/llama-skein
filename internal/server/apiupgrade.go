@@ -491,6 +491,15 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
 	}
 
+	// Install the companion tools llama-skein itself calls. llama-fit-params
+	// is the placement preflight (it prints the engine's own fitted arguments
+	// without loading the model); the gfx110X release ships it without the
+	// execute bit, so an upgrade that only chmod'd llama-server left the
+	// preflight silently unavailable.
+	if installed := installEngineTools(extractDir, libDir); len(installed) > 0 {
+		s.sendUpgradeEvent(w, "tools", fmt.Sprintf("installed companion tools: %s", strings.Join(installed, ", ")))
+	}
+
 	s.unloadAllModels(w)
 
 	s.sendUpgradeEvent(w, "replacing", "replacing current binary")
@@ -919,4 +928,62 @@ func restartLlamaServer(managedPath string) error {
 	}
 	time.Sleep(2 * time.Second)
 	return nil
+}
+
+// engineTools are the companion binaries llama-skein calls directly and so
+// must install alongside llama-server, executable. Only llama-fit-params
+// today (the placement preflight) — deliberately a short allowlist rather
+// than "everything in the archive", which would install dozens of unused
+// tools.
+var engineTools = []string{"llama-fit-params"}
+
+// installEngineTools copies each companion tool from the extracted archive
+// next to the engine binary and marks it executable. Best-effort: a missing
+// or uncopyable tool degrades the feature that uses it, never the upgrade.
+// Returns the names actually installed.
+func installEngineTools(extractDir, destDir string) []string {
+	var installed []string
+	for _, name := range engineTools {
+		src := filepath.Join(extractDir, name)
+		info, err := os.Stat(src)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		dst := filepath.Join(destDir, name)
+		if err := copyFileMode(src, dst, 0o755); err != nil {
+			continue
+		}
+		installed = append(installed, name)
+	}
+	return installed
+}
+
+// copyFileMode copies src to dst with the given mode, replacing dst
+// atomically so a tool that is currently executing is not written into.
+func copyFileMode(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
