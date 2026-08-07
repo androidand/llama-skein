@@ -17,6 +17,7 @@ import (
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/operation"
 	"github.com/androidand/llama-skein/internal/perf"
+	"github.com/androidand/llama-skein/internal/placement"
 	"github.com/androidand/llama-skein/internal/router"
 	"github.com/androidand/llama-skein/internal/thermal"
 	"github.com/androidand/llama-skein/internal/tuning"
@@ -108,6 +109,11 @@ type Server struct {
 	// placements it is mutated while serving (each memory-class failure may
 	// advance a rung), so it carries its own lock.
 	placementRetries *placementRetry
+
+	// placementProfiles persists placements measured as working on this
+	// host, so a later launch reuses a proven configuration instead of
+	// re-deriving (and re-risking) it. nil disables learning.
+	placementProfiles *placement.ProfileStore
 
 	// ggufCache memoizes parsed GGUF metadata per weight-file path, keyed on
 	// mtime — /api/hardware's KV fallback would otherwise re-read the header
@@ -228,8 +234,10 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 
 	profilePath := ""
+	placementProfilePath := ""
 	if home, err := os.UserHomeDir(); err == nil {
 		profilePath = filepath.Join(home, ".llama-skein", "skein", "profile.json")
+		placementProfilePath = filepath.Join(home, ".llama-skein", "skein", "placements.json")
 	}
 
 	operationStore, storeErr := newOperationStore()
@@ -261,9 +269,12 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		silentMode:     silentMgr,
 		profileStore:   NewProfileStore(profilePath),
 		operationStore: operationStore,
-		build:          build,
-		shutdownCtx:    shutdownCtx,
-		shutdownFn:     shutdownFn,
+		// Learning is off without a resolvable home directory: a profile
+		// store with nowhere to live would silently never persist.
+		placementProfiles: placementProfileStore(placementProfilePath),
+		build:             build,
+		shutdownCtx:       shutdownCtx,
+		shutdownFn:        shutdownFn,
 	}
 	s.runOperation = func(ctx context.Context, op *operation.Operation) {
 		s.newOperationExecutor().Run(ctx, op)
@@ -335,6 +346,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.startPreload()
 	s.startMemoryGuard()
 	s.startWedgeWatchdog()
+	s.startPlacementProfiler()
 	go s.warmModelSizes() // populate /v1/models size cache off the request path
 	return s, nil
 }

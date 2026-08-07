@@ -150,6 +150,18 @@ func (s *Server) planModel(id string, mc config.ModelConfig) (placementRecord, b
 	if !ok {
 		return placementRecord{}, false
 	}
+	// A placement previously measured as working on this exact host, model
+	// file, engine build and context beats a fresh estimate: it is the same
+	// question already answered by reality. Invalidated automatically when
+	// any of those inputs change (placement.Key).
+	if !in.PinnedPlacement {
+		if key, ok := s.placementKey(mc, in.ConfiguredCtx); ok {
+			if profile, found := s.placementProfiles.Lookup(id, key); found {
+				s.proxylog.Infof("placement: model %q reusing a known-good %s placement measured on this host", id, profile.Mode)
+				return placementRecord{Plan: planFromProfile(profile), OriginalCmd: mc.Cmd}, true
+			}
+		}
+	}
 	return placementRecord{Plan: placement.Compute(in), OriginalCmd: mc.Cmd}, true
 }
 

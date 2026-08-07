@@ -59,7 +59,7 @@ Depends on: `add-container-memory-limits` (effective host RAM budget).
   planned args; parse output as the effective-args report; downgrade to
   plan-only (no hard fail) when the tool is missing.
   - Validation: `go test ./internal/server/... -run Preflight`
-- [ ] 11. Guard compatibility: wedge-watchdog + `maxRequestTimeSecs` docs and
+- [x] 11. Guard compatibility: wedge-watchdog + `maxRequestTimeSecs` docs and
   defaults reviewed for `cpu-bound-hybrid` (slow ≠ wedged); memory-guard
   admission uses the plan's host-bytes estimate.
   - Validation: `go test ./internal/server/... -run 'Wedge|MemGuard'`
