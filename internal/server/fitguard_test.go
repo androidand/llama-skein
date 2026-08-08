@@ -102,7 +102,7 @@ func TestCtxClampDecision_MarginalConfiguredStillClamps(t *testing.T) {
 		ModelMb:        ptrOf(16031),
 		Reason:         ptrOf("runs at the configured context; VRAM estimate exceeds budget"),
 	}
-	clampTo, reason, unfit := ctxClampDecision(mf)
+	clampTo, reason, unfit := ctxClampDecision(mf, true)
 	if unfit {
 		t.Fatalf("expected a clamp, not unfittable (reason=%q)", reason)
 	}
@@ -130,12 +130,50 @@ func TestCtxClampDecision_MTPGenuinelyMarginalIsNotRefused(t *testing.T) {
 		ModelMb:        ptrOf(18630),
 		Reason:         ptrOf("fits only above the VRAM safety margin; reduce context"),
 	}
-	clampTo, reason, unfit := ctxClampDecision(mf)
+	clampTo, reason, unfit := ctxClampDecision(mf, true)
 	if unfit {
 		t.Fatalf("expected this genuinely-fitting model to be left alone, got unfit (reason=%q)", reason)
 	}
 	if clampTo != 0 {
 		t.Errorf("clampTo = %d, want 0 (already fits, nothing to clamp to)", clampTo)
+	}
+}
+
+// TestCtxClampDecision_UndecidedPlacementDefersRefusal is the regression for
+// the z4 boot race (2026-08-08): placement was planned microseconds before the
+// perf sampler's first snapshot landed, so it read every budget as 0 and
+// correctly declined to plan a hybrid placement blind — and then this guard,
+// running a moment later against a warm sampler, judged the model's UNPLACED
+// GPU-only command and marked deepseek-v4-flash-0731-ud-iq2-m unfittable on
+// every container restart. The host has ~102 GB free and the model runs there
+// as cpu-bound-hybrid; only a manual POST /api/config/reload recovered it.
+//
+// The weights-don't-fit-VRAM verdict is exactly what hybrid placement rewrites
+// a command to solve, so while placement is undecided it must not be turned
+// into a refusal. Numbers are the shape of that model on z4's 48 GB card.
+func TestCtxClampDecision_UndecidedPlacementDefersRefusal(t *testing.T) {
+	mf := apicontract.ModelFit{
+		FitLevel:       apicontract.No,
+		ConfiguredCtx:  ptrOf(32768),
+		MaxFitCtx:      ptrOf(0),
+		VramRequiredMb: ptrOf(95000),
+		VramTotalMb:    ptrOf(49152),
+		ModelMb:        ptrOf(93184),
+		Reason:         ptrOf("model weights exceed the VRAM budget"),
+	}
+
+	// Placement decided (nothing pending): the refusal stands.
+	if _, reason, unfit := ctxClampDecision(mf, true); !unfit || reason == "" {
+		t.Fatalf("a decided model whose weights exceed memory must still be refused (unfit=%v)", unfit)
+	}
+
+	// Placement undecided: fail open — no refusal, no clamp.
+	clampTo, reason, unfit := ctxClampDecision(mf, false)
+	if unfit {
+		t.Fatalf("refused a model whose placement was never decided: %s", reason)
+	}
+	if clampTo != 0 {
+		t.Fatalf("clampTo = %d, want 0 (nothing to shrink to below the minimum viable context)", clampTo)
 	}
 }
 
@@ -169,7 +207,7 @@ func TestCtxClampDecision(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			clampTo, reason, unfit := ctxClampDecision(c.mf)
+			clampTo, reason, unfit := ctxClampDecision(c.mf, true)
 			if unfit != c.wantUnfit {
 				t.Errorf("unfit = %v, want %v", unfit, c.wantUnfit)
 			}

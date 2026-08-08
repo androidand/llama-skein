@@ -296,6 +296,11 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		}
 	}
 
+	// Both memory judgements below budget against this host's hardware, and an
+	// unsampled perf monitor reports zeros rather than "unknown" — so wait
+	// (briefly, bounded) for the first sample instead of racing the sampler.
+	s.awaitHardwareTelemetry()
+
 	// Automatic placement: rewrite oversized models' commands (in memory
 	// only) into a hybrid GPU + system-RAM configuration BEFORE the fit
 	// guard runs, so the guard judges the rewritten command — a model hybrid

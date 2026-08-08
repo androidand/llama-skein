@@ -25,6 +25,11 @@ func (r *Buffer[T]) Push(v T) {
 	}
 }
 
+// Len returns how many entries are currently held — for callers that only
+// need to know whether anything has been pushed yet, without paying for the
+// copy Slice makes.
+func (r *Buffer[T]) Len() int { return r.size }
+
 // Slice returns all entries in insertion order as a new slice.
 func (r *Buffer[T]) Slice() []T {
 	if r.size == 0 {

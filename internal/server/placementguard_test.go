@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"github.com/androidand/llama-skein/internal/config"
 	"github.com/androidand/llama-skein/internal/logmon"
 	"github.com/androidand/llama-skein/internal/offload"
+	"github.com/androidand/llama-skein/internal/perf"
 	"github.com/androidand/llama-skein/internal/placement"
 )
 
@@ -133,6 +136,128 @@ func TestApplyAutoPlacement_PolicyGPUIsNoOp(t *testing.T) {
 	s.applyAutoPlacement()
 	if s.cfg.Models["big"].Cmd != orig || len(s.placements) != 0 {
 		t.Fatal("gpu mode must not plan or rewrite anything")
+	}
+}
+
+// writeSparseGGUF writes a minimal, header-only GGUF describing a dense model
+// of the given architecture dimensions, then extends the file to sizeBytes as a
+// sparse file — fit sizes mmap'd llama.cpp weights from the file length, and a
+// hole costs no disk. This is how a test can hold a "91 GB model" without one.
+func writeSparseGGUF(t *testing.T, path string, sizeBytes int64, arch string, kv map[string]uint32) {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.WriteString("GGUF")
+	writeLE(t, &buf, uint32(3))         // version
+	writeLE(t, &buf, uint64(0))         // tensor count
+	writeLE(t, &buf, uint64(len(kv)+1)) // kv count (+ general.architecture)
+	writeGGUFString(t, &buf, "general.architecture")
+	writeLE(t, &buf, uint32(8)) // GGUF string type
+	writeGGUFString(t, &buf, arch)
+	for key, val := range kv {
+		writeGGUFString(t, &buf, arch+"."+key)
+		writeLE(t, &buf, uint32(4)) // GGUF uint32 type
+		writeLE(t, &buf, val)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if int64(buf.Len()) < sizeBytes {
+		if err := os.Truncate(path, sizeBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writeLE(t *testing.T, buf *bytes.Buffer, v any) {
+	t.Helper()
+	if err := binary.Write(buf, binary.LittleEndian, v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeGGUFString(t *testing.T, buf *bytes.Buffer, s string) {
+	t.Helper()
+	writeLE(t, buf, uint64(len(s)))
+	buf.WriteString(s)
+}
+
+// TestApplyAutoPlacement_NoHardwareSampleDoesNotRefuse is the regression for
+// the z4 boot race (2026-08-08) at its source: planning must never turn an
+// unsampled perf monitor's zeros into a verdict. A monitor that has been
+// created but never started reports exactly what boot used to see — no sys
+// samples, no GPU samples — and against that, a 91 GB model must come back
+// undecided (so the fit guard defers and ensurePlacement re-plans it on first
+// load), never refused as unfittable.
+func TestApplyAutoPlacement_NoHardwareSampleDoesNotRefuse(t *testing.T) {
+	const gib = int64(1) << 30
+	gguf := filepath.Join(t.TempDir(), "deepseek-v4-flash-ud-iq2-m.gguf")
+	writeSparseGGUF(t, gguf, 91*gib, "llama", map[string]uint32{
+		"block_count":             80,
+		"embedding_length":        8192,
+		"attention.head_count":    64,
+		"attention.head_count_kv": 8,
+		"context_length":          32768,
+	})
+
+	cmd := "llama-server --port 9000 -m " + gguf + " --ctx-size 32768"
+	s := placementTestServer(map[string]config.ModelConfig{"big": {Cmd: cmd}})
+	// A monitor with no samples yet — the boot-time state, zeros everywhere.
+	mon, err := perf.New(config.PerformanceConfig{}, logmon.NewWriter(io.Discard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.perf = mon
+	if sys, gpu := mon.Current(); len(sys) != 0 || len(gpu) != 0 {
+		t.Fatalf("precondition: monitor must hold no samples, got %d sys / %d gpu", len(sys), len(gpu))
+	}
+
+	s.applyAutoPlacement()
+
+	if reason, refused := s.unfittable["big"]; refused {
+		t.Fatalf("a 91 GB model was refused from an unsampled monitor's zero budgets: %s", reason)
+	}
+	rec, planned := s.placements["big"]
+	if !planned {
+		t.Fatal("expected a placement record for a llamacpp GGUF model")
+	}
+	// The fixture must really read as a 91 GB model, or "unknown" below would
+	// be about unreadable weights rather than about unknown budgets.
+	if rec.WeightBytes != 91*gib {
+		t.Fatalf("weight size = %d bytes, want %d — the GGUF fixture was not sized as intended", rec.WeightBytes, 91*gib)
+	}
+	if rec.Plan.Mode != placement.ModeUnknown {
+		t.Fatalf("plan mode = %s, want %s: with no hardware sample the planner must say it does not know, not decide from zeros",
+			rec.Plan.Mode, placement.ModeUnknown)
+	}
+	if rec.Plan.Confident {
+		t.Fatal("a plan made without any hardware figures must never be confident")
+	}
+	if s.cfg.Models["big"].Cmd != cmd {
+		t.Fatalf("an undecided plan rewrote the command: %q", s.cfg.Models["big"].Cmd)
+	}
+	// And the fit guard must be able to see that nothing was decided.
+	if s.placementDecided("big") {
+		t.Fatal("placementDecided must report an undecided model, or the fit guard refuses it")
+	}
+}
+
+// A model placement never considered — pinned flags, a foreign backend, no
+// readable weights — has nothing pending and counts as decided; only a plan
+// that came back ModeUnknown is undecided.
+func TestPlacementDecided(t *testing.T) {
+	s := placementTestServer(map[string]config.ModelConfig{"m": {Cmd: "llama-server -m x.gguf"}})
+	if !s.placementDecided("m") {
+		t.Fatal("a model with no placement record must count as decided")
+	}
+	for _, mode := range []placement.Mode{placement.ModeGPU, placement.ModeHybrid, placement.ModeCPU, placement.ModeCustom, placement.ModeRefuse} {
+		s.placements["m"] = placementRecord{Plan: placement.Plan{Mode: mode}}
+		if !s.placementDecided("m") {
+			t.Fatalf("mode %s is a decision", mode)
+		}
+	}
+	s.placements["m"] = placementRecord{Plan: placement.Plan{Mode: placement.ModeUnknown}}
+	if s.placementDecided("m") {
+		t.Fatal("ModeUnknown means the budgets could not be read — not decided")
 	}
 }
 

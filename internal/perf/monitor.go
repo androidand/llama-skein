@@ -28,6 +28,20 @@ type Monitor struct {
 
 	sysListeners map[chan SysStat]struct{}
 	gpuListeners map[chan []GpuStat]struct{}
+
+	// GPU telemetry readiness. gpuSampled is closed when the first GPU
+	// snapshot lands; gpuAbsent when this host turns out to have no usable GPU
+	// source (or its source died before producing anything). Together they let
+	// AwaitFirstSample — and any consumer reading a budget — tell "telemetry is
+	// still warming up" apart from "there is nothing to wait for". That
+	// distinction is load-bearing: an unsampled monitor reports zeros, and a
+	// zero budget is indistinguishable from a measured one. Recreated by every
+	// Start, since a config reload stops and restarts sampling. nil until the
+	// first Start.
+	gpuSampled     chan struct{}
+	gpuSampledOnce *sync.Once
+	gpuAbsent      chan struct{}
+	gpuAbsentOnce  *sync.Once
 }
 
 func ringCapacity(c config.PerformanceConfig) int {
@@ -119,6 +133,23 @@ func (m *Monitor) Start() {
 	}
 
 	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
+	m.gpuSampled, m.gpuSampledOnce = make(chan struct{}), &sync.Once{}
+	m.gpuAbsent, m.gpuAbsentOnce = make(chan struct{}), &sync.Once{}
+
+	// Read host memory NOW rather than at the first tick. Everything that
+	// budgets memory (fit, the memory guard, placement) reads the latest
+	// snapshot, and an empty ring reads as "0 MB total, 0 MB available" — a
+	// figure indistinguishable from a measured zero. Boot-time placement
+	// planning believed it: on z4 (2026-08-08) a 91 GB hybrid model was
+	// planned blind and then refused as unfittable on every container restart,
+	// with ~102 GB genuinely available, until a manual config reload re-planned
+	// it against a warm sampler. This costs exactly what the tick would have
+	// cost `Every` seconds later — one /proc (or sysctl) read.
+	if s, err := ReadSysStats(); err == nil {
+		m.pushSysLocked(s)
+	} else if !errors.Is(err, ErrNotImplemented) {
+		m.log.Errorf("failed to read initial sys stats: %s", err.Error())
+	}
 
 	go func() {
 		tick := time.NewTicker(m.conf.Every)
@@ -136,13 +167,7 @@ func (m *Monitor) Start() {
 					continue
 				}
 				m.mutex.Lock()
-				m.sysRing.Push(s)
-				for l := range m.sysListeners {
-					select {
-					case l <- s:
-					default:
-					}
-				}
+				m.pushSysLocked(s)
 				m.mutex.Unlock()
 			}
 		}
@@ -156,6 +181,11 @@ func (m *Monitor) Start() {
 			} else {
 				m.log.Errorf("failed to initialize GPU monitoring: %s", err.Error())
 			}
+			// No source at all: consumers waiting on the first sample must be
+			// released rather than left waiting for a snapshot that can never
+			// come. This is also what tells them the host has no VRAM budget
+			// to find, as opposed to one not measured yet.
+			m.markGPUAbsent()
 			return
 		}
 
@@ -166,6 +196,7 @@ func (m *Monitor) Start() {
 			case g, ok := <-gpuCh:
 				if !ok {
 					m.log.Errorf("failed reading from gpuCh - stopping read goroutine")
+					m.markGPUAbsent()
 					return
 				}
 				m.mutex.Lock()
@@ -177,9 +208,97 @@ func (m *Monitor) Start() {
 					}
 				}
 				m.mutex.Unlock()
+				m.markGPUSampled()
 			}
 		}
 	}()
+}
+
+// pushSysLocked records a sys snapshot and fans it out to subscribers. The
+// caller must hold m.mutex.
+func (m *Monitor) pushSysLocked(s SysStat) {
+	m.sysRing.Push(s)
+	for l := range m.sysListeners {
+		select {
+		case l <- s:
+		default:
+		}
+	}
+}
+
+func (m *Monitor) markGPUSampled() {
+	m.mutex.RLock()
+	once, ch := m.gpuSampledOnce, m.gpuSampled
+	m.mutex.RUnlock()
+	if once != nil {
+		once.Do(func() { close(ch) })
+	}
+}
+
+func (m *Monitor) markGPUAbsent() {
+	m.mutex.RLock()
+	once, ch := m.gpuAbsentOnce, m.gpuAbsent
+	m.mutex.RUnlock()
+	if once != nil {
+		once.Do(func() { close(ch) })
+	}
+}
+
+// AwaitFirstSample blocks until this host's hardware picture is readable —
+// host memory (which Start samples synchronously) plus either a first GPU
+// snapshot or the verdict that this host has no GPU telemetry at all — or
+// until timeout. It reports whether the picture is complete.
+//
+// Use it before any decision that budgets memory and is not revisited: the
+// alternative is reading an unsampled monitor's zeros as measured figures,
+// which is how boot-time placement came to refuse a model that fits (z4,
+// 2026-08-08). Returning false is not fatal — it means "still unknown", and
+// callers must fail open on that as they would on any unknown budget.
+func (m *Monitor) AwaitFirstSample(timeout time.Duration) bool {
+	m.mutex.RLock()
+	sampled, absent := m.gpuSampled, m.gpuAbsent
+	m.mutex.RUnlock()
+
+	// Never started, so nothing is on its way; report what we already have.
+	if sampled == nil || absent == nil {
+		return m.haveHostMemory()
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-sampled:
+	case <-absent:
+	case <-timer.C:
+		return false
+	}
+	return m.haveHostMemory()
+}
+
+func (m *Monitor) haveHostMemory() bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.sysRing.Len() > 0
+}
+
+// GPUTelemetryAbsent reports that this host has been found to have no usable
+// GPU telemetry source. Only true once the probe has actually run, so callers
+// can distinguish a host with no GPU (system RAM IS the budget) from GPU
+// telemetry that has not arrived yet (the budget is simply unknown) — the two
+// look identical in an empty GPU ring.
+func (m *Monitor) GPUTelemetryAbsent() bool {
+	m.mutex.RLock()
+	ch := m.gpuAbsent
+	m.mutex.RUnlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // Current returns a copy of the current log of system and GPU stats.

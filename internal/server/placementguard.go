@@ -75,6 +75,60 @@ func hasPinnedPlacement(args []string) bool {
 	return false
 }
 
+// hardwareTelemetryWait bounds how long boot-time planning waits for this
+// host's first hardware sample. Host memory is read synchronously by
+// perf.Monitor.Start, so in practice this only covers the GPU probe (one
+// rocm-smi / nvidia-smi / ioreg call): well under a second. The bound is what
+// keeps a broken GPU tool from turning startup into a hang.
+const hardwareTelemetryWait = 5 * time.Second
+
+// awaitHardwareTelemetry blocks until this host's memory picture is readable,
+// so placement and the fit guard judge models against measured budgets rather
+// than the zeros an unsampled perf monitor reports.
+//
+// z4, 2026-08-08: without it, boot raced the perf sampler. planInputs read
+// HostAvailableMB and VRAMBudgetMB as 0, the planner correctly declined to
+// plan a hybrid placement blind — and the fit guard then judged the UNPLACED
+// command and refused a 91 GB model that this host fits with ~102 GB free.
+// Every container restart, until a manual POST /api/config/reload re-planned
+// it (by then the sampler was warm) as cpu-bound-hybrid. The refusal was not
+// the only cost: opencode reads placement.perf_class at model discovery to
+// give host-paced models a 1800 s stream deadline instead of 300 s, so a
+// hidden perf_class also cut healthy hybrid turns off as "stream stalled".
+//
+// A timeout is not fatal — an unknown budget stays unknown, everything
+// downstream fails open, and ensurePlacement re-plans on the first load.
+func (s *Server) awaitHardwareTelemetry() {
+	if s.perf == nil {
+		return
+	}
+	start := time.Now()
+	if s.perf.AwaitFirstSample(hardwareTelemetryWait) {
+		s.proxylog.Debugf("placement: hardware telemetry ready after %s", time.Since(start).Round(time.Millisecond))
+		return
+	}
+	s.proxylog.Warnf("placement: no complete hardware sample after %s — planning against an incomplete memory picture. Models that cannot be decided are left exactly as configured and re-planned on their first load, not refused.",
+		hardwareTelemetryWait)
+}
+
+// placementDecided reports whether automatic placement has reached a verdict
+// for a model. It is false only when a plan was attempted and came back
+// ModeUnknown: the planner could not read the budgets it needs, so nothing has
+// yet been decided about how this model should run. A model placement never
+// considered at all — pinned flags, a non-llamacpp backend, unreadable weights
+// — counts as decided, since nothing is pending for it.
+//
+// Callers that would act on a memory verdict use this to tell an undecided
+// model apart from a decided one: judging the configured command of a model
+// whose placement is still pending judges a command automatic placement was
+// never given the chance to fix.
+func (s *Server) placementDecided(id string) bool {
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+	rec, planned := s.placements[id]
+	return !planned || rec.Plan.Mode != placement.ModeUnknown
+}
+
 // applyAutoPlacement computes a placement plan for every llama.cpp model and
 // applies hybrid/CPU plans to the in-memory command (never persisted to the
 // config file — the original is kept in the placement record, and a model

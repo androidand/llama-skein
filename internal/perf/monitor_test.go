@@ -154,6 +154,53 @@ func TestStart_CollectsSysStats(t *testing.T) {
 	assert.NotEmpty(t, sysStats, "expected sys stats to be collected")
 }
 
+// TestStart_PrimesHostMemoryBeforeFirstTick is the regression for the z4 boot
+// race (2026-08-08): the first sys sample landed only at the first tick, so for
+// a whole sampling interval every consumer that BUDGETS memory read the empty
+// ring as "0 MB total, 0 MB available" — indistinguishable from a measured
+// zero. Boot-time placement planning read those zeros and a 91 GB hybrid model
+// was refused as unfittable on every restart. The interval here is an hour, so
+// only the synchronous prime can satisfy this.
+func TestStart_PrimesHostMemoryBeforeFirstTick(t *testing.T) {
+	m, err := New(config.PerformanceConfig{Every: time.Hour}, newTestLogger())
+	require.NoError(t, err)
+
+	m.Start()
+	defer m.Stop()
+
+	sysStats, _ := m.Current()
+	require.NotEmpty(t, sysStats, "host memory must be readable the moment Start returns, not one interval later")
+	assert.Greater(t, sysStats[len(sysStats)-1].MemTotalMB, 0)
+	assert.Greater(t, sysStats[len(sysStats)-1].EffectiveMemTotalMB(), 0)
+}
+
+// AwaitFirstSample must resolve on a host with a GPU (first snapshot) and on
+// one without (the probe's verdict) — and must not claim a picture it has not
+// got, which is what callers fail open on.
+func TestAwaitFirstSample(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test")
+	}
+
+	m, err := New(config.PerformanceConfig{Every: time.Hour}, newTestLogger())
+	require.NoError(t, err)
+	assert.False(t, m.AwaitFirstSample(0), "an unstarted monitor has no hardware picture")
+	assert.False(t, m.GPUTelemetryAbsent(), "absence is only known once the probe has run")
+
+	m.Start()
+	defer m.Stop()
+
+	assert.True(t, m.AwaitFirstSample(10*time.Second),
+		"expected either a first GPU snapshot or the no-GPU verdict")
+	// Whichever it was, the two must not both be true-ish: a host with GPU
+	// samples is not a host without GPU telemetry.
+	if _, gpuStats := m.Current(); len(gpuStats) > 0 {
+		assert.False(t, m.GPUTelemetryAbsent())
+	} else {
+		assert.True(t, m.GPUTelemetryAbsent())
+	}
+}
+
 func TestStart_StopStopsGoroutines(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping slow test")

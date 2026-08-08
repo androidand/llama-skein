@@ -18,12 +18,20 @@ import (
 )
 
 // vramMB returns the host's total and free VRAM budget in MB for fit and
-// recommendation math. See hostVRAM for the platform semantics.
+// recommendation math. See hostVRAM for the platform semantics. 0,0 = unknown.
 func (s *Server) vramMB() (total, free int) {
 	if s.perf == nil {
 		return 0, 0
 	}
 	sysStats, gpuStats := s.perf.Current()
+	// hostVRAM's no-GPU branch budgets against system RAM, which is right for
+	// a host that has no GPU and badly wrong for one whose GPU telemetry has
+	// simply not arrived yet — it would hand a 48 GB card's model the host's
+	// 112 GB as if it were VRAM. Only the monitor knows which case this is;
+	// until it does, the budget is unknown.
+	if len(gpuStats) == 0 && !s.perf.GPUTelemetryAbsent() {
+		return 0, 0
+	}
 	unified := runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 	return hostVRAM(sysStats, gpuStats, unified, gpuWiredLimitMB())
 }

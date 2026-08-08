@@ -39,7 +39,15 @@ func (s *Server) clampModelsToFit() {
 		if !ok {
 			continue
 		}
-		clampTo, unfitReason, unfit := ctxClampDecision(mf)
+		decided := s.placementDecided(id)
+		clampTo, unfitReason, unfit := ctxClampDecision(mf, decided)
+		if !decided {
+			// Say so when the withheld verdict would have been a refusal —
+			// this exact silence is what made the z4 boot race hard to see.
+			if _, reason, wouldRefuse := ctxClampDecision(mf, true); wouldRefuse {
+				s.proxylog.Warnf("fit-guard: model %q reads as unfittable (%s), but its placement is still undecided (hardware telemetry was incomplete when it was planned) — not refusing it; it will be re-planned on its first load", id, reason)
+			}
+		}
 		switch {
 		case unfit:
 			s.unfittable[id] = unfitReason
@@ -97,7 +105,16 @@ func (s *Server) clampModelsToFit() {
 // we've established shrinking is needed, it's the same VRAM-margined ceiling
 // skein's cross-repo ctx-fit sweep grows an under-configured model up to, so
 // the two stay consistent.
-func ctxClampDecision(mf apicontract.ModelFit) (clampTo int, unfitReason string, unfit bool) {
+//
+// placementDecided is false when automatic placement could not decide how this
+// model should run (see Server.placementDecided). The refusal is then withheld:
+// "the weights don't fit" is a verdict on a GPU-only command that hybrid
+// placement exists to rewrite, and refusing on it permanently condemns a model
+// that fits — the z4 boot race, where placement was planned against an
+// unsampled monitor and this function then read a warm one. Clamping still
+// applies: a smaller context is a conservative, self-correcting change (a
+// later re-plan starts from the original command), while a refusal is not.
+func ctxClampDecision(mf apicontract.ModelFit, placementDecided bool) (clampTo int, unfitReason string, unfit bool) {
 	if mf.VramTotalMb == nil || *mf.VramTotalMb <= 0 || mf.ModelMb == nil || *mf.ModelMb <= 0 || mf.VramRequiredMb == nil {
 		return 0, "", false // VRAM/model size not yet confidently known → fail open
 	}
@@ -113,6 +130,9 @@ func ctxClampDecision(mf apicontract.ModelFit) (clampTo int, unfitReason string,
 	}
 	// Even a minimal context wouldn't help — the weights themselves are the
 	// problem, regardless of whether --ctx-size was ever configured.
+	if !placementDecided {
+		return 0, "", false // placement pending: not ours to condemn yet
+	}
 	reason := "model weights exceed this host's available memory even at minimal context; loading it would OOM the host"
 	if mf.Reason != nil && *mf.Reason != "" {
 		reason = *mf.Reason

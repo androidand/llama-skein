@@ -117,52 +117,57 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 
 	ch := make(chan []GpuStat, 1)
 
+	poll := func() []GpuStat {
+		socketPath := lactSocketPath()
+		if socketPath == "" {
+			return nil
+		}
+
+		conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+		if err != nil {
+			return nil
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+		devices, err := lactListDevices(conn)
+		if err != nil {
+			return nil
+		}
+
+		stats := make([]GpuStat, 0, len(devices))
+		for i, d := range devices {
+			stat, err := lactGetDeviceStats(conn, d.ID, d.Name, i)
+			if err != nil {
+				continue
+			}
+			if stat.MemTotalMB == 0 {
+				continue
+			}
+			stats = append(stats, stat)
+		}
+		return stats
+	}
+
 	go func() {
 		defer close(ch)
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
+		// Sample before the first tick: waiting an interval for the opening
+		// snapshot leaves every VRAM budget unknown for that whole window, and
+		// the daemon plans placement inside it.
 		for {
+			if stats := poll(); len(stats) > 0 {
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				socketPath := lactSocketPath()
-				if socketPath == "" {
-					continue
-				}
-
-				conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
-				if err != nil {
-					continue
-				}
-				conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-				devices, err := lactListDevices(conn)
-				if err != nil {
-					conn.Close()
-					continue
-				}
-
-				stats := make([]GpuStat, 0, len(devices))
-				for i, d := range devices {
-					stat, err := lactGetDeviceStats(conn, d.ID, d.Name, i)
-					if err != nil {
-						continue
-					}
-					if stat.MemTotalMB == 0 {
-						continue
-					}
-					stats = append(stats, stat)
-				}
-				conn.Close()
-
-				if len(stats) > 0 {
-					select {
-					case ch <- stats:
-					default:
-					}
-				}
 			}
 		}
 	}()
@@ -518,53 +523,57 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 
 	ch := make(chan []GpuStat, 1)
 
+	poll := func() []GpuStat {
+		pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(pollCtx, smi, "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
+		out, err := cmd.Output()
+		if err != nil {
+			if pollCtx.Err() == context.DeadlineExceeded {
+				logger.Debug("rocm-smi timed out")
+			}
+			return nil
+		}
+
+		stats := make([]GpuStat, 0)
+		scanner := bufio.NewScanner(strings.NewReader(string(out)))
+		var header string
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "device,") {
+				header = line
+				continue
+			}
+
+			stat := parseRocmSmiLine(header, line)
+			if stat != nil {
+				stats = append(stats, *stat)
+			}
+		}
+		return stats
+	}
+
 	go func() {
 		defer close(ch)
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
+		// Sample before the first tick — see tryLACT: a budget nobody can read
+		// for the first interval is a budget the boot path reads as zero.
 		for {
+			if stats := poll(); len(stats) > 0 {
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
-				cmd := exec.CommandContext(pollCtx, smi, "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
-				out, err := cmd.Output()
-				timedOut := pollCtx.Err() == context.DeadlineExceeded
-				cancel()
-				if err != nil {
-					if timedOut {
-						logger.Debug("rocm-smi timed out")
-					}
-					continue
-				}
-
-				stats := make([]GpuStat, 0)
-				scanner := bufio.NewScanner(strings.NewReader(string(out)))
-				var header string
-				for scanner.Scan() {
-					line := strings.TrimSpace(scanner.Text())
-					if line == "" {
-						continue
-					}
-					if strings.HasPrefix(line, "device,") {
-						header = line
-						continue
-					}
-
-					stat := parseRocmSmiLine(header, line)
-					if stat != nil {
-						stats = append(stats, *stat)
-					}
-				}
-
-				if len(stats) > 0 {
-					select {
-					case ch <- stats:
-					default:
-					}
-				}
 			}
 		}
 	}()
@@ -674,17 +683,18 @@ func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) 
 		defer close(ch)
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
+		// Sample before the first tick — see tryLACT.
 		for {
+			if stats := readSysfsGpuStats("/sys/class/drm"); len(stats) > 0 {
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if stats := readSysfsGpuStats("/sys/class/drm"); len(stats) > 0 {
-					select {
-					case ch <- stats:
-					default:
-					}
-				}
 			}
 		}
 	}()

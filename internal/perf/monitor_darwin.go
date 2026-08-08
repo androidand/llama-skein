@@ -58,19 +58,20 @@ func tryIoreg(ctx context.Context, every time.Duration, logger *logmon.Monitor) 
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
+		// Sample before the first tick: until the opening snapshot lands every
+		// VRAM budget reads as unknown, and the daemon plans placement inside
+		// that window.
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				stat := sampleIoreg(ctx)
-				if stat == nil {
-					continue
-				}
+			if stat := sampleIoreg(ctx); stat != nil {
 				select {
 				case ch <- []GpuStat{*stat}:
 				default:
 				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
 			}
 		}
 	}()
