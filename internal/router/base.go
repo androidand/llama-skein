@@ -613,7 +613,7 @@ func (b *baseRouter) doSwap(modelID string, toStop []string) {
 	}
 
 	target := b.processes[modelID]
-	if target.State() == process.StateStopped {
+	if process.StartableFrom(target.State()) {
 		// The model being STARTED gets its own load deadline; `timeout`
 		// above paces stopping the models it evicts, which is a different
 		// question. A 91 GB hybrid model needs minutes to page in, while the
@@ -754,7 +754,7 @@ func (b *baseRouter) RunningModels() map[string]process.ProcessState {
 	running := make(map[string]process.ProcessState)
 	for id, p := range b.processes {
 		st := p.State()
-		if st == process.StateStopped || st == process.StateShutdown {
+		if st == process.StateStopped || st == process.StateShutdown || st == process.StateFailed {
 			continue
 		}
 		running[id] = st

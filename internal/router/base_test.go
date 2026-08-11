@@ -70,6 +70,50 @@ func TestBaseRouter_RunningModels(t *testing.T) {
 	}
 }
 
+// TestBaseRouter_RunningModels_ExcludesFailed is a regression guard: a failed
+// model is not running and must not appear in RunningModels. Previously only
+// Stopped and Shutdown were excluded, so a failed model was reported as "running"
+// which misled callers into thinking the model could serve requests.
+func TestBaseRouter_RunningModels_ExcludesFailed(t *testing.T) {
+	failed := newFakeProcess("failed")
+	failed.setState(process.StateFailed)
+
+	b := newTestBase(t, map[string]process.Process{"failed": failed}, &stubPlanner{})
+
+	running := b.RunningModels()
+	if len(running) != 0 {
+		t.Errorf("RunningModels returned %v; failed model must be excluded", running)
+	}
+}
+
+// TestBaseRouter_Swap_RestartsFailedModel is a regression guard: doSwap must
+// call Run() when the target model is in StateFailed, not just StateStopped.
+// Previously the check was `State() == StateStopped`, so a failed model was
+// never retried — WaitReady would fail immediately with the stale error.
+func TestBaseRouter_Swap_RestartsFailedModel(t *testing.T) {
+	failed := newFakeProcess("failed")
+	failed.setState(process.StateFailed)
+	failed.autoReady = true
+
+	conf := config.Config{
+		HealthCheckTimeout: 5,
+		Groups: map[string]config.GroupConfig{
+			"g": {Swap: false, Exclusive: false, Members: []string{"failed"}},
+		},
+	}
+	g := newTestGroup(t, conf, map[string]process.Process{"failed": failed})
+
+	w := httptest.NewRecorder()
+	g.ServeHTTP(w, newRequest("failed"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q — failed model must be restarted and serve", w.Code, w.Body.String())
+	}
+	if got := failed.runCalls.Load(); got != 1 {
+		t.Errorf("runCalls=%d want 1 — doSwap must call Run() on a failed model", got)
+	}
+}
+
 func TestBaseRouter_UnloadAll(t *testing.T) {
 	a := newFakeProcess("a")
 	a.markReady()

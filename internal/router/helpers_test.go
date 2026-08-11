@@ -109,7 +109,7 @@ func (f *fakeProcess) markReady() { f.setState(process.StateReady) }
 func (f *fakeProcess) Run(_ time.Duration) error {
 	f.runCalls.Add(1)
 	f.mu.Lock()
-	if f.state != process.StateStopped {
+	if !process.StartableFrom(f.state) {
 		s := f.state
 		f.mu.Unlock()
 		return fmt.Errorf("fakeProcess %s: Run called while %s", f.id, s)

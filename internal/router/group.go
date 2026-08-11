@@ -98,7 +98,7 @@ func (p *groupPlanner) EvictionFor(target string, alsoRunning []string) []string
 
 	for mID, proc := range p.processes {
 		st := proc.State()
-		if st == process.StateStopped || st == process.StateShutdown {
+		if st == process.StateStopped || st == process.StateShutdown || st == process.StateFailed {
 			continue
 		}
 		consider(mID)

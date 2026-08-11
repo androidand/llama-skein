@@ -371,7 +371,12 @@ func (p *ProcessCommand) run() {
 			p.recordFailure(fmt.Errorf("[%s] upstream exited unexpectedly", p.id), FailureCrash)
 			setState(StateFailed)
 			crashes := p.recordUnexpectedExit()
-			p.proxyLogger.Warnf("<%s> upstream exited unexpectedly (%d unexpected exit(s) in the last %v)", p.id, crashes, crashLoopWindow)
+			// Name the cause, not just the event.
+			if detail := lastOutputLines(p.processLogger.GetHistory(), 5); detail != "" {
+				p.proxyLogger.Warnf("<%s> upstream exited unexpectedly (%d unexpected exit(s) in the last %v): %s", p.id, crashes, crashLoopWindow, detail)
+			} else {
+				p.proxyLogger.Warnf("<%s> upstream exited unexpectedly (%d unexpected exit(s) in the last %v)", p.id, crashes, crashLoopWindow)
+			}
 			respondRun(fmt.Errorf("[%s] upstream exited unexpectedly", p.id))
 
 		// WaitReady: if we're already in a terminal-for-this-question state,
@@ -400,7 +405,7 @@ func (p *ProcessCommand) run() {
 		// listen for an incoming Stop — that's how callers cancel an in-flight
 		// start.
 		case req := <-p.runCh:
-			if !startableFrom(state) {
+			if !StartableFrom(state) {
 				req.respond <- fmt.Errorf("[%s] could not be started in %s state", p.id, state)
 				continue
 			}
@@ -662,6 +667,11 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		if !p.config.IsLlamaCpp() {
 			// mlx/vllm: most often an out-of-memory abort for the request size.
 			msg = fmt.Sprintf("model backend %q exited while handling this request — most often an out-of-memory abort for the request's context size. It is being restarted; retry shortly, ideally with a smaller prompt/context.", p.id)
+		}
+		// prematureExit does this for the start path; a backend that dies while
+		// Ready needs it too, or the cause stays buried in the log stream.
+		if detail := lastOutputLines(p.processLogger.GetHistory(), 5); detail != "" {
+			msg = fmt.Sprintf("%s\n\nlast output from the backend: %s", msg, detail)
 		}
 		body, _ := json.Marshal(struct {
 			Error struct {

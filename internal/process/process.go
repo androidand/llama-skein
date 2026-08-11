@@ -28,11 +28,11 @@ const (
 	StateFailed ProcessState = ProcessState("failed")
 )
 
-// startableFrom reports whether a start may be attempted from state s.
+// StartableFrom reports whether a start may be attempted from state s.
 // StateFailed counts: it means "idle, and the last attempt went wrong", which
 // is still restartable. The crash-loop breaker, not this predicate, is what
 // refuses a restart.
-func startableFrom(s ProcessState) bool {
+func StartableFrom(s ProcessState) bool {
 	return s == StateStopped || s == StateFailed
 }
 

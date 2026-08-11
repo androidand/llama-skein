@@ -83,7 +83,7 @@ func (p *matrixPlanner) runningSet(alsoRunning []string) []string {
 	var running []string
 	for id, proc := range p.processes {
 		st := proc.State()
-		if st == process.StateStopped || st == process.StateShutdown {
+		if st == process.StateStopped || st == process.StateShutdown || st == process.StateFailed {
 			continue
 		}
 		seen[id] = struct{}{}

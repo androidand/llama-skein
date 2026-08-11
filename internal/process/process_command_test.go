@@ -479,6 +479,76 @@ func TestProcessCommand_UpstreamUnreachableReturnsStructuredError(t *testing.T) 
 	}
 }
 
+// TestProcessCommand_UpstreamUnreachableIncludesBackendOutput asserts a
+// mid-request death reports the backend's last output, not just "became
+// unreachable" (regression: a rocBLAS abort read as an unexplained crash).
+func TestProcessCommand_UpstreamUnreachableIncludesBackendOutput(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("upstream: hijack not supported")
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("upstream: hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(upstream.Close)
+
+	processLogger := logmon.NewWriter(io.Discard)
+	cmd, _ := simpleResponderCmd(t, "-silent")
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              upstream.URL,
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	}, processLogger, logmon.NewWriter(io.Discard))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { p.Stop(testStopTimeout) })
+
+	_ = runAsync(t, p)
+
+	// Stand in for what a dying backend writes on its way out. cmd.Stdout and
+	// cmd.Stderr feed this same monitor in production.
+	const dyingWords = "rocBLAS error: Cannot read TensileLibrary.dat for GPU arch : gfx1100"
+	if _, err := processLogger.Write([]byte(dyingWords + "\n")); err != nil {
+		t.Fatalf("seed process log: %v", err)
+	}
+
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	resp, err := http.Get(front.URL + "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("response body is not JSON (%v): %s", err, body)
+	}
+	if !strings.Contains(parsed.Error.Message, dyingWords) {
+		t.Errorf("error message must carry the backend's last output.\ngot: %s", parsed.Error.Message)
+	}
+}
+
 // syncBuffer is a concurrent-safe bytes.Buffer for capturing logmon output.
 type syncBuffer struct {
 	mu  sync.Mutex
