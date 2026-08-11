@@ -25,11 +25,9 @@ import (
 // used (Executor.ModelsDir) so the composed destination paths match what
 // downloadOne actually wrote to disk.
 //
-// Like Store.Prune (task 2.2), this is a real, tested, callable function,
-// not wired to any periodic scheduler or HTTP endpoint — no task in this
-// change adds either, and no OpenAPI route exists for triggering a cleanup
-// pass, so invoking it (from an operator command, a future task, or a test)
-// is the caller's responsibility.
+// Called (with Store.Prune) from the server's reclaimOperationStorage once
+// an operation reaches a terminal phase. There is no periodic scheduler and
+// no OpenAPI route for triggering a pass on demand.
 //
 // Returns the number of partial files actually removed. A missing partial
 // (already cleaned up, or the download never got far enough to create one)

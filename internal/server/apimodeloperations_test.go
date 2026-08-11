@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/androidand/llama-skein/internal/operation"
 	"github.com/androidand/llama-skein/pkg/apicontract"
@@ -645,4 +646,88 @@ func TestOperationHandlers_Return503WhenStoreUnavailable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServer_ReclaimOperationStorage_RemovesCancelledPartials is a regression
+// guard: CleanupAbandonedPartials and Store.Prune were both implemented and
+// tested but nothing called them, so a cancelled multi-GB download left its
+// ".part" file on disk for good.
+func TestServer_ReclaimOperationStorage_RemovesCancelledPartials(t *testing.T) {
+	s := newOperationTestServer(t)
+	now := time.Now()
+
+	cancelled := operation.NewFromPlan(operation.Plan{
+		SourceRepository: "org/cancelled-repo",
+		SourceRevision:   "deadbeef",
+		Artifacts:        []operation.Artifact{{Path: "model.gguf", SizeBytes: 100, Role: operation.ArtifactRoleWeights}},
+		Registration:     operation.Registration{ModelID: "cancelled-model"},
+	}, now)
+	if err := cancelled.Cancel(now); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := s.operationStore.Save(cancelled); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	partial := filepath.Join(s.modelsDir(), "org", "cancelled-repo", "model.gguf.part")
+	if err := os.MkdirAll(filepath.Dir(partial), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(partial, []byte("abandoned bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s.reclaimOperationStorage()
+
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Errorf("partial %s still present after reclaim (err=%v)", partial, err)
+	}
+}
+
+// TestServer_ReclaimOperationStorage_BoundsTerminalHistory asserts the prune
+// half runs, so operation history cannot grow without bound.
+func TestServer_ReclaimOperationStorage_BoundsTerminalHistory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := operation.NewStore(dir, 2) // tiny bound so the test is cheap
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	s := newTestServer(newStubRouter(nil, ""), nil)
+	s.cfg.ModelsDir = t.TempDir()
+	s.operationStore = store
+
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		op := operation.NewFromPlan(operation.Plan{
+			SourceRepository: fmt.Sprintf("org/repo-%d", i),
+			SourceRevision:   "deadbeef",
+			Artifacts:        []operation.Artifact{{Path: "model.gguf", SizeBytes: 100, Role: operation.ArtifactRoleWeights}},
+			Registration:     operation.Registration{ModelID: fmt.Sprintf("model-%d", i)},
+		}, now.Add(time.Duration(i)*time.Second))
+		if err := op.Fail(operation.ErrorInternal, "boom", now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+		if err := store.Save(op); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+
+	s.reclaimOperationStorage()
+
+	ops, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(ops) != 2 {
+		t.Errorf("retained %d terminal operations, want 2 (the store bound)", len(ops))
+	}
+}
+
+// TestServer_ReclaimOperationStorage_NoStoreIsNotAPanic covers the startup
+// path where the state directory could not be initialised: the store is nil
+// and every operation endpoint reports unavailable, so reclaim must no-op.
+func TestServer_ReclaimOperationStorage_NoStoreIsNotAPanic(t *testing.T) {
+	s := newTestServer(newStubRouter(nil, ""), nil)
+	s.operationStore = nil
+	s.reclaimOperationStorage()
 }

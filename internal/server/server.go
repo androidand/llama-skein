@@ -281,6 +281,9 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	}
 	s.runOperation = func(ctx context.Context, op *operation.Operation) {
 		s.newOperationExecutor().Run(ctx, op)
+		// Run has just moved this operation to a terminal phase, so this is
+		// the point where there is something to reclaim.
+		s.reclaimOperationStorage()
 	}
 
 	// Re-apply the persisted profile (if the operator ever saved one via

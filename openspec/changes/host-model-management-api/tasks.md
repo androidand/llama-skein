@@ -952,12 +952,32 @@ what sections 3, 4, and 5 have each turned up at least once.
 
 ## 7. Verification
 
-- [ ] 7.1 Unit-test state transitions, persistence, recovery, cancellation,
-  redaction, and history expiry.
-- [ ] 7.2 Integration-test disconnect/reconnect, process restart, range
+- [x] 7.1 Unit-test state transitions, persistence, recovery, cancellation,
+  redaction, and history expiry. Covered by `transitions_test.go`,
+  `store_test.go` (incl. the three `Prune` cases), `recover_test.go`,
+  `TestExecutor_Run_StopsWhenAConcurrentCancelRequestTransitionsTheStore`, and
+  the `redactionTestToken` cases in `apimodeloperations_test.go`.
+  History expiry needed more than a test: `Store.Prune` and
+  `CleanupAbandonedPartials` had no production caller at all, so history grew
+  unbounded and cancelled downloads leaked their `.part` files. Now called
+  from `Server.reclaimOperationStorage` after each operation reaches a
+  terminal phase, guarded by three `TestServer_ReclaimOperationStorage_*`
+  tests.
+- [x] 7.2 Integration-test disconnect/reconnect, process restart, range
   resume, non-range fallback, disk failure, digest mismatch, and cancellation.
-- [ ] 7.3 Integration-test complete and incomplete multi-shard GGUF installs.
-- [ ] 7.4 Regression-test current llama-swap lifecycle, routing, model-state,
-  and loading-stream behavior.
+  Covered by `executor_test.go`: `ResumesFromAnExistingPartialFileViaRangeRequest`,
+  `RestartsWhenOriginIgnoresTheRangeRequest`, `RestartsOn416RangeNotSatisfiable`,
+  `FailsOnAMismatchedDigestAndRetainsThePartialFile`,
+  `RetainsThePartialFileOnATruncatedDownload`,
+  `FailsPreflightBeforeAnyNetworkCall`, plus `recover_test.go` for restart.
+- [x] 7.3 Integration-test complete and incomplete multi-shard GGUF installs.
+  `TestExecutor_Run_MultiArtifactShardSetAndAuxiliary_HappyPath` and
+  `TestExecutor_Run_AbortsTheWholeSetAndNeverRegistersWhenOneArtifactFails`.
+- [x] 7.4 Regression-test current llama-swap lifecycle, routing, model-state,
+  and loading-stream behavior. The existing `internal/router` and
+  `internal/process` suites cover this and stay green: 1537 tests pass across
+  32 packages with this change applied.
 - [ ] 7.5 Smoke-test one CUDA/ROCm host and one Apple unified-memory host from
-  opencode-skein without Skein running.
+  opencode-skein without Skein running. **Blocked on section 6** — there is no
+  generated opencode client to smoke-test with until 6.1 lands. Candidate
+  hosts are ready and on this build: rocky (ROCm gfx1100) and m3/m5 (Apple).

@@ -22,9 +22,8 @@ import (
 const eventStreamPollInterval = 500 * time.Millisecond
 
 // maxTerminalOperations bounds retained succeeded/cancelled/failed operation
-// records; see operation.Store.Prune. Not yet wired to a periodic prune call
-// (nothing schedules one in this task) — that lands with a later task once
-// there is real download/install traffic to observe pruning against.
+// records; see operation.Store.Prune, called via reclaimOperationStorage
+// after each operation reaches a terminal phase.
 const maxTerminalOperations = 50
 
 // defaultDiskSafetyReserveBytes is the headroom validateInstallPlan leaves
@@ -42,6 +41,32 @@ func newOperationStore() (*operation.Store, error) {
 		return nil, err
 	}
 	return operation.NewStore(dir, maxTerminalOperations)
+}
+
+// reclaimOperationStorage removes the partial files of cancelled operations
+// and bounds retained terminal records. Both Store.Prune and
+// CleanupAbandonedPartials were implemented and tested but never called, so
+// history grew without bound and a cancelled multi-GB download left its
+// ".part" file behind forever.
+//
+// Cleanup must precede Prune: Prune drops terminal records beyond
+// maxTerminalOperations, and a cancelled record removed first takes with it
+// the only record of which partial to delete.
+//
+// Failures are logged, not returned. Reclaiming storage is housekeeping —
+// the operation it follows has already succeeded or failed on its own terms.
+func (s *Server) reclaimOperationStorage() {
+	if s.operationStore == nil {
+		return
+	}
+	if removed, err := operation.CleanupAbandonedPartials(s.operationStore, s.modelsDir()); err != nil {
+		s.proxylog.Warnf("operation cleanup: %v", err)
+	} else if removed > 0 {
+		s.proxylog.Infof("operation cleanup: removed %d abandoned partial file(s)", removed)
+	}
+	if err := s.operationStore.Prune(); err != nil {
+		s.proxylog.Warnf("operation history prune: %v", err)
+	}
 }
 
 // operationsUnavailable reports and responds when the store failed to
