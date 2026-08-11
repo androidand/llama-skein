@@ -154,7 +154,7 @@ models:
 		if body != "" {
 			rdr = strings.NewReader(body)
 		}
-		req := httptest.NewRequest(method, "/api/config/default-model", rdr)
+		req := httptest.NewRequest(method, "/api/models/default", rdr)
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -206,7 +206,7 @@ func TestServer_APIDefaultModel_GetUnset(t *testing.T) {
 	s := newTestServerWithConfig(config.Config{}, newStubRouter(nil, ""), newStubRouter(nil, ""))
 
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/config/default-model", nil))
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/models/default", nil))
 
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"model":null`) {
 		t.Errorf("status=%d body=%q want model null", w.Code, w.Body.String())

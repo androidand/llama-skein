@@ -65,6 +65,24 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 		writeOperationError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+
+	// Auto-discover companions from HuggingFace API when requested and
+	// artifacts list is empty. This queries the HF model info API to find
+	// GGUF files (main weights + mmproj/dflash/mtp companions). weight_filter
+	// narrows the main weights selection when the repo has multiple quants.
+	if len(derefArtifacts(plan.Artifacts)) == 0 && derefBool(plan.AutoDiscoverCompanions) {
+		discovered, err := s.discoverHFArtifacts(plan.SourceRepository, plan.SourceRevision, derefString(plan.WeightFilter), derefString(plan.Token))
+		if err != nil {
+			writeOperationError(w, http.StatusBadRequest, "auto-discover failed: "+err.Error())
+			return
+		}
+		if len(discovered) == 0 {
+			writeOperationError(w, http.StatusBadRequest, "no GGUF files found in repository")
+			return
+		}
+		plan.Artifacts = &discovered
+	}
+
 	if reason := validateInstallPlan(plan, s.modelsDir()); reason != "" {
 		writeOperationError(w, http.StatusBadRequest, reason)
 		return
@@ -105,8 +123,8 @@ func (s *Server) handleAPICreateModelOperation(w http.ResponseWriter, r *http.Re
 // so it survives independently of the request (design.md decision 2: the
 // plan is immutable once accepted).
 func toOperationPlan(plan apicontract.ModelInstallPlan) operation.Plan {
-	artifacts := make([]operation.Artifact, len(plan.Artifacts))
-	for i, a := range plan.Artifacts {
+	artifacts := make([]operation.Artifact, len(derefArtifacts(plan.Artifacts)))
+	for i, a := range derefArtifacts(plan.Artifacts) {
 		artifacts[i] = operation.Artifact{
 			Path:      a.Path,
 			SizeBytes: a.SizeBytes,
@@ -179,11 +197,36 @@ func (s *Server) registerInstalledModel(op *operation.Operation, weightsPath str
 	if len(op.Registration.Flags) > 0 {
 		flags = strings.Join(op.Registration.Flags, " ")
 	}
+
+	// Resolve companion artifact paths (DFlash draft model, mmproj projector)
+	// from the operation's artifact list.
+	modelsDir := s.modelsDir()
+	var draftPath, projectorPath string
+	if modelsDir != "" && op.SourceRepository != "" {
+		for _, a := range op.Artifacts {
+			dest, err := operation.ResolveArtifactDestination(modelsDir, op.SourceRepository, a.Path)
+			if err != nil {
+				continue
+			}
+			if a.Role == operation.ArtifactRoleDraft {
+				draftPath = dest
+			}
+			if a.Role == operation.ArtifactRoleProjector {
+				projectorPath = dest
+			}
+		}
+	}
+
+	cmd := s.buildCmd(weightsPath, flags)
+	cmd = injectCompanionFlags(cmd, draftPath, projectorPath)
+
 	mc := config.ModelConfig{
-		Cmd:         s.buildCmd(weightsPath, flags),
-		Proxy:       "http://127.0.0.1:${PORT}",
-		Backend:     op.Registration.Backend,
-		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
+		Cmd:            cmd,
+		Proxy:          "http://127.0.0.1:${PORT}",
+		Backend:        op.Registration.Backend,
+		UnloadAfter:    config.MODEL_CONFIG_DEFAULT_TTL,
+		DraftModelPath: draftPath,
+		ProjectorPath:  projectorPath,
 	}
 	if op.Registration.DisplayName != nil {
 		mc.Name = *op.Registration.DisplayName
@@ -220,55 +263,101 @@ func validateInstallPlan(plan apicontract.ModelInstallPlan, modelsDir string) st
 	if plan.SourceRevision == "" {
 		return "source_revision is required"
 	}
-	if len(plan.Artifacts) == 0 {
-		return "at least one artifact is required"
+	// Allow empty artifacts when auto_discover_companions is true — the
+	// server will query the HuggingFace API to discover GGUF files.
+	artifacts := derefArtifacts(plan.Artifacts)
+	if len(artifacts) == 0 && !derefBool(plan.AutoDiscoverCompanions) {
+		return "at least one artifact is required (or set auto_discover_companions=true)"
 	}
-	hasWeights := false
-	var totalBytes int64
-	for _, artifact := range plan.Artifacts {
-		if artifact.Path == "" {
-			return "every artifact needs a path"
+	// When artifacts are provided, validate them fully.
+	if len(artifacts) > 0 {
+		hasWeights := false
+		var totalBytes int64
+		for _, artifact := range artifacts {
+			if artifact.Path == "" {
+				return "every artifact needs a path"
+			}
+			if artifact.SizeBytes <= 0 {
+				return "every artifact needs a positive size_bytes"
+			}
+			totalBytes += artifact.SizeBytes
+			if artifact.Digest != nil && !digestRe.MatchString(*artifact.Digest) {
+				return fmt.Sprintf("artifact %s: digest must be \"sha256:\" followed by 64 hex characters", artifact.Path)
+			}
+			if _, err := operation.ResolveArtifactURL(plan.SourceRepository, plan.SourceRevision, artifact.Path); err != nil {
+				return err.Error()
+			}
+			if modelsDir != "" {
+				if _, err := operation.ResolveArtifactDestination(modelsDir, plan.SourceRepository, artifact.Path); err != nil {
+					return err.Error()
+				}
+			}
+			if artifact.Role == apicontract.ArtifactRoleWeights {
+				hasWeights = true
+			}
 		}
-		if artifact.SizeBytes <= 0 {
-			return "every artifact needs a positive size_bytes"
+		if !hasWeights {
+			return "at least one artifact must have role \"weights\""
 		}
-		totalBytes += artifact.SizeBytes
-		if artifact.Digest != nil && !digestRe.MatchString(*artifact.Digest) {
-			return fmt.Sprintf("artifact %s: digest must be \"sha256:\" followed by 64 hex characters", artifact.Path)
-		}
-		if _, err := operation.ResolveArtifactURL(plan.SourceRepository, plan.SourceRevision, artifact.Path); err != nil {
-			return err.Error()
-		}
+		// Disk preflight needs a real directory to statfs; skipped when modelsDir
+		// is unknown, same as the destination-containment check above (task 3.3).
+		// remainingBytes is the plan's full artifact total — this is the initial
+		// create path, not a resume, so "remaining" and "total" coincide here
+		// (see CheckDiskPreflight's doc comment for the distinction that matters
+		// once resume, task 4.x, exists).
 		if modelsDir != "" {
-			if _, err := operation.ResolveArtifactDestination(modelsDir, plan.SourceRepository, artifact.Path); err != nil {
+			if err := operation.CheckDiskPreflight(modelsDir, totalBytes, defaultDiskSafetyReserveBytes); err != nil {
 				return err.Error()
 			}
 		}
-		if artifact.Role == apicontract.ArtifactRoleWeights {
-			hasWeights = true
-		}
-	}
-	if !hasWeights {
-		return "at least one artifact must have role \"weights\""
-	}
-	// Disk preflight needs a real directory to statfs; skipped when modelsDir
-	// is unknown, same as the destination-containment check above (task 3.3).
-	// remainingBytes is the plan's full artifact total — this is the initial
-	// create path, not a resume, so "remaining" and "total" coincide here
-	// (see CheckDiskPreflight's doc comment for the distinction that matters
-	// once resume, task 4.x, exists).
-	if modelsDir != "" {
-		if err := operation.CheckDiskPreflight(modelsDir, totalBytes, defaultDiskSafetyReserveBytes); err != nil {
-			return err.Error()
+		if reason := validateWeightShardCompleteness(artifacts); reason != "" {
+			return reason
 		}
 	}
 	if plan.Registration.ModelId == "" {
 		return "registration.model_id is required"
 	}
-	if reason := validateWeightShardCompleteness(plan.Artifacts); reason != "" {
-		return reason
-	}
 	return ""
+}
+
+// derefBool returns the value of a *bool or false if nil.
+func derefBool(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
+}
+
+// derefArtifacts returns the artifacts slice from a pointer, or nil if nil.
+func derefArtifacts(artifacts *[]apicontract.InstallArtifact) []apicontract.InstallArtifact {
+	if artifacts == nil {
+		return nil
+	}
+	return *artifacts
+}
+
+// discoverHFArtifacts queries the HuggingFace API to discover GGUF files in a
+// repository, returning them as InstallArtifact objects with appropriate roles.
+func (s *Server) discoverHFArtifacts(repository, revision, weightFilter, token string) ([]apicontract.InstallArtifact, error) {
+	client := &operation.HFApiClient{
+		HTTPClient: s.operationHTTPClient,
+		Token:      token,
+	}
+	artifacts, err := client.DiscoverCompanions(repository, revision, weightFilter)
+	if err != nil {
+		return nil, err
+	}
+	// Convert operation.Artifact to apicontract.InstallArtifact
+	result := make([]apicontract.InstallArtifact, len(artifacts))
+	for i, a := range artifacts {
+		result[i] = apicontract.InstallArtifact{
+			Path:      a.Path,
+			SizeBytes: a.SizeBytes,
+			Digest:    a.Digest,
+			Role:      apicontract.ArtifactRole(a.Role),
+		}
+	}
+	return result, nil
 }
 
 // validateWeightShardCompleteness rejects a plan whose weights artifacts

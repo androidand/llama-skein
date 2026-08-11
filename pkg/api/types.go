@@ -135,7 +135,7 @@ type ConfigInfo struct {
 	Exists     bool   `json:"exists"`
 }
 
-// ModelConfigResponse represents GET /api/config/models/:id.
+// ModelConfigResponse represents GET /api/models/config/:id.
 type ModelConfigResponse struct {
 	ModelID string      `json:"id"`
 	Config  ModelConfig `json:"config"`

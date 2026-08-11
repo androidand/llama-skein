@@ -252,7 +252,7 @@ export async function deleteModelFile(id: string): Promise<void> {
 }
 
 export async function removeModelFromConfig(id: string): Promise<void> {
-  const response = await fetch(`/api/config/models/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const response = await fetch(`/api/models/config/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `HTTP ${response.status}`);

@@ -15,6 +15,7 @@ providers:
     - openrouter:poolside/laguna-m.1:free
     - opencode-go:deepseek-v4-flash-free
     - z4
+    - llama-skein
 tiers:
     cerebras: free-cloud
     gemini: free-cloud
@@ -118,6 +119,7 @@ free_cloud_policy:
 #     max_open_tasks_per_assignment: 12 # block changes with more unchecked tasks than this until split (default 12)
 #     max_no_progress_cycles: 2        # demote a change to blocked after this many 0-task dispatch cycles (default 2)
 #     digest_hour: 8                   # local hour (0-23) the daily Telegram digest sends at (default 8 = 08:00)
+#     chat_orchestrator: true          # agent-path-by-default chat routing; set false for classifier-first behaviour
 
 # antiloop: NO_PROGRESS streak tracking, forced chain advance, and auto-block
 # on chain exhaustion for funnel stages (supervisor-outcome-robustness-antiloop)

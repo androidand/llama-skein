@@ -24,11 +24,11 @@
     {%- endif %}
 {%- endfor %}
 {%- if tools %}
-    {%- set ns.system_prompt = ns.system_prompt + '\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>' %}
+    {%- set ns.system_prompt = ns.system_prompt + '\n\n# Tools\n\nYou have access to tools. USE THEM IMMEDIATELY when a task can be solved by a tool call. Do not describe what you will do — DO it.\n\nFor example, if you need to list files, call the glob tool right now. If you need to read a file, call read right now. Stop thinking and start acting.\n\nAvailable tool schemas:\n<tools>' %}
     {%- for tool in tools %}
         {%- set ns.system_prompt = ns.system_prompt + '\n' + (tool | tojson) %}
     {%- endfor %}
-    {%- set ns.system_prompt = ns.system_prompt + '\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>\n\nTool results arrive wrapped in <tool_response> tags. Never write <tool_response> or </tool_response> yourself; when answering after a tool result, start directly with your answer text.' %}
+    {%- set ns.system_prompt = ns.system_prompt + '\n</tools>\n\nTo call a tool, output ONLY this format:\n<tool_call>\n{"name": "<function-name>", "arguments": <args-json-object>}\n</tool_call>\n\nDo not write prose before a tool call. Do not explain what you are about to do. Just emit the <tool_call></tool_call> block.\n\nAfter a tool returns a result, the result will be shown between <tool_response> and  markers. Do not repeat or echo these markers. Do not summarize the tool result unless asked. Act on the result immediately.' %}
 {%- endif %}
 {{- bos_token }}{{ ns.system_prompt }}
 {%- for message in messages %}

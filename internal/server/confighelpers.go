@@ -146,6 +146,40 @@ func flagValueString(v any) string {
 	}
 }
 
+// injectCompanionFlags adds --model-draft and --mmproj flags to a command
+// when the model config has companion artifact paths and the command does not
+// already contain them. Returns the modified command (or the original if no
+// injection was needed).
+func injectCompanionFlags(cmd string, draftPath, projectorPath string) string {
+	parts, err := config.SanitizeCommand(cmd)
+	if err != nil || len(parts) == 0 {
+		return cmd
+	}
+
+	hasDraft := false
+	hasProjector := false
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "--model-draft" {
+			hasDraft = true
+		}
+		if parts[i] == "--mmproj" {
+			hasProjector = true
+		}
+	}
+
+	if draftPath != "" && !hasDraft {
+		parts = append(parts, "--model-draft", draftPath)
+	}
+	if projectorPath != "" && !hasProjector {
+		parts = append(parts, "--mmproj", projectorPath)
+	}
+
+	if hasDraft && hasProjector {
+		return cmd
+	}
+	return strings.Join(parts, " ")
+}
+
 func patchCommandFlags(cmd string, flags map[string]string) (string, error) {
 	parts, err := config.SanitizeCommand(cmd)
 	if err != nil {

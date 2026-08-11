@@ -41,6 +41,14 @@ type MTP struct {
 	DraftPMin        float64 `yaml:"draft_p_min"`
 }
 
+// DFlash describes speculative-decoding flags applied only to models with a
+// DFlash companion draft model (--model-draft).
+type DFlash struct {
+	ApplyToDFlashModels bool    `yaml:"apply_to_dflash_models"`
+	DraftNMax           int     `yaml:"draft_n_max"`
+	DraftPMin           float64 `yaml:"draft_p_min"`
+}
+
 // Profile is one (gfx, use-case) entry in the tuning database.
 type Profile struct {
 	Gfx        string   `yaml:"gfx"`
@@ -49,6 +57,7 @@ type Profile struct {
 	VerifiedOn string   `yaml:"verified_on,omitempty"`
 	Flags      Flags    `yaml:"flags"`
 	MTP        *MTP     `yaml:"mtp,omitempty"`
+	DFlash     *DFlash  `yaml:"dflash,omitempty"`
 	Notes      string   `yaml:"notes,omitempty"`
 	DeviceIDs  []string `yaml:"device_ids,omitempty"`
 	Sources    []string `yaml:"sources,omitempty"`

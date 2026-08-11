@@ -183,7 +183,7 @@ func TestHandleAPIConfigAddModel_IdenticalResubmitDoesNotRewriteTheFile(t *testi
 
 	post := func() int {
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/config/models", strings.NewReader(body)))
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/config", strings.NewReader(body)))
 		return w.Code
 	}
 

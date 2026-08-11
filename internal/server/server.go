@@ -481,20 +481,24 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
 	mux.Handle("POST /api/models/pull", apiChain.ThenFunc(s.handleAPIPullModel))
 
-	// Config — live YAML management.
+	// Model config — live YAML management.
+	mux.Handle("POST /api/models/config", apiChain.ThenFunc(s.handleAPIConfigAddModel))
+	mux.Handle("GET /api/models/config/{id}", apiChain.ThenFunc(s.handleAPIConfigGetModel))
+	mux.Handle("PATCH /api/models/config/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchModel))
+	mux.Handle("DELETE /api/models/config/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
+	mux.Handle("GET /api/models/default", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
+	mux.Handle("PUT /api/models/default", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
+	mux.Handle("DELETE /api/models/default", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))
+
+	// Group config — live YAML management.
+	mux.Handle("PATCH /api/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
+
+	// System config — info, reload, validate, history, rollback.
 	mux.Handle("GET /api/config/info", apiChain.ThenFunc(s.handleAPIConfigInfo))
-	mux.Handle("POST /api/config/models", apiChain.ThenFunc(s.handleAPIConfigAddModel))
-	mux.Handle("GET /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigGetModel))
-	mux.Handle("PATCH /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchModel))
-	mux.Handle("DELETE /api/config/models/{id}", apiChain.ThenFunc(s.handleAPIConfigRemoveModel))
-	mux.Handle("PATCH /api/config/groups/{id}", apiChain.ThenFunc(s.handleAPIConfigPatchGroup))
 	mux.Handle("POST /api/config/reload", apiChain.ThenFunc(s.handleAPIConfigReload))
 	mux.Handle("POST /api/config/validate", apiChain.ThenFunc(s.handleAPIConfigValidate))
 	mux.Handle("GET /api/config/history", apiChain.ThenFunc(s.handleAPIConfigHistory))
 	mux.Handle("POST /api/config/rollback", apiChain.ThenFunc(s.handleAPIConfigRollback))
-	mux.Handle("GET /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigGetDefaultModel))
-	mux.Handle("PUT /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigSetDefaultModel))
-	mux.Handle("DELETE /api/config/default-model", apiChain.ThenFunc(s.handleAPIConfigClearDefaultModel))
 
 	// GPU tuning — detected profile + per-host override.
 	mux.Handle("GET "+api.RouteTuning, apiChain.ThenFunc(s.handleGetTuning))

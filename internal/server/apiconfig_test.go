@@ -17,7 +17,7 @@ func TestServer_ConfigGetModelDetail(t *testing.T) {
 	}}
 	s := newTestServerWithConfig(cfg, newStubRouter(nil, ""), newStubRouter(nil, ""))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config/models/m1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/models/config/m1", nil)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

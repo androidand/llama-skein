@@ -41,6 +41,16 @@ type ModelConfig struct {
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
 
+	// DraftModelPath is the path to a companion draft model GGUF file
+	// (e.g. DFlash drafter for Muse Glimmer). When non-empty, --model-draft
+	// is injected into the command if not already present.
+	DraftModelPath string `yaml:"draftModelPath"`
+
+	// ProjectorPath is the path to a companion multimodal projector GGUF file
+	// (e.g. mmproj for Muse Glimmer). When non-empty, --mmproj is injected
+	// into the command if not already present.
+	ProjectorPath string `yaml:"projectorPath"`
+
 	// Backend selects backend-specific behaviours. Empty string is treated as llamacpp.
 	Backend string `yaml:"backend"`
 
@@ -88,6 +98,14 @@ type ModelConfig struct {
 	// clients (opencode) enable reasoning-stream rendering instead of showing
 	// a frozen UI during the think phase. nil = not declared (omitted).
 	Reasoning *bool `yaml:"reasoning"`
+
+	// Vision declares the model can accept images (requires mmproj companion).
+	// nil = not declared (omitted).
+	Vision *bool `yaml:"vision"`
+
+	// ToolUse declares the model supports function/tool calling.
+	// nil = not declared (omitted).
+	ToolUse *bool `yaml:"toolUse"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

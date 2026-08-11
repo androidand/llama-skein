@@ -207,3 +207,71 @@ func TestServer_HandleListModels_Reasoning(t *testing.T) {
 		}
 	}
 }
+
+// Capabilities are auto-derived: 'completion' is always present; 'reasoning',
+// 'vision', and 'tool-use' are added when the config or companion paths declare them.
+func TestServer_HandleListModels_Capabilities(t *testing.T) {
+	yes := true
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+	s.cfg = config.Config{
+		Models: map[string]config.ModelConfig{
+			"plain":         {Name: "Plain", Cmd: "/usr/bin/llama-server"},
+			"reasoner":      {Name: "Reasoner", Reasoning: &yes, Cmd: "/usr/bin/llama-server"},
+			"vision":        {Name: "Vision", Vision: &yes, Cmd: "/usr/bin/llama-server"},
+			"vision-mmproj": {Name: "VisionMM", ProjectorPath: "/models/mmproj.gguf", Cmd: "/usr/bin/llama-server"},
+			"tooluse":       {Name: "ToolUse", ToolUse: &yes, Cmd: "/usr/bin/llama-server"},
+			"all":           {Name: "All", Reasoning: &yes, Vision: &yes, ToolUse: &yes, Cmd: "/usr/bin/llama-server"},
+		},
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var resp struct {
+		Data []apicontract.Model `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	capSet := func(caps *[]apicontract.ModelCapability) map[string]bool {
+		out := make(map[string]bool)
+		if caps != nil {
+			for _, c := range *caps {
+				out[string(c)] = true
+			}
+		}
+		return out
+	}
+
+	for _, m := range resp.Data {
+		cs := capSet(m.Capabilities)
+		switch m.Id {
+		case "plain":
+			if len(cs) != 1 || !cs["completion"] {
+				t.Errorf("plain: caps = %v, want [completion]", m.Capabilities)
+			}
+		case "reasoner":
+			if len(cs) != 2 || !cs["completion"] || !cs["reasoning"] {
+				t.Errorf("reasoner: caps = %v, want [completion,reasoning]", m.Capabilities)
+			}
+		case "vision":
+			if len(cs) != 2 || !cs["completion"] || !cs["vision"] {
+				t.Errorf("vision: caps = %v, want [completion,vision]", m.Capabilities)
+			}
+		case "vision-mmproj":
+			if len(cs) != 2 || !cs["completion"] || !cs["vision"] {
+				t.Errorf("vision-mmproj: caps = %v, want [completion,vision]", m.Capabilities)
+			}
+		case "tooluse":
+			if len(cs) != 2 || !cs["completion"] || !cs["tool-use"] {
+				t.Errorf("tooluse: caps = %v, want [completion,tool-use]", m.Capabilities)
+			}
+		case "all":
+			if len(cs) != 4 || !cs["completion"] || !cs["reasoning"] || !cs["vision"] || !cs["tool-use"] {
+				t.Errorf("all: caps = %v, want [completion,reasoning,vision,tool-use]", m.Capabilities)
+			}
+		}
+	}
+}

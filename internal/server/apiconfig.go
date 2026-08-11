@@ -90,7 +90,7 @@ func (s *Server) handleAPIConfigInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleAPIConfigGetDefaultModel implements GET /api/config/default-model.
+// handleAPIConfigGetDefaultModel implements GET /api/models/default.
 func (s *Server) handleAPIConfigGetDefaultModel(w http.ResponseWriter, r *http.Request) {
 	resp := apicontract.ConfigDefaultModelResponse{}
 	if s.cfg.DefaultModel != "" {
@@ -99,7 +99,7 @@ func (s *Server) handleAPIConfigGetDefaultModel(w http.ResponseWriter, r *http.R
 	writeJSON(w, resp)
 }
 
-// handleAPIConfigSetDefaultModel implements PUT /api/config/default-model.
+// handleAPIConfigSetDefaultModel implements PUT /api/models/default.
 func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.Request) {
 	var req apicontract.ConfigDefaultModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -128,7 +128,7 @@ func (s *Server) handleAPIConfigSetDefaultModel(w http.ResponseWriter, r *http.R
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: req.Model, Status: "updated"})
 }
 
-// handleAPIConfigClearDefaultModel implements DELETE /api/config/default-model.
+// handleAPIConfigClearDefaultModel implements DELETE /api/models/default.
 func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http.Request) {
 	if s.configFile == "" {
 		router.SendResponse(w, r, http.StatusUnprocessableEntity, "config file path not set")
@@ -144,7 +144,7 @@ func (s *Server) handleAPIConfigClearDefaultModel(w http.ResponseWriter, r *http
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: s.cfg.DefaultModel, Status: "removed"})
 }
 
-// handleAPIConfigAddModel implements POST /api/config/models.
+// handleAPIConfigAddModel implements POST /api/models/config.
 func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request) {
 	var req apicontract.ConfigModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -171,11 +171,13 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		backend = string(*req.Backend)
 	}
 	mc := config.ModelConfig{
-		Cmd:         req.Cmd,
-		Backend:     backend,
-		Name:        derefString(req.Name),
-		Description: derefString(req.Description),
-		UnloadAfter: config.MODEL_CONFIG_DEFAULT_TTL,
+		Cmd:            req.Cmd,
+		Backend:        backend,
+		Name:           derefString(req.Name),
+		Description:    derefString(req.Description),
+		UnloadAfter:    config.MODEL_CONFIG_DEFAULT_TTL,
+		DraftModelPath: derefString(req.DraftModelPath),
+		ProjectorPath:  derefString(req.MmprojPath),
 	}
 	if req.Aliases != nil {
 		mc.Aliases = *req.Aliases
@@ -199,6 +201,10 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Inject companion flags (--model-draft, --mmproj) into the command when
+	// the typed fields are set and the command does not already contain them.
+	mc.Cmd = injectCompanionFlags(mc.Cmd, mc.DraftModelPath, mc.ProjectorPath)
+
 	changed, err := s.writeModelToConfig(req.Id, &mc)
 	if err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError,
@@ -219,16 +225,33 @@ func (s *Server) handleAPIConfigAddModel(w http.ResponseWriter, r *http.Request)
 	writeJSONStatus(w, http.StatusAccepted, resp)
 }
 
-// parseMTPFlags extracts MTP-related flags from a llama.cpp command string.
-// Returns nil unless --spec-type draft-mtp is present.
+// parseFlag extracts the value of a flag from a command parts list.
+// Returns empty string if the flag is not found.
+func parseFlag(parts []string, flag string) string {
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == flag && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// parseMTPFlags extracts speculative decoding flags from a llama.cpp command
+// string. Handles both draft-mtp (MTP) and draft-dflash (DFlash drafter).
 func parseMTPFlags(parts []string) *apicontract.ConfigModelDetail_Metadata {
 	mtp := &apicontract.MtpMetadata{}
 	for i := 0; i < len(parts); i++ {
 		switch parts[i] {
 		case "--spec-type":
-			if i+1 < len(parts) && parts[i+1] == "draft-mtp" {
-				mtp.SpecType = ptrOf(apicontract.DraftMtp)
-				mtp.Enabled = ptrOf(true)
+			if i+1 < len(parts) {
+				switch parts[i+1] {
+				case "draft-mtp":
+					mtp.SpecType = ptrOf(apicontract.DraftMtp)
+					mtp.Enabled = ptrOf(true)
+				case "draft-dflash":
+					mtp.SpecType = ptrOf(apicontract.DraftDflash)
+					mtp.Enabled = ptrOf(true)
+				}
 				i++
 			}
 		case "--spec-draft-n-max":
@@ -249,11 +272,11 @@ func parseMTPFlags(parts []string) *apicontract.ConfigModelDetail_Metadata {
 	if mtp.Enabled == nil || !*mtp.Enabled {
 		return nil
 	}
-	mtp.Source = ptrOf(apicontract.MtpMetadataSourceCmd)
+	mtp.Source = ptrOf(apicontract.Cmd)
 	return &apicontract.ConfigModelDetail_Metadata{Mtp: mtp}
 }
 
-// handleAPIConfigGetModel implements GET /api/config/models/{id}.
+// handleAPIConfigGetModel implements GET /api/models/config/{id}.
 func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	realID, found := s.cfg.RealModelName(id)
@@ -314,6 +337,19 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 	detail.CpuOffloadGb = spec.CpuOffloadGB
 	detail.OverrideTensor = spec.OverrideTensor
 
+	// Parse companion flags from command into typed fields.
+	// Prefer the YAML-stored paths; fall back to parsing from cmd.
+	if mc.ProjectorPath != "" {
+		detail.MmprojPath = ptrOf(mc.ProjectorPath)
+	} else if mmproj := parseFlag(parts, "--mmproj"); mmproj != "" {
+		detail.MmprojPath = ptrOf(mmproj)
+	}
+	if mc.DraftModelPath != "" {
+		detail.DraftModelPath = ptrOf(mc.DraftModelPath)
+	} else if draft := parseFlag(parts, "--model-draft"); draft != "" {
+		detail.DraftModelPath = ptrOf(draft)
+	}
+
 	// Parse MTP flags for llama.cpp models.
 	if mc.Backend == "llamacpp" {
 		mtp := parseMTPFlags(parts)
@@ -325,7 +361,7 @@ func (s *Server) handleAPIConfigGetModel(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, detail)
 }
 
-// handleAPIConfigPatchModel implements PATCH /api/config/models/{id}.
+// handleAPIConfigPatchModel implements PATCH /api/models/config/{id}.
 func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	realID, found := s.cfg.RealModelName(id)
@@ -362,7 +398,7 @@ func (s *Server) handleAPIConfigPatchModel(w http.ResponseWriter, r *http.Reques
 	writeJSONStatus(w, http.StatusAccepted, resp)
 }
 
-// handleAPIConfigRemoveModel implements DELETE /api/config/models/{id}.
+// handleAPIConfigRemoveModel implements DELETE /api/models/config/{id}.
 func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	realID, found := s.cfg.RealModelName(id)
@@ -392,7 +428,7 @@ func (s *Server) handleAPIConfigRemoveModel(w http.ResponseWriter, r *http.Reque
 	writeJSONStatus(w, http.StatusAccepted, apicontract.ConfigModelResponse{Id: realID, Status: "removed"})
 }
 
-// handleAPIConfigPatchGroup implements PATCH /api/config/groups/{id}.
+// handleAPIConfigPatchGroup implements PATCH /api/groups/{id}.
 func (s *Server) handleAPIConfigPatchGroup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, found := s.cfg.Groups[id]; !found {
@@ -713,6 +749,21 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 	if req.Ttl != nil {
 		yamlMapSet(entryNode, "ttl", yamlInt(*req.Ttl))
 	}
+	// Typed companion paths: write to YAML and inject flags into cmd.
+	if req.MmprojPath != nil {
+		if *req.MmprojPath == "" {
+			yamlMapDelete(entryNode, "projectorPath")
+		} else {
+			yamlMapSet(entryNode, "projectorPath", yamlScalar(*req.MmprojPath))
+		}
+	}
+	if req.DraftModelPath != nil {
+		if *req.DraftModelPath == "" {
+			yamlMapDelete(entryNode, "draftModelPath")
+		} else {
+			yamlMapSet(entryNode, "draftModelPath", yamlScalar(*req.DraftModelPath))
+		}
+	}
 	// Generated field names: ConcurrencyLimitCamel maps the camelCase JSON key,
 	// ConcurrencyLimit maps the snake_case key.
 	if req.ConcurrencyLimitCamel != nil {
@@ -796,6 +847,30 @@ func (s *Server) patchModelInConfig(id string, req apicontract.ConfigModelPatchR
 			if err != nil {
 				return warnings, false, err
 			}
+			yamlMapSet(entryNode, "cmd", yamlScalar(patched))
+		}
+	}
+
+	// Inject companion flags into the command when typed fields are set.
+	if req.MmprojPath != nil || req.DraftModelPath != nil {
+		cmd := ""
+		if n := yamlMapGet(entryNode, "cmd"); n != nil {
+			cmd = n.Value
+		}
+		draftPath := ""
+		if req.DraftModelPath != nil {
+			draftPath = *req.DraftModelPath
+		} else if n := yamlMapGet(entryNode, "draftModelPath"); n != nil {
+			draftPath = n.Value
+		}
+		projectorPath := ""
+		if req.MmprojPath != nil {
+			projectorPath = *req.MmprojPath
+		} else if n := yamlMapGet(entryNode, "projectorPath"); n != nil {
+			projectorPath = n.Value
+		}
+		patched := injectCompanionFlags(cmd, draftPath, projectorPath)
+		if patched != cmd {
 			yamlMapSet(entryNode, "cmd", yamlScalar(patched))
 		}
 	}

@@ -153,6 +153,8 @@ func commandFlagString(args []string, names ...string) (string, bool) {
 	return "", false
 }
 
+const mib = 1024 * 1024
+
 type cachedGGUF struct {
 	mtime time.Time
 	g     *gguf.GGUF
@@ -278,6 +280,18 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 	}
 	p.HostBudgetMB = s.hostBudgetMB()
 	p.VRAMTotalMB, p.VRAMFreeMB = s.vramMB()
+	// Companion artifacts (DFlash drafter, mmproj projector) reside on GPU
+	// alongside the main model. Populate from the resolved file sizes.
+	if mc.DraftModelPath != "" {
+		if info, err := os.Stat(mc.DraftModelPath); err == nil {
+			p.DraftMB = int(info.Size() / mib)
+		}
+	}
+	if mc.ProjectorPath != "" {
+		if info, err := os.Stat(mc.ProjectorPath); err == nil {
+			p.ProjectorMB = int(info.Size() / mib)
+		}
+	}
 	if modelGetsWholeGPU(s.cfg, realName) {
 		// This model belongs to an exclusive swap group: loading it evicts
 		// every other model on the host (router.groupPlanner.EvictionFor), so

@@ -27,7 +27,7 @@ func newOffloadTestServer(t *testing.T, yaml string, cfg config.Config) (*Server
 
 func patchModel(t *testing.T, s *Server, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPatch, "/api/config/models/"+id, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/config/"+id, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, req)

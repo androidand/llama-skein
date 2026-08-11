@@ -145,7 +145,8 @@ func (db *Database) ApplyToConfig(cfg config.Config, detectedGfx string) config.
 		changed := false
 		if applyFlags {
 			isMTP := IsMTPModel(mc.Cmd, metadataMTPEnabled(mc.Metadata))
-			tuned := ApplyProfile(mc.Cmd, eff.Profile, isMTP, eff.ExtraArgs)
+			isDFlash := mc.DraftModelPath != ""
+			tuned := ApplyProfile(mc.Cmd, eff.Profile, isMTP, isDFlash, eff.ExtraArgs)
 			if tuned != mc.Cmd {
 				mc.TuningOriginalCmd = mc.Cmd
 				mc.Cmd = tuned

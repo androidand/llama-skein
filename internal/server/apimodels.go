@@ -257,7 +257,7 @@ func (s *Server) handleAPIDeleteModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// task 5.3: "removes config in one explicit operation" — reuses the
-	// same config-removal path DELETE /api/config/models/{id} already uses
+	// same config-removal path DELETE /api/models/config/{id} already uses
 	// (apiconfig.go's removeModelFromConfig) rather than duplicating it.
 	// Best-effort when configFile isn't set: the files are already gone by
 	// this point, so that real progress is reported rather than discarded

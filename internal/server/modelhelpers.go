@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,56 +319,41 @@ func parsePositiveInt(value string) (int, bool) {
 	return parsed, true
 }
 
-// buildCmd constructs a llama-server command for modelPath.
-// If extraFlags is non-empty it is appended after the --model argument.
-// Otherwise the first existing model's cmd is used as a structural template.
+// buildCmd constructs a fresh llama-server command for a newly installed
+// model path. It always emits a minimal command with the ${PORT} placeholder
+// and does NOT inherit flags from any existing model — an auto-installed
+// model must let llama.cpp's fit engine size ctx/offload/placement to the
+// host's actual VRAM, not silently copy whatever the first configured model
+// happened to use (previously this produced deepseek's small-VRAM hybrid
+// flags like --n-cpu-moe 25 --ctx-size 32768 on every model, under-using
+// large cards). Callers may append explicit flags via extraFlags, which are
+// passed through untouched after the --model argument.
 func (s *Server) buildCmd(modelPath, extraFlags string) string {
+	cmd := "llama-server --port ${PORT} --model " + modelPath
 	if extraFlags != "" {
-		return "llama-server --port ${PORT} --model " + modelPath + " " + strings.TrimSpace(extraFlags)
+		cmd += " " + strings.TrimSpace(extraFlags)
 	}
-	ids := make([]string, 0, len(s.cfg.Models))
-	for id := range s.cfg.Models {
-		ids = append(ids, id)
+	return cmd
+}
+
+// normalizeCmdPort rewrites an already-macro-expanded --port <number> back to
+// the ${PORT} placeholder. registerInstalledModel/registerPulledModel build
+// the cmd from the in-memory config (macros already substituted), then pair it
+// with proxy http://127.0.0.1:${PORT}; if the cmd kept a literal port, config
+// validation ("proxy uses ${PORT} but cmd does not") rejects the whole reload
+// and the newly installed model never activates. Normalizing to ${PORT} keeps
+// cmd/proxy consistent and lets Config re-allocate a unique port.
+var (
+	portFlagRe  = regexp.MustCompile(`(--port\s+)\d+`)
+	portMacroRe = regexp.MustCompile(`\$\{PORT\}`)
+)
+
+func normalizeCmdPort(cmd string) string {
+	if portMacroRe.MatchString(cmd) {
+		return cmd
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		mc := s.cfg.Models[id]
-		parts, err := config.SanitizeCommand(mc.Cmd)
-		if err != nil || len(parts) == 0 {
-			continue
-		}
-		var rebuilt []string
-		pathInserted := false
-		skip := false
-		for _, p := range parts {
-			if skip {
-				rebuilt = append(rebuilt, modelPath)
-				pathInserted = true
-				skip = false
-				continue
-			}
-			if p == "-m" || p == "--model" {
-				rebuilt = append(rebuilt, p)
-				skip = true
-				continue
-			}
-			if strings.HasPrefix(p, "--model=") {
-				rebuilt = append(rebuilt, "--model="+modelPath)
-				pathInserted = true
-				continue
-			}
-			rebuilt = append(rebuilt, p)
-		}
-		if pathInserted {
-			return strings.Join(rebuilt, " ")
-		}
-	}
-	// No -ngl in the default: current llama.cpp defaults --n-gpu-layers to
-	// "auto" and fits unset arguments to device memory (--fit, default on).
-	// Pinning 99 here disabled both that and llama-skein's own automatic
-	// placement for every newly registered model — exactly the models most
-	// likely to need a hybrid plan.
-	return "llama-server --port ${PORT} --model " + modelPath
+	literal := "--port " + "${PORT}"
+	return portFlagRe.ReplaceAllStringFunc(cmd, func(string) string { return literal })
 }
 
 // ModelDetails holds inferred model family/quantization/size derived from

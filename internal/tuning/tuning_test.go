@@ -114,18 +114,18 @@ func TestLoadProfiles_MissingUserFileIsNotError(t *testing.T) {
 func TestApplyProfile_InjectsMissingRespectsExplicit(t *testing.T) {
 	p := Profile{Flags: Flags{FlashAttn: boolp(true), Parallel: intp(1)}}
 
-	got := ApplyProfile("llama-server -m x.gguf -ngl 99", p, false, nil)
+	got := ApplyProfile("llama-server -m x.gguf -ngl 99", p, false, false, nil)
 	if !strings.Contains(got, "--flash-attn on") || !strings.Contains(got, "--parallel 1") {
 		t.Errorf("expected fa+parallel injected, got %q", got)
 	}
 
 	// Explicit --parallel 4 must survive; fa still injected.
-	got = ApplyProfile("llama-server --parallel 4 -m x.gguf", p, false, nil)
+	got = ApplyProfile("llama-server --parallel 4 -m x.gguf", p, false, false, nil)
 	if !strings.Contains(got, "--parallel 4") || strings.Contains(got, "--parallel 1") {
 		t.Errorf("explicit --parallel 4 must win, got %q", got)
 	}
 	// -fa alias counts as present.
-	got = ApplyProfile("llama-server -fa on -m x.gguf", p, false, nil)
+	got = ApplyProfile("llama-server -fa on -m x.gguf", p, false, false, nil)
 	if strings.Contains(got, "--flash-attn") {
 		t.Errorf("-fa alias should suppress --flash-attn, got %q", got)
 	}
@@ -136,13 +136,28 @@ func TestApplyProfile_MTPOnlyForMTPModels(t *testing.T) {
 		Flags: Flags{FlashAttn: boolp(true), Parallel: intp(1)},
 		MTP:   &MTP{ApplyToMTPModels: true, DraftNMax: 3, DraftPMin: 0.5},
 	}
-	nonMTP := ApplyProfile("llama-server -m plain.gguf", p, false, nil)
+	nonMTP := ApplyProfile("llama-server -m plain.gguf", p, false, false, nil)
 	if strings.Contains(nonMTP, "draft-mtp") {
 		t.Errorf("non-MTP model must not get spec flags, got %q", nonMTP)
 	}
-	mtp := ApplyProfile("llama-server -m x.gguf", p, true, nil)
+	mtp := ApplyProfile("llama-server -m x.gguf", p, true, false, nil)
 	if !strings.Contains(mtp, "--spec-type draft-mtp") || !strings.Contains(mtp, "--spec-draft-n-max 3") || !strings.Contains(mtp, "--draft-p-min 0.5") {
 		t.Errorf("MTP model should get spec flags, got %q", mtp)
+	}
+}
+
+func TestApplyProfile_DFlashOnlyForDFlashModels(t *testing.T) {
+	p := Profile{
+		Flags:  Flags{FlashAttn: boolp(true), Parallel: intp(1)},
+		DFlash: &DFlash{ApplyToDFlashModels: true, DraftNMax: 2, DraftPMin: 0.4},
+	}
+	nonDFlash := ApplyProfile("llama-server -m plain.gguf", p, false, false, nil)
+	if strings.Contains(nonDFlash, "draft-dflash") {
+		t.Errorf("non-DFlash model must not get spec flags, got %q", nonDFlash)
+	}
+	dflash := ApplyProfile("llama-server -m x.gguf", p, false, true, nil)
+	if !strings.Contains(dflash, "--spec-type draft-dflash") || !strings.Contains(dflash, "--spec-draft-n-max 2") || !strings.Contains(dflash, "--draft-p-min 0.4") {
+		t.Errorf("DFlash model should get spec flags, got %q", dflash)
 	}
 }
 
@@ -151,8 +166,8 @@ func TestApplyProfile_Idempotent(t *testing.T) {
 		Flags: Flags{FlashAttn: boolp(true), Parallel: intp(1)},
 		MTP:   &MTP{ApplyToMTPModels: true, DraftNMax: 3, DraftPMin: 0.5},
 	}
-	once := ApplyProfile("llama-server -m x.gguf", p, true, []string{"-ub", "2048"})
-	twice := ApplyProfile(once, p, true, []string{"-ub", "2048"})
+	once := ApplyProfile("llama-server -m x.gguf", p, true, false, []string{"-ub", "2048"})
+	twice := ApplyProfile(once, p, true, false, []string{"-ub", "2048"})
 	if once != twice {
 		t.Errorf("not idempotent:\n once=%q\n twice=%q", once, twice)
 	}

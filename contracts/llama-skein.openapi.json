@@ -304,9 +304,9 @@
         }
       }
     },
-    "/api/config/models": {
+    "/api/models/config": {
       "post": {
-        "operationId": "addConfigModel",
+        "operationId": "addModelConfig",
         "summary": "Adds or replaces a model entry in the on-disk config YAML and triggers reload.",
         "requestBody": {
           "required": true,
@@ -341,9 +341,9 @@
         }
       }
     },
-    "/api/config/models/{id}": {
+    "/api/models/config/{id}": {
       "get": {
-        "operationId": "getConfigModel",
+        "operationId": "getModelConfig",
         "summary": "Returns the configuration and current runtime state for a specific model.",
         "parameters": [
           {
@@ -373,7 +373,7 @@
         }
       },
       "patch": {
-        "operationId": "patchConfigModel",
+        "operationId": "patchModelConfig",
         "summary": "Updates selected config fields and common llama-server flags without requiring callers to reconstruct the whole command string.",
         "parameters": [
           {
@@ -422,7 +422,7 @@
         }
       },
       "delete": {
-        "operationId": "removeConfigModel",
+        "operationId": "removeModelConfig",
         "summary": "Removes the model entry from the config YAML without touching the file on disk.",
         "parameters": [
           {
@@ -458,9 +458,9 @@
         }
       }
     },
-    "/api/config/groups/{id}": {
+    "/api/groups/{id}": {
       "patch": {
-        "operationId": "patchConfigGroup",
+        "operationId": "patchGroup",
         "summary": "Updates selected group config fields (autoUnload, exclusive, swap) without requiring callers to reconstruct the whole group configuration.",
         "parameters": [
           {
@@ -540,9 +540,9 @@
         }
       }
     },
-    "/api/config/default-model": {
+    "/api/models/default": {
       "get": {
-        "operationId": "getDefaultModel",
+        "operationId": "getModelDefault",
         "summary": "Returns the configured default model used when a request omits the 'model' field.",
         "responses": {
           "200": {
@@ -558,7 +558,7 @@
         }
       },
       "put": {
-        "operationId": "setDefaultModel",
+        "operationId": "setModelDefault",
         "summary": "Sets the default model in the on-disk config YAML and triggers reload. The model must be a configured model ID or alias.",
         "requestBody": {
           "required": true,
@@ -596,7 +596,7 @@
         }
       },
       "delete": {
-        "operationId": "clearDefaultModel",
+        "operationId": "clearModelDefault",
         "summary": "Removes the default model from the on-disk config YAML and triggers reload. Idempotent.",
         "responses": {
           "202": {
@@ -1614,6 +1614,13 @@
             "type": "boolean",
             "description": "True if the model emits reasoning/thinking output (reasoning_content) before its answer. Resolved from the model config; omitted when not declared. Clients use it to enable reasoning-stream rendering."
           },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "description": "What this model can do. Follows Ollama's capabilities pattern. Derived from the model config; empty when not declared."
+          },
           "last_error": {
             "$ref": "#/components/schemas/LastError"
           },
@@ -1725,6 +1732,21 @@
           "ttl": {
             "type": "integer"
           },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "description": "What this model can do. Follows Ollama's capabilities pattern. Used for model selection and UI hints instead of model-name-specific detection."
+          },
+          "mmproj_path": {
+            "type": "string",
+            "description": "Path to the multimodal vision/audio projector GGUF (llama.cpp --mmproj). When set, the engine appends --mmproj <path> to the launch command. Typed alternative to embedding it in cmd."
+          },
+          "draft_model_path": {
+            "type": "string",
+            "description": "Path to the draft model GGUF for speculative decoding (llama.cpp --model-draft). When set, the engine appends --model-draft <path> to the launch command. Typed alternative to embedding it in cmd."
+          },
           "n_cpu_moe": {
             "type": "integer",
             "description": "Number of leading layers whose MoE expert tensors are offloaded to CPU/RAM (llama.cpp --n-cpu-moe). llamacpp only."
@@ -1771,6 +1793,21 @@
           },
           "ttl": {
             "type": "integer"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "description": "What this model can do. Replaces the existing capabilities list."
+          },
+          "mmproj_path": {
+            "type": "string",
+            "description": "Path to the multimodal vision/audio projector GGUF (llama.cpp --mmproj). Empty removes the flag."
+          },
+          "draft_model_path": {
+            "type": "string",
+            "description": "Path to the draft model GGUF for speculative decoding (llama.cpp --model-draft). Empty removes the flag."
           },
           "concurrencyLimit": {
             "type": "integer",
@@ -1919,6 +1956,21 @@
           "concurrencyLimit": {
             "type": "integer"
           },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "description": "What this model can do. Follows Ollama's capabilities pattern."
+          },
+          "mmproj_path": {
+            "type": "string",
+            "description": "Path to the multimodal vision/audio projector GGUF (llama.cpp --mmproj)."
+          },
+          "draft_model_path": {
+            "type": "string",
+            "description": "Path to the draft model GGUF for speculative decoding (llama.cpp --model-draft)."
+          },
           "ctx_size": {
             "type": "string"
           },
@@ -2024,13 +2076,14 @@
             "type": "boolean",
             "description": "Whether MTP is enabled for this model. When true, the model command must include --spec-type draft-mtp and a draft model."
           },
-          "spec_type": {
-            "type": "string",
-            "enum": [
-              "draft-mtp"
-            ],
-            "description": "The spec type for draft models. For MTP-enabled models, this is always 'draft-mtp'."
-          },
+           "spec_type": {
+             "type": "string",
+             "enum": [
+               "draft-mtp",
+               "draft-dflash"
+             ],
+             "description": "The spec type for draft models. 'draft-mtp' for MTP models, 'draft-dflash' for DFlash drafter models."
+           },
           "draft_n_max": {
             "type": "integer",
             "description": "Maximum draft N value (number of prompt tokens per generated token). Recommended starting point is 2 for most models."
@@ -3128,17 +3181,28 @@
         ],
         "description": "Inference backend type. Controls backend-specific behaviours (e.g. slot cancellation is llamacpp-only). mlx targets Apple Silicon; vllm targets NVIDIA (CUDA); AMD ROCm requires building vllm from source. Default: llamacpp. Extracted as a shared schema (like FitLevel — see the fit-hypothetical-models change) because RuntimeInfo, RuntimeHealth, Model, ConfigModelRequest, ConfigModelPatchRequest, OffloadRecommendation, ModelFit, and ModelRegistration all share this exact value set; leaving it duplicated inline let oapi-codegen's collision-avoidance dedup rename generated constants unpredictably whenever a new inline occurrence was added."
       },
-      "ArtifactRole": {
+       "ArtifactRole": {
         "type": "string",
         "enum": [
           "weights",
           "projector",
+          "draft",
           "tokenizer",
           "config",
           "other"
         ],
-        "description": "What an install artifact is for. \"projector\" is a multimodal vision/audio projection file (llama.cpp mmproj); \"other\" covers auxiliary files (e.g. a chat template) that are not weights, a projector, a tokenizer, or config."
-      },
+        "description": "What an install artifact is for. \"projector\" is a multimodal vision/audio projection file (llama.cpp mmproj); \"draft\" is a companion draft model for speculative decoding (e.g. DFlash drafter for Muse Glimmer, loaded via --model-draft); \"other\" covers auxiliary files (e.g. a chat template) that are not weights, a projector, a tokenizer, or config."
+       },
+       "ModelCapability": {
+        "type": "string",
+        "enum": [
+          "completion",
+          "vision",
+          "reasoning",
+          "tool-use"
+        ],
+        "description": "What the model can do. Follows Ollama's capabilities pattern. 'completion' = text generation; 'vision' = accepts images (requires mmproj companion); 'reasoning' = emits reasoning/thinking output; 'tool-use' = supports function/tool calling."
+       },
       "InstallArtifact": {
         "type": "object",
         "required": [
@@ -3187,6 +3251,27 @@
             ],
             "description": "Inference backend the registered model will run under. Matches ConfigModelRequest.backend's vocabulary — installation registers through the same config path load/unload already use, not a separate mechanism."
           },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "description": "What this model can do. Derived from the install plan's artifacts and HF metadata."
+          },
+          "mmproj_artifact_role": {
+            "type": "string",
+            "enum": [
+              "projector"
+            ],
+            "description": "When present, the engine maps the artifact with this role to --mmproj at registration time. Fixed value 'projector'; included for clarity, not as a free-form field."
+          },
+          "draft_artifact_role": {
+            "type": "string",
+            "enum": [
+              "draft"
+            ],
+            "description": "When present, the engine maps the artifact with this role to --model-draft at registration time. Fixed value 'draft'; included for clarity, not as a free-form field."
+          },
           "flags": {
             "type": "array",
             "items": {
@@ -3206,7 +3291,6 @@
         "required": [
           "source_repository",
           "source_revision",
-          "artifacts",
           "registration"
         ],
         "properties": {
@@ -3220,10 +3304,19 @@
           },
           "artifacts": {
             "type": "array",
-            "minItems": 1,
+            "description": "Artifacts to download. When empty or omitted with auto_discover_companions=true, the server discovers GGUF files from the repository (main weights + mmproj/dflash companions).",
             "items": {
               "$ref": "#/components/schemas/InstallArtifact"
             }
+          },
+          "auto_discover_companions": {
+            "type": "boolean",
+            "description": "When true and artifacts is empty, query the HuggingFace API to discover companion GGUFs (mmproj-*.gguf, dflash-*.gguf) alongside the main weights. Defaults to false for backward compatibility.",
+            "default": false
+          },
+          "weight_filter": {
+            "type": "string",
+            "description": "When auto_discover_companions is true and the repository contains multiple GGUF weight variations (multiple quantizations), only the weight file whose path contains this substring is selected as the main weights artifact; the other weight variants are excluded from the plan. Example: \"Q8_0\" or \"kquant-dynamic\". Empty selects every GGUF that is not a recognized companion."
           },
           "registration": {
             "$ref": "#/components/schemas/ModelRegistration"

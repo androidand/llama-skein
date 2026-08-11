@@ -154,6 +154,13 @@ type Params struct {
 	// weights (cgroup-aware available minus reserves). 0 = unknown: host-side
 	// feasibility is then not checked (fail-open, matching VRAM semantics).
 	HostBudgetMB int
+
+	// Companion artifact VRAM (in bytes). Non-zero when the model package
+	// includes a draft model (--model-draft) or multimodal projector (--mmproj)
+	// that reside on GPU alongside the main model. These are added to the
+	// VRAM budget before computing KV cache headroom.
+	DraftMB     int // draft model weights (e.g. DFlash drafter)
+	ProjectorMB int // multimodal projector weights (e.g. mmproj)
 }
 
 // Result is the computed fit. It mirrors the apicontract.ModelFit fields the
@@ -469,7 +476,11 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	if g.IsMTP {
 		usableMB *= mtpExtraSafetyFrac
 	}
-	kvBudgetMB := usableMB - float64(gpuWeightMB)*(1+computeOverheadFrac)
+	// Companion artifacts (DFlash drafter, mmproj projector) reside on GPU
+	// alongside the main model. Subtract their VRAM before computing KV
+	// cache headroom.
+	companionMB := p.DraftMB + p.ProjectorMB
+	kvBudgetMB := usableMB - float64(gpuWeightMB+companionMB)*(1+computeOverheadFrac)
 	vramMaxCtx := 0
 	if kvBudgetMB > 0 {
 		vramMaxCtx = int(kvBudgetMB * mib / float64(kvPerTok))
@@ -510,10 +521,10 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	}
 	res.MaxSafeCtx = safe
 	res.KVMBAtMaxSafeCtx = int(kvPerTok * int64(safe) / mib)
-	// VRAM requirement covers only the GPU-resident share; KV stays on GPU
-	// (llama.cpp --kv-offload defaults on) and the compute overhead follows
-	// the GPU-resident weights.
-	res.VRAMRequiredMB = gpuWeightMB + int(float64(gpuWeightMB)*computeOverheadFrac) + int(kvPerTok*int64(hardCtx)/mib)
+	// VRAM requirement covers the GPU-resident share + companion artifacts.
+	// KV stays on GPU (llama.cpp --kv-offload defaults on) and the compute
+	// overhead follows the total GPU-resident weights.
+	res.VRAMRequiredMB = gpuWeightMB + companionMB + int(float64(gpuWeightMB+companionMB)*computeOverheadFrac) + int(kvPerTok*int64(hardCtx)/mib)
 
 	// Fit verdict from headroom of the hard ctx against VRAM.
 	switch {

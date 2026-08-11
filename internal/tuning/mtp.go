@@ -39,3 +39,16 @@ func modelPaths(cmd string) []string {
 	}
 	return out
 }
+
+// HasDrafter reports whether a command uses a separate drafter model via
+// --model-draft (DFlash-style speculative decoding). This is distinct from
+// IsMTPModel which checks for self-speculative MTP models.
+func HasDrafter(cmd string) bool {
+	tokens := strings.Fields(cmd)
+	for _, tok := range tokens {
+		if tok == "--model-draft" {
+			return true
+		}
+	}
+	return false
+}

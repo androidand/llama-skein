@@ -30,9 +30,10 @@ func hasFlag(tokens []string, canonical string) bool {
 // ApplyProfile appends the profile's flags to cmd, adding only flags the
 // command does not already set (an explicit flag always wins). MTP flags are
 // added only when isMTP is true and the profile enables MTP for MTP models.
-// extraArgs (from a user override) are appended under the same missing-flag
-// rule. The function is pure and idempotent.
-func ApplyProfile(cmd string, p Profile, isMTP bool, extraArgs []string) string {
+// DFlash flags are added only when isDFlash is true and the profile enables
+// DFlash for DFlash models. extraArgs (from a user override) are appended
+// under the same missing-flag rule. The function is pure and idempotent.
+func ApplyProfile(cmd string, p Profile, isMTP bool, isDFlash bool, extraArgs []string) string {
 	tokens := strings.Fields(cmd)
 	var add []string
 
@@ -53,6 +54,15 @@ func ApplyProfile(cmd string, p Profile, isMTP bool, extraArgs []string) string 
 		}
 		if p.MTP.DraftPMin > 0 {
 			add = append(add, "--draft-p-min", ftoa(p.MTP.DraftPMin))
+		}
+	}
+	if isDFlash && p.DFlash != nil && p.DFlash.ApplyToDFlashModels && !hasFlag(tokens, "--spec-type") {
+		add = append(add, "--spec-type", "draft-dflash")
+		if p.DFlash.DraftNMax > 0 {
+			add = append(add, "--spec-draft-n-max", itoa(p.DFlash.DraftNMax))
+		}
+		if p.DFlash.DraftPMin > 0 {
+			add = append(add, "--draft-p-min", ftoa(p.DFlash.DraftPMin))
 		}
 	}
 

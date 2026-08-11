@@ -722,3 +722,14 @@ func primaryWeightsPath(op *Operation, resolved []resolvedArtifact) string {
 	}
 	return ""
 }
+
+// companionPath returns the resolved destination path for the first artifact
+// matching the given role, or "" if none exists.
+func companionPath(op *Operation, resolved []resolvedArtifact, role ArtifactRole) string {
+	for i, a := range op.Artifacts {
+		if a.Role == role {
+			return resolved[i].dest
+		}
+	}
+	return ""
+}

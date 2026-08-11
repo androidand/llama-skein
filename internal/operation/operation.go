@@ -74,6 +74,7 @@ type ArtifactRole string
 const (
 	ArtifactRoleWeights   ArtifactRole = "weights"
 	ArtifactRoleProjector ArtifactRole = "projector"
+	ArtifactRoleDraft     ArtifactRole = "draft"
 	ArtifactRoleTokenizer ArtifactRole = "tokenizer"
 	ArtifactRoleConfig    ArtifactRole = "config"
 	ArtifactRoleOther     ArtifactRole = "other"

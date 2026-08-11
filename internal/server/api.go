@@ -72,6 +72,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if sz := s.modelSizeBytes(id); sz > 0 {
 			rec.SizeBytes = &sz
 		}
+		if caps := deriveCapabilities(mc); len(caps) > 0 {
+			rec.Capabilities = &caps
+		}
 		return rec
 	}
 
@@ -122,6 +125,24 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+// deriveCapabilities derives model capabilities from the model config.
+// 'completion' is always present (text generation). 'reasoning' is derived from
+// the Reasoning field. 'vision' is derived from the Vision field or from the
+// presence of a projector path. 'tool-use' is derived from the ToolUse field.
+func deriveCapabilities(mc config.ModelConfig) []apicontract.ModelCapability {
+	caps := []apicontract.ModelCapability{apicontract.Completion}
+	if mc.Reasoning != nil && *mc.Reasoning {
+		caps = append(caps, apicontract.Reasoning)
+	}
+	if (mc.Vision != nil && *mc.Vision) || mc.ProjectorPath != "" {
+		caps = append(caps, apicontract.Vision)
+	}
+	if mc.ToolUse != nil && *mc.ToolUse {
+		caps = append(caps, apicontract.ToolUse)
+	}
+	return caps
 }
 
 // runningModel is one entry in the /running listing.
