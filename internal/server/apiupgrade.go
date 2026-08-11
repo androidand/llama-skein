@@ -490,6 +490,14 @@ func (s *Server) upgradePrebuilt(w http.ResponseWriter, r *http.Request, ref str
 	if err := copySharedLibs(extractDir, libDir); err != nil {
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
 	}
+	if err := copyRuntimeDataDirs(extractDir, libDir); err != nil {
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("runtime kernel data copy partial: %v", err))
+	}
+	if err := verifyRuntimeDataDirs(libDir); err != nil {
+		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("incomplete ROCm bundle — restoring backup: %v", err))
+		s.restoreBackup(w, backupPath, serverPath)
+		return fmt.Errorf("incomplete ROCm bundle: %w", err)
+	}
 
 	// Install the companion tools llama-skein itself calls. llama-fit-params
 	// is the placement preflight (it prints the engine's own fitted arguments
@@ -650,6 +658,16 @@ func (s *Server) upgradeFromSource(w http.ResponseWriter, r *http.Request, ref s
 	if err := copySharedLibs(buildDir, libDir); err != nil {
 		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("shared lib copy partial: %v", err))
 	}
+	if err := copyRuntimeDataDirs(buildDir, libDir); err != nil {
+		s.sendUpgradeEvent(w, "warn", fmt.Sprintf("runtime kernel data copy partial: %v", err))
+	}
+	// A source build ships no kernel tree, but a librocblas.so left by an earlier
+	// prebuilt install still shadows the host one via LD_LIBRARY_PATH.
+	if err := verifyRuntimeDataDirs(libDir); err != nil {
+		s.sendUpgradeEvent(w, "rollback", fmt.Sprintf("incomplete ROCm bundle — restoring backup: %v", err))
+		s.restoreBackup(w, backupPath, serverPath)
+		return fmt.Errorf("incomplete ROCm bundle: %w", err)
+	}
 
 	// Unload before swapping: a running llama-server keeps its OLD binary's
 	// code mapped until it exits, so an upgrade that doesn't unload first
@@ -771,6 +789,74 @@ func (s *Server) detectROCmRoot() string {
 		return filepath.Dir(filepath.Dir(p))
 	}
 	return ""
+}
+
+// runtimeDataDirs hold the Tensile kernels that rocBLAS and hipBLASLt locate
+// relative to their own .so. copySharedLibs matches only .so files, so without
+// these trees the bundle loads and health-checks but aborts on the first
+// batched prefill — the only path that reaches a GEMM.
+var runtimeDataDirs = []string{"rocblas", "hipblaslt"}
+
+// copyRuntimeDataDirs installs the runtimeDataDirs trees, preserving layout.
+// Trees the archive doesn't carry (CPU/CUDA bundles) are skipped.
+func copyRuntimeDataDirs(srcDir, dstDir string) error {
+	var errs []string
+	for _, name := range runtimeDataDirs {
+		root := filepath.Join(srcDir, name)
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			rel, relErr := filepath.Rel(srcDir, path)
+			if relErr != nil {
+				return nil
+			}
+			target := filepath.Join(dstDir, rel)
+			if d.IsDir() {
+				if mkErr := os.MkdirAll(target, 0o755); mkErr != nil {
+					errs = append(errs, mkErr.Error())
+				}
+				return nil
+			}
+			if copyErr := copyFile(path, target); copyErr != nil {
+				errs = append(errs, copyErr.Error())
+			}
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// verifyRuntimeDataDirs rejects a lib*.so installed without its kernel tree.
+// The smoke test runs `llama-server --version`, which never reaches a GEMM, so
+// only a layout check catches this before it ships.
+func verifyRuntimeDataDirs(libDir string) error {
+	var missing []string
+	for _, name := range runtimeDataDirs {
+		matches, _ := filepath.Glob(filepath.Join(libDir, "lib"+name+".so*"))
+		if len(matches) == 0 {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(libDir, name, "library"))
+		if err != nil || len(entries) == 0 {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("installed lib%s.so without its %s/library kernel data; "+
+			"batched prompt processing would abort at runtime",
+			strings.Join(missing, ".so, lib"), strings.Join(missing, "/library, "))
+	}
+	return nil
 }
 
 // copySharedLibs walks srcDir recursively and copies every .so file into dstDir.
