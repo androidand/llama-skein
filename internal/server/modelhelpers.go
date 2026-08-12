@@ -405,7 +405,7 @@ func inferModelDetails(id, filename string) ModelDetails {
 	return d
 }
 
-// addFileMeta adds file_size and file_modified_at to a model record.
+// addFileMeta adds size_bytes and file_modified_at to a model record.
 func addFileMeta(record map[string]any, mc config.ModelConfig) {
 	p := parseModelPath(mc.Cmd)
 	if p == "" {
@@ -415,6 +415,6 @@ func addFileMeta(record map[string]any, mc config.ModelConfig) {
 	if err != nil {
 		return
 	}
-	record["file_size"] = fi.Size()
+	record["size_bytes"] = fi.Size()
 	record["file_modified_at"] = fi.ModTime().UTC().Format(time.RFC3339)
 }
