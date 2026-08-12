@@ -13,8 +13,10 @@ Fork extensions over upstream:
 - `GET /api/storage` — model dir disk usage
 - `POST /api/models/pull` — HuggingFace model download with streaming progress
 - `DELETE /api/models/:id` — unload + delete weight file
-- `PATCH /api/config/models/:id` — live model config patch (ctx-size, n_gpu_layers)
-- `POST/DELETE /api/config/models` — add/remove models at runtime
+- `PATCH /api/models/config/:id` — live model config patch (ctx-size, n_gpu_layers)
+- `POST /api/models/config`, `GET/DELETE /api/models/config/:id` — manage models at runtime
+- `GET/POST/DELETE /api/models/default` — the default model
+- `POST /api/models/operations` — install with companion discovery, streamed progress
 - `GET /api/config/info` — config path + file existence
 - `GET /api/fit` — fit report: how every configured model fits the host VRAM
 - `GET /api/fit/{model}` — per-model fit with max_safe_ctx, VRAM budget, under_configured flag

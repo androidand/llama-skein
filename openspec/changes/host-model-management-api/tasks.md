@@ -941,10 +941,18 @@ what sections 3, 4, and 5 have each turned up at least once.
 
 ## 6. Client migration
 
-- [ ] 6.1 Regenerate opencode-skein's llama-skein client from the completed
-  OpenAPI contract.
-- [ ] 6.2 Migrate opencode-skein inventory and lifecycle callers to generated
-  methods and operation IDs.
+- [x] 6.1 Regenerate opencode-skein's llama-skein client from the completed
+  OpenAPI contract. The documented command could not run: package.json
+  referenced `script/build-llama-skein-client.ts`, which `.gitignore`'s
+  `script/build-*.ts` had silently swallowed, so the file was never committed.
+  Script added and un-ignored (opencode `2b95f0ba7`); client regenerated,
+  11 operations -> 39.
+- [x] 6.2 Migrate opencode-skein inventory and lifecycle callers to generated
+  methods and operation IDs. Inventory (`listModels`) was already on the SDK;
+  no handwritten fetches to llama-skein routes remain anywhere in opencode.
+  The route move renamed five operations, of which only `patchConfigModel`
+  had a caller — and it was pointing at `/api/config/models/{id}`, which this
+  change stopped serving. Now `patchModelConfig`. Typecheck clean.
 - [ ] 6.3 Inventory Skein pull callers; migrate the still-required autonomous
   placement path and remove gallery-only callers.
 - [ ] 6.4 Remove the old connection-bound handwritten pull DTO and route after
