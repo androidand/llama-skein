@@ -8,7 +8,13 @@ dist/
 
 # UI build output; placeholder.txt is kept so the go:embed succeeds.
 internal/server/ui_dist/*
-.claude/
+# Contents, not the directory itself — git will not descend into an excluded
+# directory, so a negation under `.claude/` can never match.
+.claude/*
+# Skills are shared workflow documentation, not local settings: skein-dev is
+# the ecosystem's single source for the design-first flow and is symlinked into
+# ~/.claude/skills. It has to be versioned with the contract it describes.
+!.claude/skills/
 bin/
 Makefile.bak
 logs/
