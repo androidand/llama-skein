@@ -952,7 +952,24 @@ what sections 3, 4, and 5 have each turned up at least once.
   no handwritten fetches to llama-skein routes remain anywhere in opencode.
   The route move renamed five operations, of which only `patchConfigModel`
   had a caller — and it was pointing at `/api/config/models/{id}`, which this
-  change stopped serving. Now `patchModelConfig`. Typecheck clean.
+  change stopped serving. Now `patchModelConfig`.
+
+  Scope check before changing anything: opencode-skein has no load/unload RPC
+  callers at all (loading is implicit, triggered server-side by the first
+  inference request) and submits no install plans (that is skein's job, 6.3).
+  So "lifecycle" here is the model's process state riding on the enriched
+  `Model` schema, not a separate RPC surface.
+
+  One handwritten DTO at a generated boundary was found and removed per
+  design.md decision 1: `src/local/mdns.ts` declared a `ModelListResult`
+  shadow of `ModelList`/`Model` and force-cast `listModels()` onto it, which
+  flattened the SDK's discriminated union so the real types never reached the
+  call sites. Removing it dropped 47 typecheck errors elsewhere in the package
+  (opencode-skein `224a9c9f1e`).
+
+  Not typecheck-clean, and was not before: the package reports 656 errors, 737
+  at HEAD with no local changes, including its own generated SDK. The files
+  touched here report none.
 - [x] 6.3 Inventory Skein pull callers; migrate the still-required autonomous
   placement path and remove gallery-only callers. Six call sites, all reaching
   pull through the `llm.ModelManager` interface shared with Ollama, so the
