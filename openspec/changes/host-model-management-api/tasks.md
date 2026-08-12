@@ -953,8 +953,15 @@ what sections 3, 4, and 5 have each turned up at least once.
   The route move renamed five operations, of which only `patchConfigModel`
   had a caller — and it was pointing at `/api/config/models/{id}`, which this
   change stopped serving. Now `patchModelConfig`. Typecheck clean.
-- [ ] 6.3 Inventory Skein pull callers; migrate the still-required autonomous
-  placement path and remove gallery-only callers.
+- [x] 6.3 Inventory Skein pull callers; migrate the still-required autonomous
+  placement path and remove gallery-only callers. Six call sites, all reaching
+  pull through the `llm.ModelManager` interface shared with Ollama, so the
+  migration was contained to the placement path: `providers/pull.go`'s
+  SmartPull now builds a `ModelInstallPlan` and follows the operation
+  (skein `295097fe6`). No gallery-only callers existed to remove — every site
+  is on the CLI/MCP/HTTP lifecycle path. Two behaviour changes: the plan pins
+  an immutable commit SHA (the old endpoint used whatever `main` pointed at),
+  and registration flags are a token slice, not a command-line string.
 - [ ] 6.4 Remove the old connection-bound handwritten pull DTO and route after
   every supported caller has migrated.
 
