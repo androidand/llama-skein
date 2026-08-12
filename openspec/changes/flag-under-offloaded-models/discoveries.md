@@ -1,0 +1,3 @@
+- perf_class is the highest-severity item: ModeCustom hardcodes native-gpu (placement.go:153), disabling opencode-skein's HOST_PACED_PENALTY (placement.ts:104-107) for every pinned model. Verified on rocky: native-gpu reported at 1.2 tok/s with 7165 MB host-resident.
+- Counterfactual validated by measurement: removing (not raising) the pins gave 5.42 -> 39.42 and 4.04 -> 35.05 tok/s, and the planner chose full GPU residency unaided with placement.applied=true. All six rocky models now run_mode=gpu, host_resident_mb=0.
+- Two API defects block the recommended remedy: no removal path for n_gpu_layers (0 would write --n-gpu-layers 0), and GET /api/models/config/{id} returns --port resolved instead of ${PORT}, so read-modify-write hardcodes a dynamic port. Tasks 17-18.

@@ -16,10 +16,28 @@ tok/s without it — 1.6 GB of VRAM for no gain, and a `[spec] failed to measure
 model memory` warning at every load. Neither was visible as a problem; the model
 "worked".
 
+That was not an isolated entry. On 2026-08-12 the same host was found serving
+`qwopus3.6-27b-coder-mtp-q5-k-m` to a live agent session at **1.2 tok/s** —
+`--n-gpu-layers 40` against a `block_count` of 65, so 26 of 66 layers decoded on
+the CPU. Corrected, it ran at **32.4 tok/s**: a 27× loss, in the same file, from
+the same pinned flag, found only because someone noticed the session felt slow.
+Two further models on that host (`qwopus-glm-18b-healed-q8-0`,
+`qwen3.6-27b-claude-mythos-distilled.q4-k-m`) are still in the same state. Three of
+six entries in one config were quietly wrong, and the worst of them reported
+`fit_level: "perfect"`.
+
 Two things are missing. First, a **record** of known-good configurations keyed by what
 actually determines them: model, quantisation, GPU architecture, VRAM, and engine
 build. Second, a way to **discover** which models are even viable on a given provider
 before downloading 19 GB to find out.
+
+The detection half of this — noticing that a configuration is wrong from first
+principles, without needing a measurement — is llama-skein
+`flag-under-offloaded-models`, which mirrors `under_configured` for placement. It is
+complementary, not a substitute: it catches what arithmetic can prove, while the
+gallery captures what only measurement can establish (the same entry's
+`--model-draft`, which cost 1.6 GB of VRAM for 34.5 vs 34.6 tok/s, is invisible to
+any fit calculation).
 
 `add-model-fit-engine` already computes whether a model fits (`/api/fit` returns
 `max_safe_ctx`, `vram_required_mb`, `run_mode`). That is the arithmetic. This change is
