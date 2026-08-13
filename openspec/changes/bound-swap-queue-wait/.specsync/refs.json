@@ -1,0 +1,10 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "38",
+    "url": "https://github.com/androidand/llama-skein/issues/38",
+    "base_sha": "f964e2222cfab6afd4453f3ad574f907e204ec3ec8654975c4ed2a26364e5df6",
+    "base": "# Tasks: bound-swap-queue-wait\n\n- [x] 1. Config: `SwapQueueTimeoutSecs int` on `config.Config`, default 10 in\n       `LoadConfigFromReader`. Fixed the two exact-struct-equality config\n       tests (posix + windows) that needed the new default added.\n- [x] 2. `internal/router`: `ErrSwapQueueTimeout` sentinel + `SendError` case\n       (503); `swapQueueTimeoutError` builder naming the blocking model(s).\n- [x] 3. `handlerReq` gains `queuedAt time.Time`, stamped at both queue sites\n       in `handleRequest` (collision + would-evict-busy).\n- [x] 4. `expireStaleQueued(now, timeout, active, \u0026queued)` — pure, takes\n       `now` as a parameter (not `time.Now()`) so it's directly unit-testable\n       without real sleeps. Grants an error + removes expired entries;\n       preserves order and untouched entries otherwise.\n- [x] 5. Wire a ticker into `run()` (`queueScanInterval`, default 1s,\n       overridable for tests) calling `expireStaleQueued`. Does not call\n       `notifyProcessed()` (time-driven, not request-driven — same reasoning\n       as the existing `serveDoneCh` case).\n- [x] 6. Tests: `expireStaleQueued` partition/error-content/zero-disables/\n       empty-queue (pure unit), plus one true end-to-end test driving the\n       real `run()` loop with a wedged (`serveBlock`) process to prove the\n       wiring, not just the isolated function.\n- [x] 7. `go build ./...`, `go test -short ./proxy/... ./internal/...`\n       (992 ok), `docs/`/`config.docker-default.yaml` note.\n\u003c!-- DEFERRED 2026-07-26: Deploy task — requires live infrastructure with forced wedge test. --\u003e\n\n- [ ] 8. Deploy to the fleet; verify against a real forced wedge that a\n        competing model request now gets a 503 within ~10s instead of hanging.\n",
+    "base_closed": false
+  }
+}

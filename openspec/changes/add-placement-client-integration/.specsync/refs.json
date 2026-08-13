@@ -2,6 +2,7 @@
   "github:androidand/llama-skein": {
     "provider": "github:androidand/llama-skein",
     "id": "22",
-    "url": "https://github.com/androidand/llama-skein/issues/22"
+    "url": "https://github.com/androidand/llama-skein/issues/22",
+    "base_closed": true
   }
 }

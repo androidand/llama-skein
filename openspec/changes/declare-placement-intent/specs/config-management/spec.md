@@ -12,6 +12,17 @@ The block SHALL support a free-text `reason`, surfaced on the fit report. A
 declaration without a reason is still a declaration, but the reason is what makes
 the entry reviewable after the person who wrote it has moved on.
 
+`reason` SHALL be the block's only field in the first increment. A vocabulary such as
+`intent` SHALL NOT ship before the behaviour that gives its values meaning: an enum
+accepted but not acted on is read as documentation, and acquires behaviour later
+against configs written when it had none. `reason` and the `declared` flag are
+immune to this because both are descriptive — they report what the config says, and
+promise nothing about what the planner will do.
+
+An unrecognised key inside the block SHALL be rejected rather than ignored, so a
+forward-looking value cannot be written under one meaning and reinterpreted under
+another.
+
 Absence of the block SHALL mean `auto` — identical to today's behaviour for a model
 with no placement flags — so every existing config is unaffected.
 
@@ -33,6 +44,12 @@ does not use it behaves exactly as before.
 
 - **WHEN** a `placement:` block omits `reason`
 - **THEN** the placement is still declared, and the missing reason is not an error
+
+#### Scenario: Forward-looking key written before its behaviour exists
+
+- **WHEN** a config sets a placement key the current increment does not implement
+- **THEN** it is rejected, rather than accepted and silently reinterpreted once the
+  behaviour lands
 
 ### Requirement: A declaration and a raw flag together are reported, not silently merged
 

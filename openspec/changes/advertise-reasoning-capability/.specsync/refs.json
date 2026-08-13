@@ -1,0 +1,10 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "36",
+    "url": "https://github.com/androidand/llama-skein/issues/36",
+    "base_sha": "cad74f81ba3c29e0eaad668b4ad598d8b174c38e8347212b1f3d96f970ae16f3",
+    "base": "# Tasks: advertise-reasoning-capability\n\n- [x] 1. Spec: add `reasoning` boolean to the `Model` schema in\n       `contracts/llama-skein.openapi.json`; `go generate ./pkg/apicontract`\n       + gofmt.\n       Validation: `make check-codegen`\n\n- [x] 2. Config: add `Reasoning *bool` (`yaml:\"reasoning\"`) to\n       `internal/config/model_config.go`.\n       Validation: `go build ./internal/config/`\n\n- [x] 3. Handler: in `internal/server/api.go` newRecord, set\n       `rec.Reasoning = mc.Reasoning`. Test in `internal/server/` that a model\n       with `reasoning: true` surfaces `reasoning:true` in `/v1/models` and a\n       model without it omits the field.\n       Validation: `go test ./internal/server/ -run 'Reasoning|ListModels'`\n\n- [x] 4. Repo validation: gofmt, `go build ./...`, `go test -short ./...`,\n       `make check-codegen`.\n\n\u003c!-- DEFERRED 2026-07-26: Requires opencode repo. --\u003e\n\n- [ ] 5. (companion, opencode repo `map-reasoning-capability`) regen the TS\n        client and map `item.reasoning` → `capabilities.reasoning` in\n        discoverOpenAICompatibleModels.\n",
+    "base_closed": false
+  }
+}

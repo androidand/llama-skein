@@ -1,0 +1,10 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "28",
+    "url": "https://github.com/androidand/llama-skein/issues/28",
+    "base_sha": "385aa3479685b6f40963b035b369c431c9ec1f95f47f86edddb2d7150738fa9e",
+    "base": "# Tasks: add-fit-load-guard\n\n- [x] 1. `internal/server/fitguard.go`: `setCtxSizeInCmd`, `confidentNoFit`,\n       `clampModelsToFit` (shrink or flag unfittable, fail-open),\n       `modelLoadRefusal`, `CreateLoadFitGateMiddleware` (507).\n- [x] 2. `Server` gains `unfittable map[string]string` (populated in New,\n       read-only after).\n- [x] 3. Reorder `New`: build Server (cfg+perf) → `clampModelsToFit` → build\n       routers from the clamped `s.cfg`.\n- [x] 4. Wire `CreateLoadFitGateMiddleware` into the model chain (after the\n       concurrency guard, before the prompt guard).\n- [x] 5. `startPreload` skips models `modelLoadRefusal` rejects.\n- [x] 6. Tests: `setCtxSizeInCmd`, `confidentNoFit`, `modelLoadRefusal`.\n- [x] 7. `go build ./...`, `go test -short ./proxy/... ./internal/...` (982 ok).\n\u003c!-- DEFERRED 2026-07-26: Tasks 8-9 — deploy and follow-up — require live infrastructure and macOS calibration. --\u003e\n\n- [ ] 8. Deploy to m5 (verify it does NOT over-refuse fittable models — load a\n        small model successfully; check /api/fit + fit-guard logs), then m3.\n- [ ] 9. Follow-up (separate): the reactive guard's macOS calibration\n        (`mlx-macos-gotchas`) and re-home the GPU-wedge safeguards onto the\n        live `internal/process` path (the `proxy` package is dead code).\n",
+    "base_closed": false
+  }
+}

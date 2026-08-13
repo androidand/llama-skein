@@ -1,0 +1,10 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "37",
+    "url": "https://github.com/androidand/llama-skein/issues/37",
+    "base_sha": "d00671c01e8811fc60d1ff73ebd54a383ca3c4c2b8fb12f11d8e1e10397b2640",
+    "base": "# Tasks: bound-max-safe-ctx\n\n- [x] 1. `internal/fit`: `max_safe_ctx` is clamped to 0 when the verdict is\n       `\"no\"` (a non-fitting model has no usable budget — this is what emitted\n       ~237k alongside fit_level:\"no\"); the VRAM-unavailable early return now\n       reports `\"unknown\"` (not `\"no\"`) with max_safe 0.\n- [x] 2. `internal/fit`: added `UnderConfigured bool`; set when\n       `ConfiguredCtx \u003e 0` and `ConfiguredCtx \u003c vramMaxCtx × underConfigFrac`\n       (0.8, matching skein's sweep threshold); achievable ceiling named in Reason.\n- [x] 3. Contract: added `under_configured` (bool) + `unknown` fit_level to\n       `ModelFit`; `go generate` + `gofmt` done (gen file regenerated).\n- [x] 4. Model-load-path WARN — DEFERRED (needs a cross-layer fit call at load;\n       operator-nicety. skein's sweep consuming `under_configured` from /api/fit\n       is the functional path).\n- [x] 5. Unit tests (`internal/fit`): VRAM-unavailable → unknown+0;\n       unconfigured non-fitting → fit=no + max_safe 0; configured-starved →\n       under_configured; configured-in-range → not. All pass.\n- [x] 6. `gofmt`, `go build ./...` clean, 175 tests pass, `make check-codegen`\n       green (regen committed). Design-first codegen propagated to BOTH\n       consumers: skein Go via `pkg/apicontract` + `go.work` (builds, uses the\n       new fields), and opencode TS via `bun run build:llama-skein-client` — the\n       regen surfaced that placement.ts's FIT_RANK had to handle the new\n       `unknown` fit_level (fixed: ranked 0 / excluded).\n",
+    "base_closed": true
+  }
+}

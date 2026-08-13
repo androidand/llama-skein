@@ -7,19 +7,26 @@ Design-first: the contract changes before any handler. See `AGENTS.md` and the
 behaviour.** Ship it first; it delivers the declared/undeclared distinction that
 #23's warning needs. Later phases can slip without blocking it.
 
-- [ ] 1. Resolve the four Open Questions in `proposal.md` before writing schema.
-       Two change Phase 1's shape: whether `intent` ships in Phase 1 at all (an
-       enum with no behaviour attached risks values that later mean something
-       else), and whether `minContext` is restated or read from the model's
-       existing `--ctx-size`. Record in `design.md`.
-       Validation: `design.md` states each decision and why.
+- [x] 1. Resolve the four Open Questions before writing schema. **Decided
+       2026-08-14, see `design.md`.** D1: `intent` does **not** ship in Phase 1 —
+       `reason` + `declared` only, because an enum with no behaviour attached
+       silently changes meaning when the behaviour lands (the
+       `add-model-offload-tuning` tasks 9–10 scar). D2: **no `minContext` field** —
+       the model's existing `--ctx-size` *is* the floor, since a fourth place to
+       express context is exactly what `bound-max-safe-ctx` closed. D3: conflicts
+       warn rather than error, matching this repo's fail-open contract. D4:
+       `fit_level` stays #23's, not this change's.
 
 ## Phase 1 — schema and reporting (no behaviour change)
 
 - [ ] 2. Add `Placement` to `ModelConfig` (`internal/config/model_config.go`)
-       following the `Timeouts`/`Filters` nested-struct precedent. Fields per the
-       task-1 decision; `reason` and `declared` are the minimum.
-       Validation: `go test ./internal/config/ -run TestModelConfig_Placement -v`
+       following the `Timeouts`/`Filters` nested-struct precedent. Per D1 it has
+       **exactly one field in Phase 1**: `Reason string \`yaml:"reason"\``. No
+       `intent`, no `minContext`. Reject an unknown key inside the block rather than
+       ignoring it, so nobody writes a forward-looking `intent:` that Phase 2 would
+       reinterpret.
+       Validation: `go test ./internal/config/ -run TestModelConfig_Placement -v`;
+       a config with `placement: {intent: latency}` is rejected in Phase 1.
 
 - [ ] 3. Contract: add `declared` (boolean) and `reason` (string, optional) to the
        fit report's placement object in `contracts/llama-skein.openapi.json`.
@@ -61,17 +68,20 @@ behaviour.** Ship it first; it delivers the declared/undeclared distinction that
        refuses.
        Validation: `go test ./internal/placement/ -run TestCompute_IntentLatency -v`
 
-- [ ] 10. Implement `intent: context` with `minContext` as a hard floor: bound
-       `RungShrinkContext` (`internal/placement/ladder.go:29`) so retry never
-       shrinks below the floor, and the ladder moves to the next rung instead of
-       violating it.
-       Validation: `go test ./internal/placement/ -run TestLadder_ContextFloorBounded -v`
+- [ ] 10. Implement `intent: context` using the model's existing `--ctx-size` as the
+       floor — **no `minContext` field**, per D2. For a declared model,
+       `RungShrinkContext` (`internal/placement/ladder.go:29`) is *skipped* rather
+       than bounded: there is no room between the configured context and the floor
+       because they are the same value, so the ladder advances to the next rung.
+       Validation: `go test ./internal/placement/ -run TestLadder_DeclaredSkipsShrinkContext -v`
 
-- [ ] 11. Verify the floor interacts correctly with `bound-max-safe-ctx`: a
-       declared `minContext` above what the host can serve must be refused or
-       reported, never silently advertised as achievable via `max_safe_ctx`. This is
-       the exact confusion `bound-max-safe-ctx` closed — do not reopen it.
-       Validation: `go test ./internal/fit/ -run TestFit_DeclaredFloorAboveCapacity -v`
+- [ ] 11. Add `intent` to the schema in this phase, where its values acquire
+       behaviour in the same change that defines them (D1). Values: `auto`
+       (default, block absent or unset), `latency` (task 9), `context` (task 10),
+       `custom` (operator pins mechanisms and declares it deliberate). A Phase 1
+       block with only `reason` must keep meaning exactly what it meant.
+       Validation: `go test ./internal/config/ -run TestPlacement_IntentValues -v`;
+       a Phase 1 config still parses unchanged.
 
 ## Phase 3 — the KV rung (separable)
 

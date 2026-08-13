@@ -1,71 +1,76 @@
-# Spec: Muse Glimmer 30B GGUF Support
+# Muse Glimmer 30B as a multi-artifact package
 
-## Problem
+The original free-form spec is kept verbatim as `research-spec-original.md`; this is
+its delta-format successor, with the four delivered requirements recorded as such.
 
-Muse Glimmer 30B ships as a model package with three artifacts (main GGUF, DFlash drafter GGUF, mmproj GGUF), but llama-skein currently treats models as single GGUF files and does not discover, fit, or run companion artifacts.
+## ADDED Requirements
 
-## Goal
+### Requirement: A declared context length may be overridden
 
-Enable llama-skein to pull, fit, and run the Muse Glimmer package that exists on HuggingFace today, while implementing companion-artifact capability generically for future models.
+A model whose GGUF understates its supported context SHALL be servable at the larger
+context without editing the weights.
 
-## Prerequisite
+Muse Glimmer declares `context_length 131072` and supports 262144. No `--override-kv`
+support exists anywhere in the tree today, so the larger window is unreachable.
 
-Before implementing, verify llama.cpp's own HF resolver behavior:
+The override SHALL cover the drafter's own declared length as well
+(`dflash.context_length`), because a drafter capped at the smaller window caps
+speculative decoding regardless of what the main model allows.
 
-1. Build llama.cpp from main
-2. Run `llama-server -hf meta-models/Muse-Glimmer-30B-GGUF`
-3. Determine: does it auto-download mmproj? DFlash? What flags does it construct?
-4. If llama.cpp handles companion resolution, delegate — do not reimplement
+Fit SHALL be computed against the **overridden** context, not the declared one — a
+model reporting a context it cannot serve is the failure `bound-max-safe-ctx` closed,
+and an override must not reopen it.
 
-## Changes
+#### Scenario: Model served beyond its declared context
 
-### 1. Companion Artifact Discovery
+- **WHEN** a model declaring 131072 is configured with an override to 262144
+- **THEN** `/api/fit` reports the overridden value as `configured_ctx`, and a prompt
+  beyond 131072 is served rather than rejected
 
-When a model is pulled from a HuggingFace repository, the system discovers sibling GGUF files that serve as companion artifacts.
+#### Scenario: Drafter is overridden alongside the model
 
-- `mmproj-*.gguf` → projector companion
-- `dflash-*.gguf` → draft model companion
-- Discovered companions are associated with the main model by repository proximity
+- **WHEN** a model with a DFlash drafter is overridden to a larger context
+- **THEN** the drafter's declared context is overridden to match
 
-The operation API supports specifying artifacts explicitly OR discovering them automatically from the source repository.
+#### Scenario: Override exceeds what the host can hold
 
-### 2. Fit Calculation Includes Companions
+- **WHEN** the overridden context does not fit the host's VRAM budget
+- **THEN** fit reports it as unachievable rather than advertising it through
+  `max_safe_ctx`
 
-The fit engine accounts for all package components when computing VRAM requirements:
+### Requirement: A companion artifact must earn its memory
 
-- Main model weights
-- Draft model weights (if companion present)
-- mmproj weights (if companion present)
-- KV cache (with Muse Glimmer's GQA 16:1 ratio and hybrid attention interval)
-- Runtime overhead
+A companion artifact attached by default SHALL have a measured benefit on the
+hardware it is attached for, or SHALL NOT be attached by default.
 
-### 3. Runtime Command Includes Companion Flags
+Measured on host A: the DFlash drafter yields **34.5 tok/s against 34.6 without it**,
+for 1.63 GB of VRAM — no gain, and a `[spec] failed to measure draft model memory`
+warning at every load. It was attached on the research's recommendation, which
+predated any measurement on this hardware.
 
-The system constructs llama-server commands with the correct flags for companion artifacts:
+Where a companion's memory cannot be measured, the system SHALL say why once rather
+than emitting the same warning on every load.
 
-- `--model-draft <path>` for DFlash drafter
-- `--mmproj <path>` for multimodal projector
-- `--spec-type draft-dflash` when DFlash is present (distinct from `draft-mtp`)
+#### Scenario: Drafter shows no measured gain
 
-### 4. Context Length Override
+- **WHEN** a drafter is measured to give no throughput benefit on a host
+- **THEN** it is not attached by default there, and its VRAM is reclaimed
 
-Muse Glimmer GGUF metadata declares context length 131072, but the model supports 262144. The system supports `--override-kv muse-glimmer.context_length=int:262144` to unlock full context when requested.
+#### Scenario: Drafter memory cannot be measured
 
-### 5. Model Config Stores Companions
+- **WHEN** the drafter's memory footprint cannot be determined
+- **THEN** the reason is reported once, not repeated at every load
 
-The model configuration records companion artifact paths alongside the main model, so restarts and state queries include the full package.
+## Delivered elsewhere
 
-## Out of Scope
+These were requirements of this change and have since shipped. Recorded so the change
+does not imply unbuilt work; no delta is claimed for them.
 
-- Automatic quantization selection — caller decides which variant
-- General model recipe extraction from HF config files — future work
-- Reimplementing llama.cpp's HF resolver — delegate where possible
-
-## Verification
-
-1. Pull Muse Glimmer from HuggingFace — main + DFlash + mmproj are discovered and downloaded
-2. Fit calculation for a 48 GB card accounts for all three artifacts
-3. Generated command includes `--model-draft` and `--mmproj` flags
-4. DFlash speculative decoding works (spec-type: draft-dflash)
-5. Multimodal input works with mmproj
-6. VRAM usage matches predictions
+- **Package discovery and download** (main + drafter + projector) —
+  `host-model-management-api` §3–4.
+- **Fit accounts for companion weights** — `internal/fit/fit.go:162-163`
+  (`DraftMB`, `ProjectorMB`).
+- **Companion flags and spec type** — `injectCompanionFlags`, and `draft-mtp` vs
+  `draft-dflash` at `internal/server/apiconfig.go:240-251`.
+- **Config records companion paths** — `ModelConfig.DraftModelPath` /
+  `ProjectorPath`.

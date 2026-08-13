@@ -82,27 +82,35 @@ rather than being refused on a guess.
 - **WHEN** a model declares `intent: latency` but the VRAM budget cannot be read
 - **THEN** the plan fails open and the model runs as configured
 
-### Requirement: A declared context floor bounds the retry ladder
+### Requirement: A declared context is a floor the retry ladder may not cross
 
-`RungShrinkContext` SHALL NOT reduce context below a declared `minContext`. When
-the floor blocks the rung, the ladder SHALL advance to the next rung instead of
-violating the declaration.
+`RungShrinkContext` SHALL be skipped for a model whose placement is declared with
+`intent: context`, and the ladder SHALL advance to the next rung rather than reduce
+the model's configured context.
 
-A declared floor above what the host can actually serve SHALL be refused or
-reported, never advertised as achievable through `max_safe_ctx` — reopening the
-fleet-wide context confusion that `bound-max-safe-ctx` closed is not acceptable.
+The floor is the model's existing `--ctx-size`. There SHALL NOT be a separate
+`minContext` field: `--ctx-size` in `cmd`, `placement.minimumContext` in policy, and
+`max_safe_ctx` in the fit report already express context in three places, and callers
+trusting the wrong one is exactly the fleet-wide confusion `bound-max-safe-ctx`
+closed. A fourth number whose only purpose is to differ from the other three adds a
+way to be wrong without adding a way to be right — and `--ctx-size 200000` alongside
+`minContext: 150000` is a config that contradicts itself with no way to tell which
+the operator meant.
 
-#### Scenario: Retry would shrink below the floor
+A configured context larger than the host can serve remains `bound-max-safe-ctx`'s
+concern and SHALL NOT be re-handled here.
 
-- **WHEN** a memory failure escalates to `RungShrinkContext` on a model with a
-  declared floor already at that floor
-- **THEN** the rung is skipped and the ladder advances, leaving the floor intact
+#### Scenario: Retry would shrink a declared context
 
-#### Scenario: Floor exceeds host capacity
+- **WHEN** a memory failure escalates to `RungShrinkContext` on a model declared
+  `intent: context`
+- **THEN** the rung is skipped and the ladder advances, leaving the configured
+  context intact
 
-- **WHEN** a declared `minContext` is larger than the host can serve
-- **THEN** it is refused or reported as unachievable, and `max_safe_ctx` does not
-  advertise it
+#### Scenario: Undeclared model still shrinks
+
+- **WHEN** the same failure escalates on a model with no placement declaration
+- **THEN** `RungShrinkContext` applies as it does today
 
 ### Requirement: Cheap levers are spent before expensive ones
 

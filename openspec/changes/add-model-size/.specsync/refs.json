@@ -1,0 +1,10 @@
+{
+  "github:androidand/llama-skein": {
+    "provider": "github:androidand/llama-skein",
+    "id": "33",
+    "url": "https://github.com/androidand/llama-skein/issues/33",
+    "base_sha": "11c4a78f8579cd539ce07a8a1162515c8829d4ea16bf93ca9f03d96ee97f353e",
+    "base": "# Tasks: add-model-size\n\n- [x] 1. Spec: add `size_bytes` (integer int64) to the `Model` schema in\n       `contracts/llama-skein.openapi.json`; `go generate` + gofmt.\n- [x] 2. `computeModelSizeBytes` (GGUF stat / MLX safetensors sum) +\n       `modelSizeBytes` (memoized per id) in `internal/server`.\n- [x] 3. Set `rec.SizeBytes` in the `/v1/models` record builder.\n- [x] 4. Test `computeModelSizeBytes` (GGUF file, missing path, mlx/vllm → 0).\n- [x] 5. `go build`, `go test -short ./proxy/... ./internal/...`,\n       `make check-codegen`.\n\u003c!-- DEFERRED 2026-07-26: External repos (opencode, skein) not available locally; deploy requires live infrastructure. --\u003e\n\n- [ ] 6. opencode-skein: regen client; show size in the model picker.\n- [ ] 7. skein: show size in the model / provider-models listing.\n- [ ] 8. Deploy llama-skein so `/v1/models` returns `size_bytes` fleet-wide.\n",
+    "base_closed": false
+  }
+}
