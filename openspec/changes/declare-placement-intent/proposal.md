@@ -101,6 +101,34 @@ so those two rows are the repo copies, not live reads. host A's repo copy had al
 drifted from its live config, so both rows need confirming on the hosts before
 being acted on.
 
+## The case that proves the point
+
+`M1` on host A is now the clearest argument for this change, because it is a model
+where **every available option is wrong**. Measured 2026-08-13:
+
+| configuration | throughput | planner | preload |
+|---|---|---|---|
+| `-ngl 99`, ctx 139264 | **32.6 tok/s** | disabled | **refused** (`fit_level: marginal`) |
+| unpinned, ctx 139264 | 14.7 tok/s | active | refused |
+| unpinned, ctx 110592 | — | active | refused (still `marginal`) |
+
+Unpinning halves throughput, because the planner reserves 2048 MB and delegates the
+split to `--fit`, targeting 22512 MB of a 24560 MB card — and `M1` needs ~23260 MB
+for full residency at its configured context. The pin was *overriding the reserve*,
+which is what made it fast. Meanwhile `fit_level: marginal` means
+`preloadFitRefusal` (`internal/server/fitguard.go:183`, which refuses on exactly
+`marginal`) bars it from startup preload in every configuration.
+
+The operator's actual intent here is expressible in one sentence — *"this model is
+worth spending the safety reserve on; keep every layer on the GPU"* — and there is no
+way to say it. The only mechanism available is a raw `-ngl` pin, which also disables
+hybrid fallback, the retry ladder, and the counterfactual report, and which reports
+`perf_class: native-gpu` whether or not that is true.
+
+That is this change in one example: the trade is legitimate, the mechanism to express
+it is a blunt instrument with three unrelated side effects, and nothing records that
+the trade was deliberate.
+
 ## What Changes
 
 A per-model `placement:` block that expresses **constraints the operator cares

@@ -83,11 +83,34 @@ Design-first: the contract changes before any handler. See `AGENTS.md` and the
        Validation: live pin inventory for host B and host C; no false positive on any
        all-layers pin whose model is fully resident.
 
-- [ ] 13. Fix the two under-offloaded host A models as a separate operational
-       change, not as part of this one. Prefer deleting `--n-gpu-layers` so the
-       planner computes placement, and record measured before/after tok/s to
-       confirm the counterfactual was right.
-       Validation: both report `run_mode: gpu`; before/after throughput recorded.
+- [ ] 12c. Handle engine-side `--fit` splits, which `host_resident_mb` cannot see.
+       Measured on host A 2026-08-13: `M1` read `run_mode: "gpu"`,
+       `host_resident_mb: 0`, `fit_level: marginal` at **both** 32.6 tok/s (pinned
+       `-ngl 99`) and 14.7 tok/s (unpinned, `--fit` shed layers to hit the planner's
+       22512 MB target). So the signal this change keys on is blind to the offload
+       the planner itself causes. Decide whether `under_offloaded` can detect it at
+       all — probably needs the engine's own layer report, not flag parsing — or
+       document the blind spot explicitly rather than implying full coverage.
+       Validation: a test asserting the blind spot is either closed or documented;
+       no claim of detecting engine-side splits unless it actually does.
+
+- [ ] 12d. Stop the delegated dense plan reporting `est_host_mb: 0`. For a plan that
+       hands the split to `--fit`, the planner cannot know the outcome, so zero is a
+       guess presented as fact — and it was wrong on `M1`. Report it as delegated
+       and unknown.
+       Validation: `go test ./internal/placement/ -run TestCompute_DelegatedEstimateNotZero -v`
+
+- [x] 13. Fix the under-offloaded host A models. **Done 2026-08-12/13**, and the
+       result corrected this change's own advice. `M2` 5.42 → 39.42 tok/s and `M3`
+       4.04 → 35.05 tok/s by *removing* the pin (planner then reported
+       `applied: true`, full residency). But `M1` **regressed 32.6 → 14.7 tok/s**
+       when unpinned, because its 139264 ctx does not fit the planner's 22512 MB
+       target and `--fit` shed layers; reducing ctx to 110592 did not restore it
+       either. `M1` was restored to `-ngl 99` at 139264 ctx, re-measured at
+       32.64 tok/s, and is the motivating case for #24: it needs a way to say
+       "spend the reserve on layers" that does not also disable everything else.
+       So "prefer removing the pin" is conditional on the model fitting the
+       *reserved* budget — see the proposal's correction section.
 
 - [ ] 14. Decide what `preloadFitRefusal` (`internal/server/fitguard.go:182`)
        reads. It refuses startup preload for exactly `fit_level == marginal`, so

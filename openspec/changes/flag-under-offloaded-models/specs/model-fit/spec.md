@@ -48,18 +48,36 @@ operator-pinned placement flags SHALL still be honoured verbatim.
 
 `reason` SHALL state that the pin can be removed, rather than quoting a
 replacement value, when `under_offloaded` is caused by a pinned placement flag and
-the counterfactual plan would place the model fully on the GPU.
+the counterfactual plan would place the model fully on the GPU **within the
+planner's reserved budget** — not merely within total VRAM.
 
 A raised number is another constant that goes stale against the next model, quant,
 or card, and it leaves the planner disabled for that model. Where a pin carries no
 deliberate intent, deleting it is the durable fix.
 
+The reserved-budget qualifier is load-bearing, not pedantry. Measured on host A
+2026-08-13: `M1` fit in total VRAM but not in the planner's target
+(22512 MB of 24560 after the 2048 MB reserve), so removing its pin let the engine's
+`--fit` shed layers and **halved throughput, 32.6 → 14.7 tok/s**. Advising removal
+on a total-VRAM test would have recommended a 2× regression.
+
+Where the model fits total VRAM but not the reserved budget, `reason` SHALL NOT
+advise removal. It SHALL state that the pin is overriding the safety reserve, so the
+operator can see the trade they are making rather than being told to undo it.
+
 #### Scenario: Pin can simply be dropped
 
-- **WHEN** a model is flagged `under_offloaded` and the counterfactual plan is full
-  GPU residency
+- **WHEN** a model is flagged `under_offloaded` and full GPU residency fits inside
+  the planner's reserved budget
 - **THEN** `reason` says the `--n-gpu-layers` pin can be removed so placement is
   computed, rather than naming a specific higher number
+
+#### Scenario: Pin is overriding the safety reserve
+
+- **WHEN** a model fits total VRAM but not the planner's reserved budget, so removing
+  the pin would let the engine shed layers
+- **THEN** `reason` states the pin is overriding the reserve and does NOT advise
+  removing it
 
 #### Scenario: Host RAM is genuinely needed
 

@@ -131,6 +131,44 @@ counterfactual this change proposes to *report* is the same one the planner alre
 computes correctly. Nothing new has to be invented to know the pinned value was
 wrong — only surfaced.
 
+### But "remove the pin" is not universally right, and the counterfactual can lie
+
+Measured on host A, 2026-08-13. `M1` was left pinned at `99` (32.6 tok/s). Removing
+that pin — the remedy this proposal recommends — **halved throughput to 14.7 tok/s.**
+
+The mechanism: the planner reserves 2048 MB of VRAM and delegates the dense layer
+split to the engine's `--fit`, so it targets 22512 MB of a 24560 MB card. `M1` at its
+configured 139264 ctx needs ~23260 MB for full residency (18630 weights + ~4630 KV).
+That does not fit the target, so `--fit` shed layers to the CPU and the model became
+host-paced. Pinning `99` had been *overriding the reserve* — which is exactly what
+made it fast.
+
+Two corrections fall out of this:
+
+- **The counterfactual reported `est_host_mb: 0` while the real outcome offloaded
+  layers.** For a delegated dense plan the planner cannot know what `--fit` will do,
+  so reporting a precise host-resident estimate of zero is not conservative — it is a
+  guess presented as a fact. A delegated plan must report its estimate as delegated
+  and unknown, not as zero.
+- **`host_resident_mb` stayed `0` across the regression.** The fit report showed
+  `run_mode: "gpu"`, `host_resident_mb: 0`, and `fit_level: marginal` both at
+  32.6 tok/s and at 14.7 tok/s. So the field this change keys `under_offloaded` on
+  **cannot see an engine-side `--fit` split** — it only sees splits from flags
+  llama-skein can parse. `under_offloaded` will therefore miss exactly this class of
+  offload, which is the class the planner itself creates.
+
+Reducing ctx to 110592 to fit inside the reserve did not rescue it either: still
+`fit_level: marginal` at `vram_required_mb 23233`, because the safety margin is
+computed against the full card, not the planner's target. `M1` was restored to
+`-ngl 99` at 139264 ctx and re-measured at **32.64 tok/s**.
+
+So the honest remedy is conditional, not general: remove the pin when the model fits
+inside the planner's *reserved* budget, and keep an explicit pin when the operator
+has deliberately traded the reserve for residency. That second case is precisely what
+`declare-placement-intent` (#24) exists to express — and `M1` is now its clearest
+example, since today the only way to say "I want the reserve spent on layers" is a
+raw pin that also disables everything else.
+
 ## What Changes
 
 - **`ModelFit.under_offloaded` (boolean).** True when a model's weights are
