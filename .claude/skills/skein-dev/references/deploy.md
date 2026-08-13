@@ -22,9 +22,10 @@ until `/ui/` returns 404. Use `make linux-amd64` / `make mac`, or just let
 
 ## Addressing traps
 
-**A container's service IP is not its host's.** `192.168.1.81` is LXC 102, not
-z4 (ssh `192.168.1.106`); `192.168.1.219` is LXC 1016, not proxmox
-(`192.168.1.42`). ssh to both Proxmox hosts is as **root**, keyed from m3.
+**A container's service IP is not its host's.** Each Proxmox LXC serves on its
+own address, distinct from the host you ssh to — using one for the other makes a
+reachable provider look dead. Addresses, container IDs and ssh users are in the
+private `docs-skein` (`topology.md`), never here.
 
 **The two containers run differently-named binaries.** LXC 1016's unit runs
 `/usr/local/bin/llama-swap`; LXC 102 runs `/usr/local/bin/llama-skein`.
