@@ -8,7 +8,7 @@
 NOT be reported as `native-gpu` merely because placement flags were pinned.
 
 `Compute` currently returns `PerfClass: PerfNativeGPU` unconditionally for
-`ModeCustom` (`placement.go:153`). On rocky this reported
+`ModeCustom` (`placement.go:153`). On host A this reported
 `perf_class: "native-gpu"` for a model decoding 26 of 66 layers on the CPU at
 1.2 tok/s.
 

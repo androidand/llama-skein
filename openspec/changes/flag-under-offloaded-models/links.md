@@ -16,7 +16,7 @@
   close 17 and 18 as superseded (`[~]`) rather than implementing them.
 
 - `add-model-config-gallery` (this repo) — documents the same misconfiguration
-  class on the same host (`muse-glimmer-30b-q5-k-m` at `--n-gpu-layers 40`,
+  class on the same host (`M4` at `--n-gpu-layers 40`,
   6.1 vs 34.5 tok/s). That change owns the *empirical* layer: measured known-good
   configurations. This change owns the *first-principles* detection that would
   have caught it without a measurement. Neither supersedes the other.

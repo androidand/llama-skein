@@ -9,7 +9,7 @@ The placement report SHALL carry `declared` (boolean): true when the model has a
 
 Today a deliberate hybrid split and a stale copy-pasted `--n-gpu-layers` are
 byte-identical in config, so no consumer can tell an intentional trade from a
-mistake. On rocky that made a 27× regression indistinguishable from a choice for
+mistake. On host A that made a 27× regression indistinguishable from a choice for
 months.
 
 `declared` SHALL be the signal that lets `under_offloaded` (see
@@ -33,6 +33,35 @@ declared one is not assumed optimal — the flag reports provenance, not quality
 
 - **WHEN** a model has no placement block and no placement flags
 - **THEN** `declared` is false and the planner places it, as it does today
+
+### Requirement: An all-layers pin is reported as an opt-out, not as full residency
+
+Placement reporting SHALL treat an "all layers" pin — `--n-gpu-layers 99`, `999999`,
+or any value at or above the model's offloadable layer count — as an undeclared
+opt-out from automatic placement, exactly as it treats any other pin.
+
+Such a pin is easy to read as harmless, because on a model that fits it produces the
+same placement the planner would have chosen. It is not harmless: it disables the
+whole planner for that model, so an oversized model gets no hybrid split, no
+`--fit-target` reserve, and no adaptive retry ladder. Fleet audit, 2026-08-12: host A
+pinned `40`, host B pinned `99`, host C pinned `99` and `999999` — every model on every
+host, so `auto` was unreachable fleet-wide and `add-auto-hybrid-placement` could
+never engage.
+
+Reporting SHALL therefore key on the pin being present, not on whether its value
+currently happens to be adequate.
+
+#### Scenario: All-layers pin on a model that fits
+
+- **WHEN** a model pins `--n-gpu-layers 999999` and fits entirely in VRAM
+- **THEN** placement is reported as undeclared and pinned, even though the resulting
+  placement matches what the planner would have chosen
+
+#### Scenario: All-layers pin on an oversized model
+
+- **WHEN** a model pins `--n-gpu-layers 999999` but is larger than the VRAM budget
+- **THEN** the pin is reported as the reason no hybrid placement was planned, rather
+  than the model appearing simply unfittable
 
 ### Requirement: latency intent refuses rather than serving slowly
 
@@ -81,7 +110,7 @@ When satisfying a declared constraint, placement SHALL prefer levers in order of
 their ongoing cost, spending one-time costs before per-token ones.
 
 Layer offload is the most expensive lever available and SHALL remain last: it is
-paid on every token for the life of the process. Measured on rocky, removing
+paid on every token for the life of the process. Measured on host A, removing
 avoidable layer offload moved three models by 7×, 8.7×, and 27×. KV quantization,
 by contrast, is paid once, in quality.
 

@@ -1,10 +1,18 @@
 # Flag under-offloaded models, and stop grading wasted VRAM as "good"
 
+> **Labels.** This repo is public, so fleet hosts and installed models are named by
+> capability and shape rather than by hostname or model id; the mapping lives in the
+> private companion repo (`docs-skein/fleet-labels.md`). Host A is a 24 GB RDNA3
+> workstation, host B a 48 GB RDNA3 host, host C a 32 GB RDNA4 host. `M1` is a 27B
+> Q5_K_M hybrid attention/SSM model (65 blocks, `full_attention_interval 4`); `M2` an
+> 18B Q8_0; `M3` a 27B Q4_K_M; `M4` a 30B Q5_K_M; `M5` a 9B Q8_0; `M6` a 35B MoE.
+> All measurements are verbatim.
+
 ## Why
 
-On rocky (2026-08-12), `qwopus3.6-27b-coder-mtp-q5-k-m` served an agent session at
+On host A (2026-08-12), `M1` served an agent session at
 **1.2 tok/s**. Its `cmd` pinned `--n-gpu-layers 40`; the GGUF reports
-`qwen35.block_count = 65`, so 26 of 66 offloadable layers decoded on the CPU.
+`block_count = 65`, so 26 of 66 offloadable layers decoded on the CPU.
 Setting `n_gpu_layers` to 99 took it to **32.4 tok/s** — a 27× loss that had been
 sitting in the config unnoticed.
 
@@ -36,16 +44,16 @@ residency scored **`"marginal"`** with *"fits only above the VRAM safety margin;
 reduce context"*. The grade rewards the configuration that wastes the GPU and
 penalises the one that uses it.
 
-This is not one anecdote. Every model on rocky, read from `/api/fit` the same
-evening (`qwopus3.6-27b` already corrected):
+This is not one anecdote. Every model on host A, read from `/api/fit` the same
+evening (`M1` already corrected):
 
 | model | run_mode | GPU / host MB | vram_req of 24560 | `fit_level` |
 |---|---|---|---|---|
-| `qwopus-glm-18b-healed-q8-0` | `cpu_offload` | 10063 / **6037** | 15938 (8.6 GB spare) | **`perfect`** |
-| `qwen3.6-27b-…-distilled.q4-k-m` | `cpu_offload` | 9865 / **6166** | 19062 (5.5 GB spare) | `tight` |
-| `muse-glimmer-30b-q5-k-m` | `gpu` | 18305 / 0 | 20988 | `tight` |
-| `qwythos-9b-…-mtp-q8-0` | `gpu` | 9332 / 0 | 17990 | `tight` |
-| `qwen3-35b-a3b` | `gpu` | 15831 / 0 | 19203 | `perfect` |
+| `M2` | `cpu_offload` | 10063 / **6037** | 15938 (8.6 GB spare) | **`perfect`** |
+| `M3` | `cpu_offload` | 9865 / **6166** | 19062 (5.5 GB spare) | `tight` |
+| `M4` | `gpu` | 18305 / 0 | 20988 | `tight` |
+| `M5` | `gpu` | 9332 / 0 | 17990 | `tight` |
+| `M6` | `gpu` | 15831 / 0 | 19203 | `perfect` |
 
 A model stranding 6 GB of weights in host RAM with 8.6 GB of VRAM free grades
 **`perfect`**, while two correctly-resident models grade `tight`. Any client
@@ -72,7 +80,7 @@ host would have chosen. The counterfactual is the diagnosis, and it is discarded
 **4. The `ModeCustom` result claims `native-gpu`, disabling a downstream guard.**
 This is the most consequential of the four. `Compute` returns
 `PerfClass: PerfNativeGPU` unconditionally for pinned placement
-(`placement.go:153`), so rocky reported `perf_class: "native-gpu"` for a model
+(`placement.go:153`), so host A reported `perf_class: "native-gpu"` for a model
 decoding 26 of 66 layers on the CPU at 1.2 tok/s.
 
 opencode-skein's only protection against routing sub-agents onto host-paced models
@@ -91,13 +99,13 @@ This is a recurring shape in this repo, not a one-off. `add-auto-hybrid-placemen
 records it plainly: auto-application "was deliberately deferred to clients
 (`add-model-offload-tuning` tasks 9–10, both `[D]`), and no client ever shipped
 it." `add-model-config-gallery` documents the same misconfiguration on the same
-host — `muse-glimmer-30b-q5-k-m` at `--n-gpu-layers 40`, 6.1 vs 34.5 tok/s. That
-one was found and fixed by hand; `qwopus3.6-27b` was the same bug on the same box
+host — `M4` at `--n-gpu-layers 40`, 6.1 vs 34.5 tok/s. That
+one was found and fixed by hand; `M1` was the same bug on the same box
 and survived because nothing looks for it.
 
 **It is still live on that host**, and the table above is the acceptance test.
 The two `cpu_offload` rows must flag; the three `gpu` rows must not — including
-`qwen3-35b-a3b` and `qwythos-9b-…`, which are *also* pinned at `-ngl 40` and are
+`M6` and `M5`, which are *also* pinned at `-ngl 40` and are
 nonetheless fully resident. So the flag cannot key on the pinned number. It has to
 key on the outcome, which is what `host_resident_mb` already reports.
 
@@ -109,11 +117,11 @@ prompt, same host:
 
 | model | before | after | change | placement after |
 |---|---|---|---|---|
-| `qwopus3.6-27b-coder-mtp-q5-k-m` | 1.2 tok/s | 32.4 tok/s | **27×** | pinned to 99 |
-| `qwopus-glm-18b-healed-q8-0` | 5.42 tok/s | 39.42 tok/s | **7.3×** | pin removed, `applied: true` |
-| `qwen3.6-27b-…-distilled.q4-k-m` | 4.04 tok/s | 35.05 tok/s | **8.7×** | pin removed, `applied: true` |
+| `M1` | 1.2 tok/s | 32.4 tok/s | **27×** | pinned to 99 |
+| `M2` | 5.42 tok/s | 39.42 tok/s | **7.3×** | pin removed, `applied: true` |
+| `M3` | 4.04 tok/s | 35.05 tok/s | **8.7×** | pin removed, `applied: true` |
 
-All six models on rocky now report `run_mode: "gpu"` with `host_resident_mb: 0`.
+All six models on host A now report `run_mode: "gpu"` with `host_resident_mb: 0`.
 Two still carry `-ngl 40` harmlessly, because 40 exceeds their layer count — the
 outcome-keyed detection this change specifies correctly leaves them alone.
 
@@ -175,7 +183,7 @@ wrong — only surfaced.
   `under_offloaded` need one, or is "any avoidable host-resident weight byte"
   the right bar? Leaning strict: unlike context, there is no reason to leave
   weights in host RAM when they fit in VRAM.
-- **Marginal-fit interaction.** Full residency for the rocky case leaves 993 MB
+- **Marginal-fit interaction.** Full residency for the host A case leaves 993 MB
   free and grades `marginal`. If flagging `under_offloaded` steers an operator
   toward a placement the safety margin then flags, the two signals disagree.
   Does `under_offloaded` need to be suppressed when full residency would not be
@@ -196,11 +204,11 @@ wrong — only surfaced.
   - **opencode-skein deliberately does not gate on it.** `provider/provider.ts`
     carries three comments to that effect ("fit_level can't gate this",
     "independent of `fit_level`"), added after `fit_level:"no"` wrongly discarded
-    a real ceiling on qwopus-MTP.
+    a real ceiling on M1.
   - **The exception: `preloadFitRefusal`** (`internal/server/fitguard.go:182`)
     refuses startup preload for exactly `fit_level == marginal`. Capping an
     under-offloaded model at the grade its fully-resident equivalent would earn
-    demotes the rocky case to `marginal` — so this change silently stops those
+    demotes the host A case to `marginal` — so this change silently stops those
     models preloading. That is arguably right (do not preload a misconfigured
     model) but it is a behavioural change nobody asked for, and it must be an
     explicit decision with a test, not a side effect.

@@ -27,13 +27,13 @@ Design-first: the contract changes before any handler. See `AGENTS.md` and the
 
 - [ ] 5. Detect the pinned-`-ngl` case specifically: when `-ngl` is below the
        GGUF offloadable layer count (`block_count + 1`) and the full model fits,
-       the reason states the layer count the host can hold. Cover the rocky case
+       the reason states the layer count the host can hold. Cover the host A case
        as a fixture: `block_count 65`, `-ngl 40`, 18630 MB weights, 24560 MB VRAM.
        Validation: `go test ./internal/fit/ -run TestFit_PinnedNglBelowLayerCount -v`
 
 - [ ] 6. Remove the `fit_level` inversion per the task-1 decision: a model with
        avoidable host-resident weights must not grade above what its fully
-       resident equivalent would earn. Add a regression test asserting the rocky
+       resident equivalent would earn. Add a regression test asserting the host A
        payload cannot score `"good"` while 7165 MB of weights sit in host RAM.
        Validation: `go test ./internal/fit/ -run TestFit_LevelNotInvertedByOffload -v`
 
@@ -63,18 +63,27 @@ Design-first: the contract changes before any handler. See `AGENTS.md` and the
        `make test-dev`, then `make test-all`. Fix every staticcheck error.
        Validation: `make test-all`
 
-- [ ] 12. Verify against the live rocky host, whose fit reports were captured
+- [ ] 12. Verify against the live host A host, whose fit reports were captured
        2026-08-12 and are the acceptance fixture. Must flag:
-       `qwopus-glm-18b-healed-q8-0` (host 6037 MB, 8.6 GB spare, today grades
-       **`perfect`**) and `qwen3.6-27b-claude-mythos-distilled.q4-k-m`
-       (host 6166 MB, 5.5 GB spare, `tight`). Must **not** flag `muse-glimmer-30b-q5-k-m`,
-       `qwythos-9b-…-mtp-q8-0`, or `qwen3-35b-a3b` — all `run_mode: gpu`, and the
+       `M2` (host 6037 MB, 8.6 GB spare, today grades
+       **`perfect`**) and `M3`
+       (host 6166 MB, 5.5 GB spare, `tight`). Must **not** flag `M4`,
+       `M5`, or `M6` — all `run_mode: gpu`, and the
        latter two are pinned at `-ngl 40` yet fully resident because 40 exceeds
        their layer count.
-       Validation: recorded per-model verdict for every rocky model pinning `-ngl`;
+       Validation: recorded per-model verdict for every host A model pinning `-ngl`;
        the two false-negative models flag and the three correct ones do not.
 
-- [ ] 13. Fix the two under-offloaded rocky models as a separate operational
+- [ ] 12b. Extend the acceptance fixture beyond host A. Fleet audit 2026-08-12 found
+       a placement pin on **every model on every host** — host B 4 × `-ngl 99`, host C
+       1 × `-ngl 99` + 5 × `-ngl 999999` (repo copies; both hosts were unreachable, and
+       host A's repo copy had drifted from live). `under_offloaded` must stay silent
+       for all-layers pins on models that fit, or it fires fleet-wide on day one and
+       gets ignored. Confirm live before treating these as fixtures.
+       Validation: live pin inventory for host B and host C; no false positive on any
+       all-layers pin whose model is fully resident.
+
+- [ ] 13. Fix the two under-offloaded host A models as a separate operational
        change, not as part of this one. Prefer deleting `--n-gpu-layers` so the
        planner computes placement, and record measured before/after tok/s to
        confirm the counterfactual was right.
@@ -106,21 +115,21 @@ Design-first: the contract changes before any handler. See `AGENTS.md` and the
        (`packages/opencode/src/local/placement.ts:104-107`) keys on `perf_class`
        being `cpu-bound-hybrid`/`cpu-only`. Every pinned model claims `native-gpu`,
        so the penalty never fires for the configuration that most reliably produces
-       CPU-bound models. Verified live on rocky: `perf_class: "native-gpu"` while
+       CPU-bound models. Verified live on host A: `perf_class: "native-gpu"` while
        `run_mode: "cpu_offload"` with 7165 MB host-resident at 1.2 tok/s.
        Validation: `go test ./internal/placement/ -run TestCompute_CustomPerfClassReflectsSplit -v`;
-       and the rocky fixture reports a host-paced `perf_class`.
+       and the host A fixture reports a host-paced `perf_class`.
 
 - [ ] 17. Add a removal path for `n_gpu_layers` to the contract, per the
        `config-management` delta. `patchModelInConfig` (`apiconfig.go:793-798`) maps
        every value into the flag map and can only overwrite; `0` would write
        `--n-gpu-layers 0` (all layers on CPU). This change's own recommended remedy
        is not expressible through the API today — verified 2026-08-12, when removing
-       the two rocky pins required patching the whole `cmd` string instead.
+       the two host A pins required patching the whole `cmd` string instead.
        Validation: `go test ./internal/server/ -run TestServer_PatchModelRemovesNgl -v`
 
 - [ ] 18. Stop `GET /api/models/config/{id}` returning `${PORT}` pre-resolved.
-       Observed on rocky: stored `--port ${PORT}` returned as `--port 5803`, so a
+       Observed on host A: stored `--port ${PORT}` returned as `--port 5803`, so a
        read-modify-write through the API hardcodes a dynamically allocated port and
        silently breaks the model later. Expose the resolved form as a separate field
        if needed (`effective_flags` is the precedent).

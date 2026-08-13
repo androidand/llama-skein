@@ -1,5 +1,10 @@
 # Model Config Gallery
 
+> **Labels.** This repo is public, so fleet hosts and installed models are named by
+> capability and shape rather than by hostname or model id; the mapping lives in the
+> private companion repo (`docs-skein/fleet-labels.md`). Host A is a 24 GB RDNA3
+> workstation. All measurements are verbatim.
+
 ## Why
 
 Getting a model to run *well* on a given box is currently folklore. The flags that
@@ -8,8 +13,8 @@ matter — `--n-gpu-layers`, `--ctx-size`, KV cache quantisation, flash attentio
 the engine build, and the quantisation. People work these out by hand and post the
 results on Reddit. Nothing in the ecosystem captures them.
 
-The cost shows up as configs that are quietly wrong for years. On rocky,
-`muse-glimmer-30b-q5-k-m` ran at `--n-gpu-layers 40` when the model fits entirely in
+The cost shows up as configs that are quietly wrong for years. On host A,
+`M4` ran at `--n-gpu-layers 40` when the model fits entirely in
 24 GB: 6.1 tok/s instead of 34.5, a 5.7× loss, with 4.8 GB of VRAM left unused. The
 same entry carried `--model-draft dflash-kquant.gguf`, which measured 34.5 vs 34.6
 tok/s without it — 1.6 GB of VRAM for no gain, and a `[spec] failed to measure draft
@@ -17,12 +22,12 @@ model memory` warning at every load. Neither was visible as a problem; the model
 "worked".
 
 That was not an isolated entry. On 2026-08-12 the same host was found serving
-`qwopus3.6-27b-coder-mtp-q5-k-m` to a live agent session at **1.2 tok/s** —
+`M1` to a live agent session at **1.2 tok/s** —
 `--n-gpu-layers 40` against a `block_count` of 65, so 26 of 66 layers decoded on
 the CPU. Corrected, it ran at **32.4 tok/s**: a 27× loss, in the same file, from
 the same pinned flag, found only because someone noticed the session felt slow.
-Two further models on that host (`qwopus-glm-18b-healed-q8-0`,
-`qwen3.6-27b-claude-mythos-distilled.q4-k-m`) are still in the same state. Three of
+Two further models on that host (`M2`,
+`M3`) are still in the same state. Three of
 six entries in one config were quietly wrong, and the worst of them reported
 `fit_level: "perfect"`.
 

@@ -1,16 +1,22 @@
 # Declare placement intent, not placement flags
 
+> **Labels.** This repo is public, so fleet hosts and installed models are named by
+> capability and shape rather than by hostname or model id; the mapping lives in the
+> private companion repo (`docs-skein/fleet-labels.md`). Host A is a 24 GB RDNA3
+> workstation, host B a 48 GB RDNA3 host, host C a 32 GB RDNA4 host. `M1`–`M6` are
+> that fleet's installed models. All measurements are verbatim.
+
 ## Why
 
 `--n-gpu-layers 40` and a deliberate hybrid split are **byte-identical** in
 `config.yaml`. Nothing in the system can tell an intentional trade from an
-inherited mistake, and that is why rocky served an agent session at 1.2 tok/s for
+inherited mistake, and that is why host A served an agent session at 1.2 tok/s for
 months without anyone noticing: the misconfiguration was indistinguishable from a
 choice.
 
 The policy layer was never wrong. `placement.mode` defaults to `auto` —
 *"full GPU when it fits, hybrid when it doesn't, refuse when even hybrid can't fit
-safely"* (`internal/config/placement.go:12-13`) — and rocky carries **no
+safely"* (`internal/config/placement.go:12-13`) — and host A carries **no
 `placement:` block at all**, so `auto` was active the entire time. Every model
 opted out individually by having `-ngl` in its `cmd`, because
 `hasPinnedPlacement` keys on the *presence* of any placement flag
@@ -26,7 +32,7 @@ at one moment**, for one model's layer count, on one card:
 - It goes stale silently. Requantise the model, swap the card, copy the line to a
   sibling entry, and the number is wrong with no signal.
 - Its meaning is relative to `block_count`, so the same value is correct for one
-  model and catastrophic for another. Verified on rocky: `-ngl 40` cost 7–30× on
+  model and catastrophic for another. Verified on host A: `-ngl 40` cost 7–30× on
   three models and was harmless on two others whose layer count it exceeded.
 - Disabling the planner is a **side effect** nobody asked for. An operator writing
   `-ngl` is expressing something about layers, not requesting that automatic
@@ -36,6 +42,64 @@ A goal does not go stale. *"This model needs 200k context and I accept the speed
 cost"* stays true across requants, model swaps, and GPU upgrades — and it leaves
 the planner free to pick the cheapest mechanism that satisfies it, re-deciding on
 every load against the hardware actually present.
+
+## The generator was already fixed — for auto-install only
+
+Investigated before Phase 1 (2026-08-12), because a generative bug would outrank
+migrating existing entries. **It is not generative in the shipping binary**, and the
+reason is the strongest available argument for this change.
+
+`internal/server.buildCmd` (`modelhelpers.go:322-337`) emits exactly
+`llama-server --port ${PORT} --model <path>` plus caller-supplied flags, and its doc
+comment records this precise bug being fixed once already:
+
+> "does NOT inherit flags from any existing model — an auto-installed model must let
+> llama.cpp's fit engine size ctx/offload/placement to the host's actual VRAM, not
+> silently copy whatever the first configured model happened to use (previously this
+> produced deepseek's small-VRAM hybrid flags like `--n-cpu-moe 25 --ctx-size 32768`
+> on every model, under-using large cards)."
+
+The live install paths are clean: `POST /api/models/operations` passes
+`flags := ""` (`apimodeloperations.go:221`) and resolves companions from the
+operation's *own* artifacts. `POST /api/models/pull` passes operator-supplied
+flags, which is a legitimate explicit choice.
+
+So the fork already reached this change's conclusion — *a generated model must not
+carry a placement pin, because the pin defeats the fit engine* — and applied it to
+one code path. This change generalises the same principle from auto-installed
+models to every model, and gives operators a way to express placement that does not
+defeat the planner.
+
+**The pre-fix copy still exists.** `proxy/proxymanager_config.go:526-572` retains
+both defects: it clones the template model's *entire* flag set (the comment claims
+"everything up to (and including) `--model`", but the loop copies every flag,
+including `--model-draft` and `--mmproj` pointing at an unrelated model's companion
+files), and falls back to `--n-gpu-layers 99`. It is unreachable in the shipping
+binary — `proxy.New` is constructed only in `cmd/legacy/llama-skein.go`, which the
+Makefile does not build — but it is a landmine for anyone reviving or copying it.
+
+## Automatic placement has zero adoption across the fleet
+
+The real finding is scope. Placement pins in the fleet configs
+(`the private companion repo's config/`):
+
+| host | pins |
+|---|---|
+| host A | 6 × `--n-gpu-layers 40` |
+| host B | 4 × `--n-gpu-layers 99` |
+| host C | 1 × `--n-gpu-layers 99`, 5 × `--n-gpu-layers 999999` |
+
+**Every model on every host carries a placement pin, so `auto` is disabled
+fleet-wide.** host A's pins were the ones that cost throughput, but `99` and
+`999999` are not harmless — they are "all layers" idioms that still switch off the
+whole planner: no hybrid split for an oversized model, no `--fit-target` reserve, no
+adaptive retry ladder. `add-auto-hybrid-placement` exists specifically to run models
+larger than VRAM, and on these hosts it can never engage.
+
+Caveat on the evidence: host B and host C were unreachable during this investigation,
+so those two rows are the repo copies, not live reads. host A's repo copy had already
+drifted from its live config, so both rows need confirming on the hosts before
+being acted on.
 
 ## What Changes
 

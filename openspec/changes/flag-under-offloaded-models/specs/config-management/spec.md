@@ -1,7 +1,7 @@
 # Make the recommended remedy expressible, and safe to round-trip
 
 Both requirements below were found while applying this change's own recommended fix
-to rocky on 2026-08-12. The remedy the fit report should advise — remove the pin —
+to host A on 2026-08-12. The remedy the fit report should advise — remove the pin —
 could not be expressed through the config API, and the obvious client workaround
 silently corrupts the model command.
 
@@ -52,7 +52,7 @@ SHALL NOT silently mean "remove".
 through the API preserves it.
 
 The endpoint currently returns the command with `${PORT}` already resolved to the
-port of the running instance — observed on rocky as `--port 5803` against a stored
+port of the running instance — observed on host A as `--port 5803` against a stored
 `--port ${PORT}`. Any client that reads a command, edits it, and patches it back
 therefore hardcodes a port that llama-swap allocates dynamically, breaking that
 model on a future launch. The corruption is silent and survives until the port

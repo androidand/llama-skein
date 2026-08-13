@@ -101,7 +101,7 @@ fully-resident equivalent would earn.
 
 Previously `fit_level` graded only whether the configured placement fit within
 the budget, so leaving weights in host RAM *improved* the grade by freeing VRAM.
-Observed on rocky: a configuration decoding 26 of 66 layers on the CPU at
+Observed on host A: a configuration decoding 26 of 66 layers on the CPU at
 1.2 tok/s scored `"good"` with reason "fits comfortably at this context", while
 the corrected full-GPU configuration — 27× faster — scored `"marginal"`. Clients
 that rank providers on `fit_level` therefore preferred the slow configuration.
