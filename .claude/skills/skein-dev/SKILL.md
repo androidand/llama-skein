@@ -69,6 +69,14 @@ undocumented prerequisite). If you hit one:
 A one-off invocation that works on your machine leaves the next agent with the
 same broken command and no record of the workaround.
 
+## Syncing opencode-skein with upstream
+
+That fork carries ~270 commits of its own, and the danger in a sync is a *clean*
+merge that silently drops a fork feature — it has happened twice. The
+**`fork-sync`** skill (in opencode-skein) covers the procedure and how to read
+`fork:verify`, whose counts distinguish "baseline needs bumping" from "a feature
+is gone".
+
 ## Docs
 
 `CLAUDE.md` and `AGENTS.md` in each repo point at this skill rather than
