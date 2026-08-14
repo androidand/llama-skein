@@ -453,6 +453,87 @@ func TestAnalyze_MaxFitCtxVramBoundNotTrained(t *testing.T) {
 	}
 }
 
+// MaxPhysicalCtx is the true no-safety-margin ceiling: it must be strictly
+// larger than MaxFitCtx (vramSafetyFrac + promptMarginFrac dropped) whenever
+// VRAM, not the trained-context cap, is the binding constraint — otherwise
+// there is no point exposing it separately.
+func TestAnalyze_MaxPhysicalCtxExceedsMaxFitCtx(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 24, EmbeddingLength: 4096, HeadCount: 32, HeadCountKV: 8,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 8_000_000_000,
+		TrainedCtx:  1000000, // huge, so the trained-context cap never binds here
+	}
+	res := AnalyzeShape(shape, Params{
+		VRAMTotalMB: 12288,
+		VRAMFreeMB:  10000,
+	})
+	if res.MaxFitCtx <= 0 || res.MaxPhysicalCtx <= 0 {
+		t.Fatalf("expected both ceilings positive, got MaxFitCtx=%d MaxPhysicalCtx=%d", res.MaxFitCtx, res.MaxPhysicalCtx)
+	}
+	if res.MaxPhysicalCtx <= res.MaxFitCtx {
+		t.Errorf("MaxPhysicalCtx=%d must exceed the safety-margined MaxFitCtx=%d", res.MaxPhysicalCtx, res.MaxFitCtx)
+	}
+	// vramSafetyFrac=0.92 dropped from the budget compounds through the fixed
+	// weight-subtraction term, so the ratio is model-dependent and larger than
+	// the raw 1/0.92 — loose sanity bound catches gross errors (an
+	// accidentally-doubled margin, or the margin not actually being dropped)
+	// without being fragile to that legitimate compounding.
+	ratio := float64(res.MaxPhysicalCtx) / float64(res.MaxFitCtx)
+	if ratio <= 1.0 || ratio > 3.0 {
+		t.Errorf("MaxPhysicalCtx/MaxFitCtx ratio = %.3f, expected >1 (safety margin dropped) and not absurdly large", ratio)
+	}
+}
+
+// The trained-context cap applies to MaxPhysicalCtx exactly like MaxFitCtx —
+// it exists for output quality past the trained window, not VRAM safety, so
+// dropping the VRAM safety margin must not also drop this cap.
+func TestAnalyze_MaxPhysicalCtxCappedAtTrainedContext(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 52, EmbeddingLength: 6656, HeadCount: 32, HeadCountKV: 2,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 29_600_000_000,
+		TrainedCtx:  131072,
+	}
+	res := AnalyzeShape(shape, Params{
+		VRAMTotalMB: 49136,
+		VRAMFreeMB:  45000,
+	})
+	if res.MaxPhysicalCtx <= 0 {
+		t.Fatal("expected a positive MaxPhysicalCtx")
+	}
+	if int64(res.MaxPhysicalCtx) > shape.TrainedCtx {
+		t.Errorf("MaxPhysicalCtx=%d must be capped at TrainedCtx=%d", res.MaxPhysicalCtx, shape.TrainedCtx)
+	}
+}
+
+// MTP models keep mtpExtraSafetyFrac in MaxPhysicalCtx even though
+// vramSafetyFrac is dropped — it compensates for real, unmodeled draft-head
+// VRAM (see the constant's own doc comment: dropping it demonstrably OOM'd
+// on rocky, 2026-07), so MaxPhysicalCtx must stay below what the naive
+// (budgetMB, no margin at all) ceiling would say.
+func TestAnalyze_MaxPhysicalCtx_MTPKeepsRealOverheadMargin(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 32, EmbeddingLength: 4096, HeadCount: 32, HeadCountKV: 8,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 9_000_000_000,
+		TrainedCtx:  1000000,
+		IsMTP:       true,
+	}
+	mtpRes := AnalyzeShape(shape, Params{VRAMTotalMB: 24560, VRAMFreeMB: 20000})
+	nonMTP := shape
+	nonMTP.IsMTP = false
+	plainRes := AnalyzeShape(nonMTP, Params{VRAMTotalMB: 24560, VRAMFreeMB: 20000})
+
+	if mtpRes.MaxPhysicalCtx <= 0 || plainRes.MaxPhysicalCtx <= 0 {
+		t.Fatalf("expected both positive, got mtp=%d plain=%d", mtpRes.MaxPhysicalCtx, plainRes.MaxPhysicalCtx)
+	}
+	if mtpRes.MaxPhysicalCtx >= plainRes.MaxPhysicalCtx {
+		t.Errorf("MTP MaxPhysicalCtx=%d should stay below the non-MTP figure=%d (mtpExtraSafetyFrac must still apply)",
+			mtpRes.MaxPhysicalCtx, plainRes.MaxPhysicalCtx)
+	}
+}
+
 // Unknown trained context fails open: MaxFitCtx stays the VRAM figure, never
 // shrunk by a number we cannot verify.
 func TestAnalyze_MaxFitCtxFailsOpenOnUnknownTrained(t *testing.T) {

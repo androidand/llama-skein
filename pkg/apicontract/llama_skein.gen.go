@@ -1354,6 +1354,9 @@ type ModelFit struct {
 	// MaxFitCtx Largest --ctx-size (hard n_ctx) that fits this host's VRAM. The grow target for an under-configured model. 0 when VRAM is unknown.
 	MaxFitCtx *int `json:"max_fit_ctx,omitempty"`
 
+	// MaxPhysicalCtx Largest --ctx-size that fits in raw VRAM bytes with NO safety margin applied: no vramSafetyFrac headroom cap, no promptMarginFrac prompt-budget trim. Only the real physical requirements (weights, KV cache, compute/activation overhead) are subtracted. This is what will load without OOMing, not what is comfortable to run at — expect it to sit close to 100% VRAM with little headroom for fluctuation. max_fit_ctx/max_safe_ctx are the conservative recommendations; this is the true ceiling for a caller who wants to choose their own risk. 0 when VRAM is unknown.
+	MaxPhysicalCtx *int `json:"max_physical_ctx,omitempty"`
+
 	// MaxSafeCtx Max context callers should fill: reserves the output budget plus compute/overhead so prompt+generation never exceed the backend's hard n_ctx, and accounts for llama-server dividing n_ctx across --parallel slots (per-request share). THIS is the number opencode/skein should trim to, not configured_ctx.
 	MaxSafeCtx int `json:"max_safe_ctx"`
 

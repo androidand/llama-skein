@@ -172,6 +172,7 @@ type Result struct {
 	ConfiguredCtx    int
 	MaxSafeCtx       int // the context callers should trim PROMPTS to
 	MaxFitCtx        int // largest --ctx-size (hard n_ctx) that fits: the smaller of the VRAM-achievable ceiling and the model's trained context; the grow target for an under-configured model. 0 when VRAM is unknown.
+	MaxPhysicalCtx   int // largest --ctx-size that fits with NO safety margin (no vramSafetyFrac, no promptMarginFrac) — the true OOM line, not the comfortable recommendation. 0 when VRAM is unknown.
 	KVMBAtMaxSafeCtx int
 	VRAMRequiredMB   int
 	VRAMTotalMB      int
@@ -473,8 +474,16 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		}
 	}
 	usableMB := float64(budgetMB) * vramSafetyFrac
+	// physicalUsableMB skips vramSafetyFrac — that 92% cap is discretionary
+	// headroom, not a physical requirement. mtpExtraSafetyFrac is kept even
+	// here: unlike vramSafetyFrac, it compensates for real MTP draft-head
+	// KV/compute overhead this engine's base formula doesn't model at all
+	// (see its own doc comment) — dropping it would report a ceiling that
+	// demonstrably OOMs, not a safety margin someone can knowingly opt out of.
+	physicalUsableMB := float64(budgetMB)
 	if g.IsMTP {
 		usableMB *= mtpExtraSafetyFrac
+		physicalUsableMB *= mtpExtraSafetyFrac
 	}
 	// Companion artifacts (DFlash drafter, mmproj projector) reside on GPU
 	// alongside the main model. Subtract their VRAM before computing KV
@@ -484,6 +493,11 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 	vramMaxCtx := 0
 	if kvBudgetMB > 0 {
 		vramMaxCtx = int(kvBudgetMB * mib / float64(kvPerTok))
+	}
+	physicalKvBudgetMB := physicalUsableMB - float64(gpuWeightMB+companionMB)*(1+computeOverheadFrac)
+	physicalMaxCtx := 0
+	if physicalKvBudgetMB > 0 {
+		physicalMaxCtx = int(physicalKvBudgetMB * mib / float64(kvPerTok))
 	}
 
 	// The hard n_ctx is the smaller of what's configured (or the model's trained
@@ -588,6 +602,15 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		res.MaxFitCtx = vramMaxCtx
 		if g.TrainedCtx > 0 && int64(vramMaxCtx) > g.TrainedCtx {
 			res.MaxFitCtx = int(g.TrainedCtx)
+		}
+	}
+	// Same trained-context cap as MaxFitCtx — that ceiling is about quality
+	// past the model's trained window, not VRAM safety, so it applies
+	// regardless of how much safety margin the VRAM side of the number drops.
+	if physicalMaxCtx > 0 {
+		res.MaxPhysicalCtx = physicalMaxCtx
+		if g.TrainedCtx > 0 && int64(physicalMaxCtx) > g.TrainedCtx {
+			res.MaxPhysicalCtx = int(g.TrainedCtx)
 		}
 	}
 

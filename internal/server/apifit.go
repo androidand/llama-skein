@@ -435,6 +435,9 @@ func fillModelFit(mf *apicontract.ModelFit, r fit.Result) {
 	if r.MaxFitCtx > 0 {
 		mf.MaxFitCtx = ptrOf(r.MaxFitCtx)
 	}
+	if r.MaxPhysicalCtx > 0 {
+		mf.MaxPhysicalCtx = ptrOf(r.MaxPhysicalCtx)
+	}
 	mf.Reason = ptrOf(r.Reason)
 	mf.GpuResidentMb = ptrOf(r.GPUResidentMB)
 	mf.HostResidentMb = ptrOf(r.HostResidentMB)
