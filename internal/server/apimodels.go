@@ -304,22 +304,39 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 
 	mc := s.cfg.Models[realName]
 	ggufPath := parseModelPath(mc.Cmd)
-	if ggufPath == "" {
-		writeJSON(w, map[string]any{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
-		return
-	}
+	writeJSON(w, s.recommendedCtx(ggufPath))
+}
 
+// recommendedCtxInfo is the shared shape returned by the context-recommendation
+// endpoint and used internally by install/pull to pick a default --ctx-size.
+type recommendedCtxInfo struct {
+	Recommended int     `json:"recommended"`
+	ModelFileGB float64 `json:"modelFileGB"`
+	Min         int     `json:"min"`
+	Max         int     `json:"max"`
+}
+
+// recommendedCtx computes a host-VRAM-aware context recommendation for the
+// GGUF at ggufPath: the largest multiple of 1024 tokens (capped at 262144,
+// floored at 8192) that fits this host's current free VRAM. Falls back to a
+// flat 8192 when the GGUF can't be read or free VRAM is unknown — fail open
+// with a conservative floor rather than guessing.
+//
+// Shared by handleAPIContextRecommendation (the live endpoint, historically
+// never called by any client — see buildCmd) and buildCmd, so an install
+// that doesn't pin --ctx-size gets this instead of llama.cpp's own default.
+func (s *Server) recommendedCtx(ggufPath string) recommendedCtxInfo {
+	fallback := recommendedCtxInfo{Recommended: 8192, ModelFileGB: 0, Min: 8192, Max: 0}
+	if ggufPath == "" {
+		return fallback
+	}
 	g, err := gguf.ParseFile(ggufPath)
 	if err != nil {
-		writeJSON(w, map[string]any{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
-		return
+		return fallback
 	}
-
 	freeBytes, _ := s.freeVRAMBytes()
-
 	if freeBytes <= 0 {
-		writeJSON(w, map[string]any{"recommended": 8192, "modelFileGB": 0, "min": 8192, "max": 0})
-		return
+		return fallback
 	}
 
 	minCtx := g.MinCtxSize()
@@ -335,13 +352,12 @@ func (s *Server) handleAPIContextRecommendation(w http.ResponseWriter, r *http.R
 		maxCtx = 8192
 	}
 
-	modelFileGB := float64(g.WeightBytes()) / (1 << 30)
-	writeJSON(w, map[string]any{
-		"recommended": maxCtx,
-		"modelFileGB": modelFileGB,
-		"min":         minCtx,
-		"max":         maxCtx,
-	})
+	return recommendedCtxInfo{
+		Recommended: int(maxCtx),
+		ModelFileGB: float64(g.WeightBytes()) / (1 << 30),
+		Min:         int(minCtx),
+		Max:         int(maxCtx),
+	}
 }
 
 // freeVRAMBytes returns the free VRAM budget in bytes and megabytes, from the

@@ -231,3 +231,86 @@ func TestModelLoadRefusal_UnfittableSet(t *testing.T) {
 		t.Error("unknown/un-sizable model must fail open (not refused)")
 	}
 }
+
+// TestLoadRefusalDecision_SelfHeals is a regression for the proxmox incident
+// 2026-08-15: a config-reload-time telemetry hiccup cached
+// qwen3.8-27b-ud-q6_k_xl as "not even minimal context fits", and nothing
+// ever re-derived that verdict — every future load attempt, at any
+// ctx-size including one the model had already proven it runs at, was
+// refused until the process was restarted. loadRefusalDecision must
+// re-check a cached refusal against a fresh fit computation and drop it
+// once the fresh check disagrees, rather than trusting the cache forever.
+func TestLoadRefusalDecision_SelfHeals(t *testing.T) {
+	healthyFit := apicontract.ModelFit{
+		ConfiguredCtx:  ptrOf(262144),
+		MaxFitCtx:      ptrOf(232980),
+		VramRequiredMb: ptrOf(30000),
+		VramTotalMb:    ptrOf(32624),
+		ModelMb:        ptrOf(24723),
+	}
+	stillBadFit := apicontract.ModelFit{
+		ConfiguredCtx:  ptrOf(262144),
+		MaxFitCtx:      ptrOf(0),
+		VramRequiredMb: ptrOf(34663),
+		VramTotalMb:    ptrOf(32624),
+		ModelMb:        ptrOf(24723),
+	}
+
+	t.Run("fresh check disagrees with cache: clears it and allows the load", func(t *testing.T) {
+		reason, refuse, clearCache := loadRefusalDecision("stale reason", true, healthyFit, true, false)
+		if refuse {
+			t.Errorf("expected the load to be allowed, got refuse=%v reason=%q", refuse, reason)
+		}
+		if !clearCache {
+			t.Error("expected the stale cache entry to be cleared")
+		}
+	})
+
+	t.Run("fresh check still agrees: keeps refusing, does not clear", func(t *testing.T) {
+		reason, refuse, clearCache := loadRefusalDecision("cached reason", true, stillBadFit, true, false)
+		if !refuse || reason == "" {
+			t.Errorf("expected refusal to persist, got refuse=%v reason=%q", refuse, reason)
+		}
+		if clearCache {
+			t.Error("a verdict that still agrees must not clear the cache")
+		}
+	})
+
+	t.Run("cached but cannot size now: trusts the cache, does not clear", func(t *testing.T) {
+		reason, refuse, clearCache := loadRefusalDecision("cached reason", true, apicontract.ModelFit{}, false, false)
+		if !refuse || reason != "cached reason" {
+			t.Errorf("expected the cached reason to be trusted, got refuse=%v reason=%q", refuse, reason)
+		}
+		if clearCache {
+			t.Error("must not clear the cache when the model cannot be sized")
+		}
+	})
+
+	// ok=true but the ModelFit carries no real numbers (e.g. GGUF metadata
+	// unreadable) must be treated the same as ok=false — ctxClampDecision's
+	// own "unknown" and "confidently fits" outcomes both return unfit=false,
+	// so without this check an unsizable fresh read would be indistinguishable
+	// from a confirmed fit and wave a model through with zero evidence behind
+	// it. Regression for TestModelLoadRefusal_PlacementClearsStaleUnfittable,
+	// which hit exactly this with a test fixture's nonexistent GGUF path.
+	t.Run("cached and ok=true but unsizable: trusts the cache, does not clear", func(t *testing.T) {
+		unsizable := apicontract.ModelFit{FitLevel: apicontract.Unknown, Reason: ptrOf("could not read GGUF metadata")}
+		reason, refuse, clearCache := loadRefusalDecision("cached reason", true, unsizable, true, false)
+		if !refuse || reason != "cached reason" {
+			t.Errorf("expected the cached reason to be trusted, got refuse=%v reason=%q", refuse, reason)
+		}
+		if clearCache {
+			t.Error("must not clear the cache when the model cannot be sized")
+		}
+	})
+
+	t.Run("no cache entry: falls through to the normal confident-no check", func(t *testing.T) {
+		reason, refuse, clearCache := loadRefusalDecision("", false, apicontract.ModelFit{Reason: ptrOf("weights exceed VRAM")}, true, true)
+		if !refuse || reason != "weights exceed VRAM" {
+			t.Errorf("expected a fresh confident-no refusal, got refuse=%v reason=%q", refuse, reason)
+		}
+		if clearCache {
+			t.Error("nothing to clear when there was no cache entry")
+		}
+	})
+}

@@ -114,8 +114,18 @@ func (s *Server) clampModelsToFit() {
 // unsampled monitor and this function then read a warm one. Clamping still
 // applies: a smaller context is a conservative, self-correcting change (a
 // later re-plan starts from the original command), while a refusal is not.
+// fitConfidentlySized reports whether mf carries enough real numbers (VRAM
+// total, model weight size, VRAM required) to reason about at all. Shared by
+// ctxClampDecision and loadRefusalDecision so both treat "can't size it yet"
+// identically rather than one silently drifting from the other's guard.
+func fitConfidentlySized(mf apicontract.ModelFit) bool {
+	return mf.VramTotalMb != nil && *mf.VramTotalMb > 0 &&
+		mf.ModelMb != nil && *mf.ModelMb > 0 &&
+		mf.VramRequiredMb != nil
+}
+
 func ctxClampDecision(mf apicontract.ModelFit, placementDecided bool) (clampTo int, unfitReason string, unfit bool) {
-	if mf.VramTotalMb == nil || *mf.VramTotalMb <= 0 || mf.ModelMb == nil || *mf.ModelMb <= 0 || mf.VramRequiredMb == nil {
+	if !fitConfidentlySized(mf) {
 		return 0, "", false // VRAM/model size not yet confidently known → fail open
 	}
 	if *mf.VramRequiredMb <= *mf.VramTotalMb {
@@ -156,20 +166,73 @@ func (s *Server) modelLoadRefusal(id string) (string, bool) {
 	// Read under the placement lock: ensurePlacement clears an entry here
 	// when a placement makes the model loadable after all.
 	s.placementMu.Lock()
-	r, unfit := s.unfittable[id]
+	cachedReason, cachedUnfit := s.unfittable[id]
 	s.placementMu.Unlock()
-	if unfit {
-		return r, true
-	}
+
 	mf, ok := s.fitForModel(id)
-	if !ok || !s.confidentNoFit(mf) {
-		return "", false
+	reason, refuse, clearCache := loadRefusalDecision(cachedReason, cachedUnfit, mf, ok, s.confidentNoFit(mf))
+	if clearCache {
+		s.placementMu.Lock()
+		delete(s.unfittable, id)
+		s.placementMu.Unlock()
+		s.proxylog.Infof("fit-guard: model %q no longer reads as unfittable on re-check — clearing the cached refusal", id)
 	}
-	reason := "model does not fit this host's available memory"
+	return reason, refuse
+}
+
+// loadRefusalDecision is modelLoadRefusal's pure decision logic, split out so
+// it's testable without a real GGUF/host (same reasoning as
+// preloadFitRefusal). confidentNoFitVal is s.confidentNoFit(mf), passed in
+// rather than recomputed here since that check needs no Server state either.
+//
+// s.unfittable is rebuilt by clampModelsToFit on every config reload (PATCH
+// /api/models/config triggers one), so a cached entry is not a one-time boot
+// verdict — but it's still only as good as the VRAM telemetry read at that
+// single moment, and nothing re-derives it between reloads. A momentary
+// telemetry hiccup during a reload can wrongly condemn a model that fits
+// fine a few seconds later (seen live 2026-08-15: qwen3.8-27b-ud-q6_k_xl on
+// proxmox cached as "not even minimal context fits" while /api/fit moments
+// after reported a healthy 233k max_safe_ctx) — and without this re-check,
+// that verdict blocks every future load, including a ctx the model already
+// proved it runs at, until the next full reload happens to land on better
+// telemetry. Re-derive live before trusting the cache; only keep refusing if
+// a fresh check still agrees, and report clearCache so the caller can drop
+// the stale entry rather than re-deriving it on every single load attempt.
+func loadRefusalDecision(
+	cachedReason string, cachedUnfit bool,
+	mf apicontract.ModelFit, ok bool, confidentNoFitVal bool,
+) (reason string, refuse bool, clearCache bool) {
+	if cachedUnfit {
+		// ctxClampDecision's own unfit==false can mean either "confidently
+		// fits" or "can't size it, fail open" — those return identically.
+		// Only the former should ever override a cached refusal; an
+		// unsizable fresh read (e.g. the GGUF hasn't been read yet, or
+		// s.fitForModel failed some other way) must fall back to trusting
+		// the cache, same as !ok — otherwise a model in a genuinely unknown
+		// state gets waved through with no information backing that at all.
+		if !ok || !fitConfidentlySized(mf) {
+			return cachedReason, true, false // still can't size it; trust the cache
+		}
+		if _, freshReason, freshUnfit := ctxClampDecision(mf, true); freshUnfit {
+			if freshReason != "" {
+				cachedReason = freshReason
+			}
+			return cachedReason, true, false
+		}
+		// Fresh check disagrees with the cache: the caller should drop the
+		// stale entry. Falls through to the normal check below rather than
+		// returning here — the cache being wrong doesn't mean this model
+		// necessarily fits; a fresh confident "no" should still refuse it.
+		clearCache = true
+	}
+	if !ok || !confidentNoFitVal {
+		return "", false, clearCache
+	}
+	reason = "model does not fit this host's available memory"
 	if mf.Reason != nil && *mf.Reason != "" {
 		reason = *mf.Reason
 	}
-	return reason, true
+	return reason, true, clearCache
 }
 
 // preloadFitRefusal reports whether mf's fit level is too risky for a startup

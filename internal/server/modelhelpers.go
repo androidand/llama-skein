@@ -328,12 +328,37 @@ func parsePositiveInt(value string) (int, bool) {
 // flags like --n-cpu-moe 25 --ctx-size 32768 on every model, under-using
 // large cards). Callers may append explicit flags via extraFlags, which are
 // passed through untouched after the --model argument.
+//
+// When extraFlags doesn't already pin --ctx-size/-c, one is appended from
+// recommendedCtx — the same host-VRAM-aware GGUF sizing the (previously
+// orphaned, never called by any client) context-recommendation endpoint
+// computes. Without this, an install with no explicit ctx flag left
+// llama.cpp's own compiled-in default in force, which is neither this
+// host's VRAM budget nor the number any "recommended" UI showed — the two
+// were fully disconnected. Best-effort: a GGUF that can't be parsed yet
+// (still downloading) or unknown VRAM leaves the command exactly as before.
 func (s *Server) buildCmd(modelPath, extraFlags string) string {
 	cmd := "llama-server --port ${PORT} --model " + modelPath
 	if extraFlags != "" {
 		cmd += " " + strings.TrimSpace(extraFlags)
 	}
+	if !hasCtxSizeFlag(extraFlags) {
+		if rec := s.recommendedCtx(modelPath); rec.Max > 0 {
+			cmd += " --ctx-size " + strconv.Itoa(rec.Max)
+		}
+	}
 	return cmd
+}
+
+// hasCtxSizeFlag reports whether flags already pins a context size, checking
+// both the long and short llama.cpp flag spellings.
+func hasCtxSizeFlag(flags string) bool {
+	args, err := config.SanitizeCommand(flags)
+	if err != nil {
+		return false
+	}
+	_, ok := commandFlagInt(args, "--ctx-size", "-c")
+	return ok
 }
 
 // normalizeCmdPort rewrites an already-macro-expanded --port <number> back to

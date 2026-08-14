@@ -30,6 +30,42 @@ func TestBuildCmd_DoesNotInheritAnotherModelsFlags(t *testing.T) {
 	}
 }
 
+// TestBuildCmd_UnsizableModelStaysMinimal is the fallback half of the
+// recommended-ctx-size wiring: a GGUF that can't be read yet (still
+// downloading, wrong path) must leave the command exactly as it was before
+// that wiring existed — recommendedCtx's fallback has Max=0, and buildCmd
+// must treat that as "nothing to add", not literally append "--ctx-size 0".
+func TestBuildCmd_UnsizableModelStaysMinimal(t *testing.T) {
+	s := newConfigWriteTestServer(t, "models: {}\n")
+	got := s.buildCmd("/models/does-not-exist.gguf", "")
+	want := "llama-server --port ${PORT} --model /models/does-not-exist.gguf"
+	if got != want {
+		t.Errorf("buildCmd(unsizable) = %q, want %q", got, want)
+	}
+}
+
+func TestHasCtxSizeFlag(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"no ctx flag", "--n-gpu-layers 99 --parallel 1", false},
+		{"long form", "--n-gpu-layers 99 --ctx-size 65536", true},
+		{"short form", "-c 65536 --n-gpu-layers 99", true},
+		{"equals form", "--ctx-size=65536", true},
+		{"short equals form", "-c=65536", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hasCtxSizeFlag(c.flags); got != c.want {
+				t.Errorf("hasCtxSizeFlag(%q) = %v, want %v", c.flags, got, c.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeCmdPort(t *testing.T) {
 	tests := []struct {
 		name string
