@@ -403,3 +403,70 @@ func TestFromSnapshot_LatestGPUDeduplication(t *testing.T) {
 		}
 	}
 }
+
+// The advertised grow target (MaxFitCtx) must never exceed the model's trained
+// context, even when VRAM could physically hold far more KV. This is the
+// Muse-Glimmer-on-z4 failure: a 131k-trained model got --ctx-size 393216
+// because opencode-skein auto-fit read a pure-VRAM max_fit_ctx (~576k).
+func TestAnalyze_MaxFitCtxCappedAtTrainedContext(t *testing.T) {
+	// Large card, modest model: VRAM-achievable ceiling (uncapped) far above
+	// the trained context.
+	shape := ModelShape{
+		LayerCount: 52, EmbeddingLength: 6656, HeadCount: 32, HeadCountKV: 2,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 29_600_000_000, // Muse Glimmer Q8_0, ~29.6 GB weights
+		TrainedCtx:  131072,
+	}
+	res := AnalyzeShape(shape, Params{
+		VRAMTotalMB: 49136, // 48 GB card (z4's W7800)
+		VRAMFreeMB:  45000,
+	})
+
+	if res.MaxFitCtx <= 0 {
+		t.Fatal("expected a positive MaxFitCtx")
+	}
+	if int64(res.MaxFitCtx) > shape.TrainedCtx {
+		t.Errorf("MaxFitCtx=%d must be capped at TrainedCtx=%d (was the 393216 auto-fit bug)",
+			res.MaxFitCtx, shape.TrainedCtx)
+	}
+}
+
+// When VRAM is the binding constraint the cap must not shrink MaxFitCtx below
+// the VRAM-achievable figure — small card, large trained context.
+func TestAnalyze_MaxFitCtxVramBoundNotTrained(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 24, EmbeddingLength: 4096, HeadCount: 32, HeadCountKV: 8,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 8_000_000_000, // ~8 GB, fits easily
+		TrainedCtx:  1000000,       // huge trained context, small card
+	}
+	res := AnalyzeShape(shape, Params{
+		VRAMTotalMB: 12288, // 12 GB card
+		VRAMFreeMB:  10000,
+	})
+	if res.MaxFitCtx <= 0 {
+		t.Fatal("expected a positive MaxFitCtx")
+	}
+	if int64(res.MaxFitCtx) >= shape.TrainedCtx {
+		t.Errorf("MaxFitCtx=%d should be VRAM-bound (below TrainedCtx=%d), not capped up",
+			res.MaxFitCtx, shape.TrainedCtx)
+	}
+}
+
+// Unknown trained context fails open: MaxFitCtx stays the VRAM figure, never
+// shrunk by a number we cannot verify.
+func TestAnalyze_MaxFitCtxFailsOpenOnUnknownTrained(t *testing.T) {
+	shape := ModelShape{
+		LayerCount: 52, EmbeddingLength: 6656, HeadCount: 32, HeadCountKV: 2,
+		KeyLength: 128, ValueLength: 128,
+		WeightBytes: 29_600_000_000,
+		TrainedCtx:  0, // unknown
+	}
+	res := AnalyzeShape(shape, Params{
+		VRAMTotalMB: 49136,
+		VRAMFreeMB:  45000,
+	})
+	if res.MaxFitCtx <= 0 {
+		t.Fatal("expected a positive MaxFitCtx when TrainedCtx is unknown")
+	}
+}

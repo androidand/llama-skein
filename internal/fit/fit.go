@@ -171,7 +171,7 @@ type Result struct {
 	ModelMB          int
 	ConfiguredCtx    int
 	MaxSafeCtx       int // the context callers should trim PROMPTS to
-	MaxFitCtx        int // largest --ctx-size (hard n_ctx) that fits VRAM; the grow target for an under-configured model. 0 when VRAM is unknown.
+	MaxFitCtx        int // largest --ctx-size (hard n_ctx) that fits: the smaller of the VRAM-achievable ceiling and the model's trained context; the grow target for an under-configured model. 0 when VRAM is unknown.
 	KVMBAtMaxSafeCtx int
 	VRAMRequiredMB   int
 	VRAMTotalMB      int
@@ -575,16 +575,27 @@ func AnalyzeShape(g ModelShape, p Params) Result {
 		res.KVMBAtMaxSafeCtx = 0
 	}
 
-	// The largest hard ctx that fits VRAM — the grow target skein's sweep patches
-	// an under-configured model up to. 0 when VRAM is unknown (vramMaxCtx == 0),
-	// so the sweep knows not to grow blindly.
+	// The largest hard ctx that fits — the grow target skein's sweep patches
+	// an under-configured model up to. Capped by the model's trained context:
+	// advertising a pure-VRAM ceiling (576k for a 131k model) made auto-fit
+	// clients write --ctx-size 393216 = 3x native, wasting attention/KV
+	// bandwidth and silently degrading quality past trained positions
+	// (Muse Glimmer on z4, 2026-08). 0 when VRAM is unknown (vramMaxCtx == 0),
+	// so the sweep knows not to grow blindly. Fail-open when TrainedCtx is
+	// unknown (<= 0) — never shrink a recommendation from a number we can't
+	// verify.
 	if vramMaxCtx > 0 {
 		res.MaxFitCtx = vramMaxCtx
+		if g.TrainedCtx > 0 && int64(vramMaxCtx) > g.TrainedCtx {
+			res.MaxFitCtx = int(g.TrainedCtx)
+		}
 	}
 
-	// Flag a configured model whose --ctx-size is materially below what VRAM
-	// could hold, so the starved config is visible (skein's ctx-fit sweep grows
-	// it; the model-load path warns). MaxFitCtx is the VRAM-achievable ceiling.
+	// Flag a configured model whose --ctx-size is materially below what it
+	// could actually use (the capped grow target), so the starved config is
+	// visible (skein's ctx-fit sweep grows it; the model-load path warns).
+	// MaxFitCtx is the capped ceiling — trained-context-bounded — so a model
+	// at its trained context is never flagged for not reaching VRAM's raw max.
 	if configured && !p.Unproven && res.MaxFitCtx > 0 && p.ConfiguredCtx < int(float64(res.MaxFitCtx)*underConfigFrac) {
 		res.UnderConfigured = true
 		res.Reason = fmt.Sprintf("%s; configured ctx %d is well below the ~%d this host could hold", res.Reason, p.ConfiguredCtx, res.MaxFitCtx)
