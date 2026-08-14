@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/androidand/llama-skein/internal/config"
+	"github.com/androidand/llama-skein/internal/process"
 	"github.com/androidand/llama-skein/pkg/apicontract"
 )
 
@@ -17,6 +18,58 @@ func fitTestServer(t *testing.T, cfg config.Config) *Server {
 	t.Helper()
 	return newTestServerWithConfig(cfg, newStubRouter(nil, ""), newStubRouter(nil, ""))
 }
+
+// modelResident is the residency gate behind the whole-card VRAM budget: a
+// model that is currently loaded must be budgeted against its total-card
+// ceiling, not "free + its own weights" (which double-subtracts the resident
+// KV and collapses max_fit_ctx to ~0 or a tiny fraction of what runs).
+func TestModelResident(t *testing.T) {
+	cases := []struct {
+		name   string
+		state  map[string]process.ProcessState
+		model  string
+		expect bool
+	}{
+		{
+			name:   "ready model is resident",
+			state:  map[string]process.ProcessState{"m": process.StateReady},
+			model:  "m",
+			expect: true,
+		},
+		{
+			name:   "loading is not yet resident",
+			state:  map[string]process.ProcessState{"m": process.StateStarting},
+			model:  "m",
+			expect: false,
+		},
+		{
+			name:   "stopped model is not resident",
+			state:  map[string]process.ProcessState{},
+			model:  "m",
+			expect: false,
+		},
+		{
+			name:   "unknown model is not resident",
+			state:  map[string]process.ProcessState{"other": process.StateReady},
+			model:  "m",
+			expect: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			local := newStubRouter(nil, "")
+			local.running = c.state
+			s := newTestServerWithConfig(config.Config{}, local, newStubRouter(nil, ""))
+			if got := s.modelResident(c.model); got != c.expect {
+				t.Errorf("modelResident(%q) = %v, want %v", c.model, got, c.expect)
+			}
+		})
+	}
+}
+
+// TestServer_Fit_GGUFCacheByMtime is the GGUF cache-by-mtime regression; see
+// parseGGUFCached. Fit output itself is covered by TestModelGetsWholeGPU and
+// the budget-behavior cases above.
 
 func getJSON(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 	t.Helper()

@@ -292,20 +292,32 @@ func (s *Server) fitForModel(realName string) (apicontract.ModelFit, bool) {
 			p.ProjectorMB = int(info.Size() / mib)
 		}
 	}
-	if modelGetsWholeGPU(s.cfg, realName) {
-		// This model belongs to an exclusive swap group: loading it evicts
-		// every other model on the host (router.groupPlanner.EvictionFor), so
-		// once resident it has the ENTIRE card — not whatever a co-resident
-		// happens to be leaving free right this moment. Budgeting against
-		// live free VRAM here made max_fit_ctx/under_configured swing with
-		// whichever OTHER model was loaded at query time on any host running
-		// several models in one exclusive group (z4: three models, one GPU),
-		// which skein's context-fit sweep (a different repo, reacting to this
-		// same value every cycle) then wrote straight into --ctx-size —
-		// a persistent, real oscillation, not a transient glitch. 0 tells
-		// fit.Analyze free VRAM is unknown here so it falls back to
-		// VRAMTotalMB as the budget, matching what this model will actually
-		// get once it's its turn.
+	if modelGetsWholeGPU(s.cfg, realName) || s.modelResident(realName) {
+		// This model will have (or already has) the entire card — either it
+		// belongs to an exclusive swap group and loading it evicts every other
+		// model on the host (router.groupPlanner.EvictionFor), or it is the
+		// model currently resident right now. Both cases make "live free VRAM"
+		// the wrong budget:
+		//
+		//   - Exclusive group: once resident the model has the WHOLE card,
+		//     not whatever a co-resident happens to be leaving free. Budgeting
+		//     against live free made max_fit_ctx/under_configured swing with
+		//     whichever OTHER model was loaded at query time (z4: three models,
+		//     one GPU), which skein's context-fit sweep then wrote straight
+		//     into --ctx-size — a persistent oscillation.
+		//
+		//   - Resident model (the fit is for the model that is loaded NOW):
+		//     VRAMFreeMB already excludes this model's own weights AND its KV
+		//     cache. The fit engine adds back only gpuWeightMB
+		//     (budget = free + gpuWeightMB), silently dropping the resident KV
+		//     and compute overhead, which collapsed kvBudgetMB to ~0 — max_fit_ctx
+		//     read 0 (qwopus on proxmox at 80k/96% VRAM, refusing a ctx bump)
+		//     or a tiny fraction of what demonstrably runs (qwen3.6-35b on z4
+		//     at 256k/83% VRAM, fit suggesting 26k).
+		//
+		// 0 tells fit.Analyze free VRAM is unknown here so it falls back to
+		// VRAMTotalMB as the budget — what this model will actually get when
+		// it is (re)loaded.
 		p.VRAMFreeMB = 0
 	}
 
@@ -393,6 +405,16 @@ func modelGetsWholeGPU(cfg config.Config, modelID string) bool {
 		}
 	}
 	return true
+}
+
+// modelResident reports whether modelID is currently loaded on this host. The
+// fit engine budgets VRAM as "free + the weights we'll (re)place"; when the
+// model being scored is already resident, that double-counts — the free figure
+// already excludes this model's own weights AND its KV cache, so the budget
+// collapses. See the comment at the VRAMFreeMB=0 call site.
+func (s *Server) modelResident(modelID string) bool {
+	_, loaded := s.modelState(modelID)
+	return loaded
 }
 
 // fillModelFit copies an engine Result onto the generated ModelFit DTO. Shared
